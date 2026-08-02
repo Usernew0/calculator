@@ -1,0 +1,6 @@
+{
+  "name": "Global Trade & Freight Calculator",
+  "description": "Calculate item original price, weight-based transport fees, profit margins, currency conversions with live rates, historical data dashboard, and PDF reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
