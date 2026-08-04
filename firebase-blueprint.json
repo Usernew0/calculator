@@ -1,0 +1,40 @@
+{
+  "entities": {
+    "users": {
+      "title": "User Profiles",
+      "description": "User account profiles and credentials",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "company": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "lastLoginAt": { "type": "string" }
+      },
+      "required": ["userId", "username", "role", "status"]
+    },
+    "calculations": {
+      "title": "Saved Calculations",
+      "description": "Cargo profit and exchange rate calculation records",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "currencyPair": { "type": "string" },
+        "buyRate": { "type": "number" },
+        "sellRate": { "type": "number" },
+        "amount": { "type": "number" },
+        "profit": { "type": "number" },
+        "cargoType": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "currencyPair", "amount", "profit"]
+    }
+  }
+}

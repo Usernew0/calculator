@@ -58,7 +58,7 @@ export const CalculationResultsCard: React.FC<CalculationResultsCardProps> = ({
             </button>
 
             <button
-              onClick={() => exportSingleCalculationPDF(result)}
+              onClick={() => exportSingleCalculationPDF(result, lang)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-all cursor-pointer"
             >
               <Download className="w-3.5 h-3.5 text-emerald-400" />

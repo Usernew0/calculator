@@ -27,6 +27,7 @@ export interface CalculationInput {
   skuSupplier: string;
   category: string;
   quantity: number;
+  invoiceImage?: string; // Captured camera photo or uploaded document (Base64 / Data URL)
   
   // Original Cost
   originalPrice: number;
@@ -108,6 +109,20 @@ export interface CalculationResult {
   actualMarginPercentage: number; // % of selling price
   actualMarkupPercentage: number; // % over landed cost
   roiPercentage: number; // % return on investment
+  userId?: string; // Optional ID of trader / user who performed calculation
+}
+
+export interface UserProfile {
+  userId: string; // Unique ID or derived from username
+  username: string; // Username for login
+  password?: string; // Password stored in database schema
+  role?: 'admin' | 'user'; // User permission level
+  status?: 'active' | 'suspended'; // User status
+  name?: string;
+  email?: string;
+  company?: string;
+  createdAt: string;
+  lastLoginAt: string;
 }
 
 export interface RatesResponse {
