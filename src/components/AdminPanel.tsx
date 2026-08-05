@@ -42,6 +42,8 @@ import {
   LogOut,
   Radio,
   Zap,
+  Clock,
+  Save,
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -99,6 +101,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
+  // Inactivity Timeout Settings
+  const [inactivityMinutes, setInactivityMinutes] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('cargo_inactivity_timeout_minutes');
+      return saved ? parseInt(saved, 10) || 15 : 15;
+    } catch {
+      return 15;
+    }
+  });
+
+  const handleSaveInactivityTimeout = () => {
+    const val = Math.max(1, Math.min(120, inactivityMinutes));
+    setInactivityMinutes(val);
+    localStorage.setItem('cargo_inactivity_timeout_minutes', String(val));
+    window.dispatchEvent(new CustomEvent('cargo_timeout_updated', { detail: val }));
+    showNotification(
+      'success',
+      lang === 'ar'
+        ? `تم حفظ مهلة عدم النشاط للجلسات بنجاح (${val} دقيقة)`
+        : `Session inactivity timeout successfully set to ${val} minutes`
+    );
+  };
+
   // Sync state tracking
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(new Date());
@@ -115,24 +140,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       let userList = [...dbUsers];
       if (currentUser && !userList.some((u) => u.username?.toLowerCase() === currentUser.username?.toLowerCase())) {
         userList.push(currentUser);
-      }
-
-      // If empty, add a default admin record
-      if (userList.length === 0) {
-        const defaultAdmin: UserProfile = {
-          userId: 'USR-ADMIN-001',
-          username: 'admin',
-          password: 'admin123password',
-          role: 'admin',
-          status: 'active',
-          name: 'Super Admin',
-          email: 'admin@cargoprofit.com',
-          company: 'CargoProfit FX HQ',
-          createdAt: new Date().toISOString(),
-          lastLoginAt: new Date().toISOString(),
-        };
-        await saveUserProfileToFirestore(defaultAdmin);
-        userList = [defaultAdmin];
       }
 
       setUsers(userList);
@@ -640,6 +647,73 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         </div>
       </div>
 
+      {/* Session Inactivity Timeout Settings Card */}
+      <div className="p-5 rounded-2xl bg-gradient-to-r from-slate-800/90 via-slate-800 to-amber-950/30 border border-slate-700/90 shadow-xl text-white space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-amber-500/20 text-amber-400 rounded-xl border border-amber-500/30 shrink-0">
+              <Clock className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <span>{t.inactivityTimeoutLabel || (lang === 'ar' ? 'إعداد مهلة عدم النشاط للجلسات' : 'Session Inactivity Timeout Settings')}</span>
+                <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 text-[10px] font-extrabold uppercase border border-amber-500/30">
+                  {inactivityMinutes} {t.inactivityTimeoutUnit || (lang === 'ar' ? 'دقيقة' : 'Mins')}
+                </span>
+              </h3>
+              <p className="text-xs text-slate-300 mt-0.5">
+                {t.inactivityTimeoutSub || (lang === 'ar' ? 'يتم تسجيل خروج المستخدم تلقائياً عند عدم تفاعله مع الصفحة لمدة الدقائق المحددة.' : 'Automatically log out users when no mouse/keyboard/touch activity is detected for the specified minutes.')}
+              </p>
+            </div>
+          </div>
+
+          {/* Preset Buttons & Custom Input Form */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex items-center gap-1 bg-slate-900/80 p-1 rounded-xl border border-slate-700">
+              {[5, 15, 30, 60].map((mins) => (
+                <button
+                  key={mins}
+                  type="button"
+                  onClick={() => setInactivityMinutes(mins)}
+                  className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                    inactivityMinutes === mins
+                      ? 'bg-amber-400 text-slate-950 shadow-xs'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                  }`}
+                >
+                  {mins} {lang === 'ar' ? 'د' : 'm'}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="relative w-28">
+                <input
+                  type="number"
+                  min="1"
+                  max="120"
+                  value={inactivityMinutes}
+                  onChange={(e) => setInactivityMinutes(parseInt(e.target.value, 10) || 1)}
+                  className="w-full px-3 py-1.5 text-xs font-bold rounded-xl border border-slate-600 bg-slate-900 text-white text-center focus:outline-hidden focus:ring-2 focus:ring-amber-500/50"
+                />
+                <span className="absolute ltr:right-2 rtl:left-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">
+                  {t.inactivityTimeoutUnit || (lang === 'ar' ? 'دقيقة' : 'min')}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleSaveInactivityTimeout}
+                className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-extrabold text-xs transition-all flex items-center gap-1.5 shadow-md shadow-amber-950/40 cursor-pointer"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>{t.saveTimeoutBtn || (lang === 'ar' ? 'حفظ المهلة' : 'Save Timeout')}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Search and Filters Bar */}
       <div className="p-4 rounded-2xl bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/80 shadow-xs flex flex-col sm:flex-row gap-3 items-center justify-between">
         {/* Search Input */}
@@ -1085,7 +1159,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
                 <span>
                   {lang === 'ar'
-                    ? `هل أنت أكتيد من حذف حساب المستخدم "${userToDelete.username}"؟ سيتم مسح بيانات الحساب تماماً من قاعدة البيانات ولن تتمكن من استعادتها.`
+                    ? `هل أنت متأكد من حذف حساب المستخدم "${userToDelete.username}"؟ سيتم مسح بيانات الحساب تماماً من قاعدة البيانات ولن تتمكن من استعادتها.`
                     : `Are you sure you want to permanently delete user account "${userToDelete.username}" from Firestore? This action cannot be undone.`}
                 </span>
               </div>

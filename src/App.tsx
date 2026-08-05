@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { AlertCircle } from 'lucide-react';
 import { Header } from './components/Header';
 import { CalculatorForm } from './components/CalculatorForm';
 import { CurrencyRatesView } from './components/CurrencyRatesView';
 import { DashboardView } from './components/DashboardView';
-import { CalculationResult, RatesResponse, UserProfile } from './types';
+import { CalculationResult, CalculationInput, RatesResponse, UserProfile } from './types';
 import { POPULAR_CURRENCIES } from './data/currencies';
 import { translations, Language } from './data/translations';
 import { LoginModal } from './components/LoginModal';
@@ -23,8 +24,15 @@ const LOCAL_STORAGE_KEY = 'cargo_profit_fx_history_v1';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'calculator' | 'rates' | 'dashboard' | 'admin'>('calculator');
+  const [calculatorInitialInput, setCalculatorInitialInput] = useState<CalculationInput | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(() => {
     try {
+      const isRemembered = localStorage.getItem('cargo_remember_me') !== 'false';
+      const isSessionActive = sessionStorage.getItem('cargo_session_active') === 'true';
+      if (!isRemembered && !isSessionActive) {
+        localStorage.removeItem('cargo_user_profile');
+        return null;
+      }
       const saved = localStorage.getItem('cargo_user_profile');
       if (saved) {
         const parsed = JSON.parse(saved);
@@ -104,25 +112,40 @@ export default function App() {
   const [rateSource, setRateSource] = useState<string>('Live Exchange API');
   const [isLoadingRates, setIsLoadingRates] = useState<boolean>(false);
 
-  // History State - Start empty without default mock templates as requested
-  const [history, setHistory] = useState<CalculationResult[]>(() => {
+  // History State - Isolated per logged-in user
+  const [history, setHistory] = useState<CalculationResult[]>([]);
+
+  // Real-time Firestore sync with per-user data isolation & cache management
+  useEffect(() => {
+    // Clear legacy un-isolated storage key
+    localStorage.removeItem(LOCAL_STORAGE_KEY);
+
+    if (!userProfile) {
+      setHistory([]);
+      setCalculatorInitialInput(null);
+      return;
+    }
+
+    // Load isolated local cache for this specific user
+    const userStorageKey = `cargo_profit_fx_history_${userProfile.userId.toLowerCase()}`;
     try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+      const saved = localStorage.getItem(userStorageKey);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed;
+          setHistory(parsed);
+        } else {
+          setHistory([]);
         }
+      } else {
+        setHistory([]);
       }
-    } catch (err) {
-      console.warn('Failed to parse saved history', err);
+    } catch {
+      setHistory([]);
     }
-    return [];
-  });
 
-  // Real-time Firestore sync with per-user data isolation
-  useEffect(() => {
-    if (!userProfile) return;
+    setCalculatorInitialInput(null);
+
     const filterUserId = (userProfile.role === 'admin' || userProfile.username?.toLowerCase() === 'admin')
       ? null
       : userProfile.userId;
@@ -148,14 +171,89 @@ export default function App() {
     };
   }, [userProfile]);
 
-  // Save history to localStorage
+  // Save isolated history to localStorage per user
   useEffect(() => {
+    if (!userProfile?.userId) return;
     try {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(history));
+      const userStorageKey = `cargo_profit_fx_history_${userProfile.userId.toLowerCase()}`;
+      localStorage.setItem(userStorageKey, JSON.stringify(history));
     } catch (err) {
       console.error('Failed to save history to localStorage', err);
     }
-  }, [history]);
+  }, [history, userProfile]);
+
+  // Central Logout Handler - Resets state, inputs and clears user session
+  const handleLogout = useCallback(() => {
+    if (userProfile?.userId) {
+      const userStorageKey = `cargo_profit_fx_history_${userProfile.userId.toLowerCase()}`;
+      localStorage.removeItem(userStorageKey);
+    }
+    localStorage.removeItem(LOCAL_STORAGE_KEY);
+    localStorage.removeItem('cargo_user_profile');
+    sessionStorage.removeItem('cargo_session_active');
+    setUserProfile(null);
+    setHistory([]);
+    setCalculatorInitialInput(null);
+    setActiveTab('calculator');
+  }, [userProfile]);
+
+  // Inactivity Timeout Management
+  const [inactivityTimeoutMinutes, setInactivityTimeoutMinutes] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('cargo_inactivity_timeout_minutes');
+      return saved ? parseInt(saved, 10) || 15 : 15;
+    } catch {
+      return 15;
+    }
+  });
+
+  const lastActivityRef = useRef<number>(Date.now());
+  const [inactivityNotice, setInactivityNotice] = useState<string | null>(null);
+
+  // Sync timeout setting if updated from Admin Panel in real time
+  useEffect(() => {
+    const handleTimeoutUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent<number>;
+      if (customEvent.detail) {
+        setInactivityTimeoutMinutes(customEvent.detail);
+      }
+    };
+    window.addEventListener('cargo_timeout_updated', handleTimeoutUpdate);
+    return () => window.removeEventListener('cargo_timeout_updated', handleTimeoutUpdate);
+  }, []);
+
+  // Track activity & trigger auto logout upon inactivity timeout
+  useEffect(() => {
+    if (!userProfile) return;
+
+    lastActivityRef.current = Date.now();
+
+    const handleActivity = () => {
+      lastActivityRef.current = Date.now();
+    };
+
+    const events = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click'];
+    events.forEach((evt) => window.addEventListener(evt, handleActivity));
+
+    const interval = setInterval(() => {
+      const idleMs = Date.now() - lastActivityRef.current;
+      const limitMs = inactivityTimeoutMinutes * 60 * 1000;
+
+      if (idleMs >= limitMs) {
+        handleLogout();
+        setInactivityNotice(
+          lang === 'ar'
+            ? `تم تسجيل الخروج تلقائياً لعدم وجود نشاط لمدة ${inactivityTimeoutMinutes} دقيقة.`
+            : `Logged out automatically due to inactivity (${inactivityTimeoutMinutes} mins).`
+        );
+      }
+    }, 5000);
+
+    return () => {
+      events.forEach((evt) => window.removeEventListener(evt, handleActivity));
+      clearInterval(interval);
+    };
+  }, [userProfile, inactivityTimeoutMinutes, handleLogout, lang]);
 
   // Fetch Exchange Rates from backend proxy with real-time direct client fallback
   const fetchExchangeRates = useCallback(async (forceRefresh = false) => {
@@ -260,7 +358,12 @@ export default function App() {
   };
 
   const handleLoadIntoCalculator = (result: CalculationResult) => {
+    setCalculatorInitialInput({
+      ...result.input,
+      extraFees: result.input.extraFees ? [...result.input.extraFees] : [],
+    });
     setActiveTab('calculator');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleHeaderExportPdf = async () => {
@@ -305,18 +408,37 @@ export default function App() {
   // If user is not logged in, render full-screen Login Screen gate
   if (!userProfile) {
     return (
-      <LoginScreen
-        lang={lang}
-        setLang={setLang}
-        isDarkMode={isDarkMode}
-        setIsDarkMode={setIsDarkMode}
-        onLoginSuccess={(profile) => {
-          setUserProfile(profile);
-          if (profile.role === 'admin' || profile.username?.toLowerCase() === 'admin') {
-            setActiveTab('admin');
-          }
-        }}
-      />
+      <div dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+        {inactivityNotice && (
+          <div className="bg-amber-500 text-slate-950 px-4 py-2.5 text-xs font-black text-center flex items-center justify-center gap-2 shadow-md relative z-50">
+            <AlertCircle className="w-4 h-4 shrink-0 text-slate-950" />
+            <span>{inactivityNotice}</span>
+            <button
+              onClick={() => setInactivityNotice(null)}
+              className="ltr:ml-2 rtl:mr-2 px-2 py-0.5 rounded bg-slate-950/20 hover:bg-slate-950/30 text-slate-950 font-black text-[11px] cursor-pointer transition-colors"
+            >
+              {lang === 'ar' ? 'إغلاق' : 'Dismiss'}
+            </button>
+          </div>
+        )}
+        <LoginScreen
+          lang={lang}
+          setLang={setLang}
+          isDarkMode={isDarkMode}
+          setIsDarkMode={setIsDarkMode}
+          onLoginSuccess={(profile) => {
+            setInactivityNotice(null);
+            setHistory([]);
+            setCalculatorInitialInput(null);
+            setUserProfile(profile);
+            if (profile.role === 'admin' || profile.username?.toLowerCase() === 'admin') {
+              setActiveTab('admin');
+            } else {
+              setActiveTab('calculator');
+            }
+          }}
+        />
+      </div>
     );
   }
 
@@ -330,11 +452,7 @@ export default function App() {
           isDarkMode={isDarkMode}
           setIsDarkMode={setIsDarkMode}
           currentUser={userProfile}
-          onLogout={() => {
-            localStorage.removeItem('cargo_user_profile');
-            setUserProfile(null);
-            setActiveTab('calculator');
-          }}
+          onLogout={handleLogout}
         />
       </div>
     );
@@ -363,21 +481,20 @@ export default function App() {
           onExportPdf={handleHeaderExportPdf}
           userProfile={userProfile}
           onOpenLoginModal={() => setIsLoginModalOpen(true)}
-          onLogout={() => {
-            localStorage.removeItem('cargo_user_profile');
-            setUserProfile(null);
-          }}
+          onLogout={handleLogout}
         />
 
         {/* Content Container */}
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           {activeTab === 'calculator' && (
             <CalculatorForm
+              key={userProfile?.userId || 'guest'}
               rates={rates}
               onSaveToHistory={handleSaveToHistory}
               savedIds={savedIds}
               t={t}
               lang={lang}
+              initialInput={calculatorInitialInput}
             />
           )}
 
@@ -426,6 +543,8 @@ export default function App() {
         lang={lang}
         currentUser={userProfile}
         onLoginSuccess={(profile) => {
+          setHistory([]);
+          setCalculatorInitialInput(null);
           setUserProfile(profile);
           setIsLoginModalOpen(false);
         }}

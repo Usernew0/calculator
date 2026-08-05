@@ -29,6 +29,7 @@ import {
   Sparkles,
   AlertCircle,
   X,
+  Copy,
 } from 'lucide-react';
 
 interface DashboardViewProps {
@@ -442,10 +443,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
                           <button
                             onClick={() => onLoadIntoCalculator(item)}
-                            title={t.loadIntoCalc}
-                            className="p-1.5 text-emerald-600 dark:text-emerald-400 hover:text-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 rounded-lg font-bold cursor-pointer text-xs"
+                            title={t.duplicateTooltip || (lang === 'ar' ? 'تكرار وتحميل في الحاسبة' : 'Duplicate record & load into calculator')}
+                            className="px-2.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 rounded-lg font-bold cursor-pointer text-xs flex items-center gap-1 transition-all shadow-2xs"
                           >
-                            {t.load}
+                            <Copy className="w-3.5 h-3.5 text-emerald-500" />
+                            <span>{t.duplicateBtn || (lang === 'ar' ? 'تكرار' : 'Duplicate')}</span>
                           </button>
 
                           <button
@@ -538,7 +540,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+            <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                onClick={() => {
+                  onLoadIntoCalculator(selectedDetailModal);
+                  setSelectedDetailModal(null);
+                }}
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span>{t.duplicateInCalc || (lang === 'ar' ? 'تكرار في الحاسبة' : 'Duplicate in Calculator')}</span>
+              </button>
               <button
                 onClick={() => exportSingleCalculationPDF(selectedDetailModal, lang)}
                 className="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition-colors flex items-center gap-1.5 cursor-pointer"

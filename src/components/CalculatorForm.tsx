@@ -29,6 +29,7 @@ interface CalculatorFormProps {
   savedIds: string[];
   t: typeof translations['en'];
   lang: Language;
+  initialInput?: CalculationInput | null;
 }
 
 const DEFAULT_INPUT: CalculationInput = {
@@ -70,8 +71,17 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
   savedIds,
   t,
   lang,
+  initialInput,
 }) => {
   const [formData, setFormData] = useState<CalculationInput>(DEFAULT_INPUT);
+  const [isPreFilledNoticeVisible, setIsPreFilledNoticeVisible] = useState<boolean>(false);
+
+  React.useEffect(() => {
+    if (initialInput) {
+      setFormData(initialInput);
+      setIsPreFilledNoticeVisible(true);
+    }
+  }, [initialInput]);
   const [newFeeName, setNewFeeName] = useState('');
   const [newFeeAmount, setNewFeeAmount] = useState<number | ''>('');
   const [newFeeType, setNewFeeType] = useState<'fixed' | 'percentage'>('fixed');
@@ -184,6 +194,27 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Pre-filled Notification Banner when Duplicating Record */}
+      {isPreFilledNoticeVisible && (
+        <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 text-xs font-semibold flex items-center justify-between shadow-xs animate-in fade-in duration-200">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-emerald-500 shrink-0" />
+            <span>
+              {lang === 'ar'
+                ? `تمت تعبئة بيانات الحاسبة بنجاح من سجل الشحنة "${formData.title || 'سجل سابق'}". يمكنك تعديل أي قيم ثم إجراء حسبة جديدة.`
+                : `Calculator form pre-filled from historical record "${formData.title || 'Historical Record'}". You can modify any value and recalculate.`}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsPreFilledNoticeVisible(false)}
+            className="p-1 hover:bg-emerald-500/20 rounded-lg transition-colors cursor-pointer text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Grid: Inputs (Left 7 Columns) vs Live Result Card (Right 5 Columns) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Form Inputs Column */}

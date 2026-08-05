@@ -106,9 +106,6 @@ export const Header: React.FC<HeaderProps> = ({
             <div className="font-bold text-lg leading-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-300">
               {t.appName}
             </div>
-            <div className="text-[11px] text-slate-400 font-medium tracking-wide">
-              {t.appSubtitle}
-            </div>
           </div>
         </div>
 
@@ -129,11 +126,6 @@ export const Header: React.FC<HeaderProps> = ({
                   {lang === 'ar' ? 'الملف' : 'Profile'}
                 </span>
               </button>
-
-              <div className="hidden lg:block text-[11px] font-semibold text-slate-200 max-w-[100px] truncate">
-                {userProfile.name}
-              </div>
-
               {onLogout && (
                 <button
                   type="button"

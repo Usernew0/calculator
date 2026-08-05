@@ -42,9 +42,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 }) => {
   const t = translations[lang];
 
-  const [username, setUsername] = useState('');
+  const [username, setUsername] = useState(() => {
+    return localStorage.getItem('cargo_remember_username') || '';
+  });
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState<boolean>(() => {
+    return localStorage.getItem('cargo_remember_me') !== 'false';
+  });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -68,10 +73,20 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     setErrorMsg(null);
 
     try {
-      // Check if user profile schema exists in Firestore database
+      // Check if user profile exists in Firestore database / seed records
       const existingUser = await getUserProfileFromFirestore(cleanUsername);
 
-      if (existingUser?.status === 'suspended') {
+      if (!existingUser) {
+        setErrorMsg(
+          lang === 'ar'
+            ? 'حساب المستخدم غير مسجل لدينا. يرجى التواصل مع مسؤول النظام لإضافة حسابك.'
+            : 'User account is not signed in for us. Please contact the administrator.'
+        );
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (existingUser.status === 'suspended') {
         setErrorMsg(
           lang === 'ar'
             ? 'هذا الحساب معطل من قبل مدير النظام'
@@ -81,49 +96,32 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         return;
       }
 
-      if (existingUser && existingUser.password) {
-        // Validate password for registered username
-        if (existingUser.password !== cleanPassword) {
-          setErrorMsg(t.invalidPasswordMsg);
-          setIsSubmitting(false);
-          return;
-        }
-      } else if (!existingUser && cleanUsername === 'admin') {
-        // Default admin password verification
-        if (cleanPassword !== 'admin123password') {
-          setErrorMsg(t.invalidPasswordMsg);
-          setIsSubmitting(false);
-          return;
-        }
+      // Validate password for existing user
+      if (existingUser.password && existingUser.password !== cleanPassword) {
+        setErrorMsg(t.invalidPasswordMsg);
+        setIsSubmitting(false);
+        return;
       }
 
-      const userRole: 'admin' | 'user' =
-        existingUser?.role || (cleanUsername === 'admin' ? 'admin' : 'user');
-      const userStatus: 'active' | 'suspended' = existingUser?.status || 'active';
-
-      // Generate or reuse user.profile schema object
-      const generatedUserId =
-        existingUser?.userId ||
-        (cleanUsername === 'admin' ? 'USR-ADMIN-001' : 'USR-' + Math.floor(100000 + Math.random() * 900000));
-
       const profileSchema: UserProfile = {
-        userId: generatedUserId,
-        username: cleanUsername,
-        password: cleanPassword, // Stored in database user.profile schema
-        role: userRole,
-        status: userStatus,
-        name: existingUser?.name || (cleanUsername === 'admin' ? 'Super Admin' : cleanUsername),
-        email: existingUser?.email || (cleanUsername === 'admin' ? 'admin@cargoprofit.com' : ''),
-        company: existingUser?.company || (cleanUsername === 'admin' ? 'CargoProfit HQ' : ''),
-        createdAt: existingUser?.createdAt || new Date().toISOString(),
+        ...existingUser,
         lastLoginAt: new Date().toISOString(),
       };
 
-      // Save user.profile schema directly into Firestore database
+      // Update user last login timestamp in Firestore database
       await saveUserProfileToFirestore(profileSchema);
 
-      // Persist in localStorage
-      localStorage.setItem('cargo_user_profile', JSON.stringify(profileSchema));
+      // Persist in localStorage according to rememberMe preference
+      if (rememberMe) {
+        localStorage.setItem('cargo_remember_username', cleanUsername);
+        localStorage.setItem('cargo_remember_me', 'true');
+        localStorage.setItem('cargo_user_profile', JSON.stringify(profileSchema));
+      } else {
+        localStorage.removeItem('cargo_remember_username');
+        localStorage.setItem('cargo_remember_me', 'false');
+        sessionStorage.setItem('cargo_session_active', 'true');
+        localStorage.setItem('cargo_user_profile', JSON.stringify(profileSchema));
+      }
 
       setSuccessMsg(t.loginSuccessMsg);
       setTimeout(() => {
@@ -131,19 +129,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         setIsSubmitting(false);
       }, 800);
     } catch (err: any) {
-      console.error('Error during authentication and schema save:', err);
-      const fallbackProfile: UserProfile = {
-        userId: cleanUsername === 'admin' ? 'USR-ADMIN-001' : 'USR-' + Math.floor(100000 + Math.random() * 900000),
-        username: cleanUsername,
-        password: cleanPassword,
-        role: cleanUsername === 'admin' ? 'admin' : 'user',
-        status: 'active',
-        name: cleanUsername === 'admin' ? 'Super Admin' : cleanUsername,
-        createdAt: new Date().toISOString(),
-        lastLoginAt: new Date().toISOString(),
-      };
-      localStorage.setItem('cargo_user_profile', JSON.stringify(fallbackProfile));
-      onLoginSuccess(fallbackProfile);
+      console.error('Error during authentication:', err);
+      setErrorMsg(
+        lang === 'ar'
+          ? 'حدث خطأ يرجى المحاولة مرة أخرى.'
+          : 'connection error. Please try again.'
+      );
       setIsSubmitting(false);
     }
   };
@@ -200,7 +191,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           <div className="lg:col-span-6 space-y-6 text-center lg:ltr:text-left lg:rtl:text-right">
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold">
               <Database className="w-3.5 h-3.5 text-emerald-400" />
-              <span>{lang === 'ar' ? 'حفظ الحساب في مخطط user.profile بقاعدة البيانات' : 'Stored in user.profile Firestore Schema'}</span>
             </div>
 
             <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white leading-tight">
@@ -217,8 +207,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
             <p className="text-sm sm:text-base text-slate-300 leading-relaxed">
               {lang === 'ar'
-                ? 'أدخل اسم المستخدم وكلمة المرور لتسجيل الدخول أو إنشاء حساب جديد يتم حفظه تلقائياً في قاعدة البيانات بجدول user.profile.'
-                : 'Sign in with your Username and Password. New accounts are automatically initialized and saved in the database under user.profile schema.'}
+                ? 'أدخل اسم المستخدم وكلمة المرور لتسجيل الدخول مباشرة إلى حسابك الخاص بالمنصة.'
+                : 'Sign in with your registered Username and Password to access your private account.'}
             </p>
 
             {/* Feature Highlights Grid */}
@@ -310,8 +300,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       onClick={() => setShowPassword(!showPassword)}
                       className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-semibold cursor-pointer"
                     >
-                      {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                      <span>{showPassword ? (lang === 'ar' ? 'إخفاء' : 'Hide') : (lang === 'ar' ? 'إظهار' : 'Show')}</span>
                     </button>
                   </div>
                   <div className="relative">
@@ -335,6 +323,21 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
+                </div>
+
+                {/* Remember Me Option */}
+                <div className="flex items-center justify-between pt-0.5">
+                  <label className="flex items-center gap-2.5 text-xs font-semibold text-slate-300 cursor-pointer select-none group">
+                    <input
+                      type="checkbox"
+                      checked={rememberMe}
+                      onChange={(e) => setRememberMe(e.target.checked)}
+                      className="w-4 h-4 rounded-md bg-slate-900 border-slate-600 text-emerald-500 focus:ring-emerald-500/50 focus:ring-offset-slate-800 cursor-pointer accent-emerald-500"
+                    />
+                    <span className="group-hover:text-white transition-colors">
+                      {t.rememberMeLabel || (lang === 'ar' ? 'تذكر بيانات الدخول' : 'Remember me on this device')}
+                    </span>
+                  </label>
                 </div>
 
 
@@ -370,13 +373,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               </form>
 
               {/* Footer info inside card */}
-              <div className="px-6 py-3 bg-slate-900/90 text-[11px] text-slate-400 flex items-center justify-between border-t border-slate-700/80">
-                <span className="flex items-center gap-1">
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                  {lang === 'ar' ? 'مخزن في قاعدة البيانات: user.profile' : 'Stored in user.profile schema'}
-                </span>
-                <span className="text-emerald-400 font-bold">{t.savedToDbBadge}</span>
-              </div>
             </div>
           </div>
         </div>

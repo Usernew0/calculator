@@ -87,52 +87,11 @@ const CALCULATIONS_COLLECTION = "calculations";
 const USERS_COLLECTION = "users";
 
 /**
- * Default Initial System Admin User (to ensure admin access is available)
- */
-const DEFAULT_SEED_USERS: UserProfile[] = [
-  {
-    userId: "USR-ADMIN-001",
-    username: "admin",
-    password: "admin123password",
-    role: "admin",
-    status: "active",
-    name: "Super Admin",
-    email: "admin@cargoprofit.com",
-    company: "CargoProfit HQ",
-    createdAt: new Date().toISOString(),
-    lastLoginAt: new Date().toISOString(),
-  },
-];
-
-/**
- * Empty Initial Calculations Array (No mock/default template calculation records)
- */
-const DEFAULT_SEED_CALCULATIONS: CalculationResult[] = [];
-
-/**
- * Seeds initial admin user profile into Firestore if users collection is empty.
+ * Initializes Firestore connection.
  */
 export async function seedDefaultDataToFirestore(): Promise<void> {
   try {
     await ensureAuth();
-    // Check & Seed Admin User if users collection is completely empty
-    const usersSnap = await getDocs(collection(db, USERS_COLLECTION));
-    if (usersSnap.empty) {
-      console.info("Seeding initial admin profile into Firestore...");
-      for (const u of DEFAULT_SEED_USERS) {
-        const docKey = u.username.toLowerCase();
-        await setDoc(doc(db, USERS_COLLECTION, docKey), u);
-      }
-      console.info("Default admin user successfully created in Firestore.");
-    } else {
-      // Ensure admin account exists regardless for system management
-      const adminDocRef = doc(db, USERS_COLLECTION, "admin");
-      const adminSnap = await getDoc(adminDocRef);
-      if (!adminSnap.exists()) {
-        await setDoc(adminDocRef, DEFAULT_SEED_USERS[0]);
-        console.info("Admin account created in existing Firestore users collection.");
-      }
-    }
   } catch (error: any) {
     handleFirestoreError(error, OperationType.WRITE, "auto-seed");
   }
@@ -188,12 +147,10 @@ export async function getUserProfileFromFirestore(username: string): Promise<Use
     });
     if (found) return found;
   } catch (error: any) {
-    console.info("Firestore user fetch using local profile fallback:", error?.message || error);
+    console.info("Firestore user fetch notice:", error?.message || error);
   }
 
-  // Fallback to DEFAULT_SEED_USERS
-  const docKey = username.toLowerCase().trim();
-  return DEFAULT_SEED_USERS.find((u) => u.username.toLowerCase() === docKey || u.userId.toLowerCase() === docKey) || null;
+  return null;
 }
 
 /**
@@ -207,12 +164,12 @@ export async function getAllUsersFromFirestore(): Promise<UserProfile[]> {
     qSnap.forEach((docSnap) => {
       users.push(docSnap.data() as UserProfile);
     });
-    if (users.length > 0) return users;
+    return users;
   } catch (error: any) {
-    console.info("Firestore fetch users using default list fallback:", error?.message || error);
+    console.info("Firestore fetch users notice:", error?.message || error);
   }
 
-  return DEFAULT_SEED_USERS;
+  return [];
 }
 
 /**
@@ -282,8 +239,8 @@ export function subscribeToCalculations(
               // Retry with basic query if orderBy fails due to missing index or permission constraints
               createListener(false);
             } else {
-              // Fallback to initial seed calculations on permission/connection limit
-              onUpdate(DEFAULT_SEED_CALCULATIONS);
+              // Fallback to empty array on permission/connection limit
+              onUpdate([]);
               if (onError) onError(error);
             }
           }
@@ -359,16 +316,16 @@ export function subscribeToUsers(
           snapshot.forEach((docSnap) => {
             results.push(docSnap.data() as UserProfile);
           });
-          onUpdate(results.length > 0 ? results : DEFAULT_SEED_USERS);
+          onUpdate(results);
         },
         (error) => {
           console.info("Firestore users real-time subscription status:", error?.message || error);
-          onUpdate(DEFAULT_SEED_USERS);
+          onUpdate([]);
           if (onError) onError(error);
         }
       );
     } catch (err) {
-      onUpdate(DEFAULT_SEED_USERS);
+      onUpdate([]);
       if (onError) onError(err);
     }
   };
