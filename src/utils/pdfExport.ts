@@ -57,6 +57,7 @@ export async function exportSingleCalculationPDF(result: CalculationResult, lang
           <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; font-size: 12px; color: #334155;">
             <div><strong>${isArabic ? 'رمز المنتج / المورد:' : 'SKU / Supplier:'}</strong> ${input.skuSupplier || 'N/A'}</div>
             <div><strong>${isArabic ? 'الفئة:' : 'Category:'}</strong> ${input.category || (isArabic ? 'بضائع عامة' : 'General Cargo')}</div>
+            <div><strong>${isArabic ? 'نوع العملية التجارية:' : 'Trade Operation:'}</strong> ${input.tradeDirection === 'export' ? (isArabic ? 'شحنة تصدير (Export)' : 'Export Shipment') : (isArabic ? 'شحنة استيراد (Import)' : 'Import Shipment')}</div>
             <div><strong>${isArabic ? 'طريقة الشحن:' : 'Freight Mode:'}</strong> ${input.freightMethod.toUpperCase().replace('_', ' ')}</div>
             <div><strong>${isArabic ? 'الكمية الإجمالية:' : 'Total Quantity:'}</strong> ${input.quantity.toLocaleString()} ${isArabic ? 'وحدة' : 'units'}</div>
             <div><strong>${isArabic ? 'الوزن القابل للخصم:' : 'Chargeable Weight:'}</strong> ${result.chargeableWeightKg.toFixed(1)} kg</div>

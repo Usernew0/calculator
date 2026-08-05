@@ -32,10 +32,11 @@ CREATE TABLE IF NOT EXISTS public.calculations (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 3. Optimization Indexes (Enables instant searching by Product SKU, Title & Cargo Image presence)
+-- 3. Optimization Indexes (Enables instant searching by Product SKU, Title, Trade Direction & Cargo Image presence)
 CREATE INDEX IF NOT EXISTS idx_calculations_user_id ON public.calculations (user_id);
 CREATE INDEX IF NOT EXISTS idx_calculations_created_at ON public.calculations (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_calculations_product_sku ON public.calculations ((calculation_data->'input'->>'skuSupplier'));
+CREATE INDEX IF NOT EXISTS idx_calculations_trade_direction ON public.calculations ((calculation_data->'input'->>'tradeDirection'));
 CREATE INDEX IF NOT EXISTS idx_calculations_has_image ON public.calculations (((calculation_data->'input'->>'invoiceImage') IS NOT NULL));
 
 -- 4. Enable Row Level Security (RLS) and permissive policies for public client app

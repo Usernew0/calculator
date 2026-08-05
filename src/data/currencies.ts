@@ -61,3 +61,66 @@ export function convertCurrency(
 
   return { converted, rate };
 }
+
+export function detectUserDefaultCurrency(): string {
+  try {
+    const languages = typeof navigator !== 'undefined'
+      ? (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language || ''])
+      : [];
+
+    const regionToCurrency: Record<string, string> = {
+      US: 'USD',
+      EG: 'EGP',
+      SA: 'SAR',
+      AE: 'AED',
+      GB: 'GBP',
+      JP: 'JPY',
+      CN: 'CNY',
+      IN: 'INR',
+      BR: 'BRL',
+      CA: 'CAD',
+      AU: 'AUD',
+      MX: 'MXN',
+      KR: 'KRW',
+      TR: 'TRY',
+      ZA: 'ZAR',
+      NZ: 'NZD',
+      CH: 'CHF',
+      SG: 'SGD',
+      HK: 'HKD',
+      DE: 'EUR', FR: 'EUR', IT: 'EUR', ES: 'EUR', NL: 'EUR', BE: 'EUR',
+      AT: 'EUR', IE: 'EUR', FI: 'EUR', PT: 'EUR', GR: 'EUR'
+    };
+
+    for (const lang of languages) {
+      if (!lang) continue;
+      const parts = lang.split('-');
+      if (parts.length > 1) {
+        const country = parts[parts.length - 1].toUpperCase();
+        if (regionToCurrency[country]) {
+          return regionToCurrency[country];
+        }
+      }
+    }
+
+    if (typeof Intl !== 'undefined' && Intl.DateTimeFormat) {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+      if (tz.includes('Cairo') || tz.includes('Egypt')) return 'EGP';
+      if (tz.includes('Riyadh') || tz.includes('Saudi')) return 'SAR';
+      if (tz.includes('Dubai') || tz.includes('Abu_Dhabi')) return 'AED';
+      if (tz.includes('London')) return 'GBP';
+      if (tz.includes('Tokyo')) return 'JPY';
+      if (tz.includes('Shanghai') || tz.includes('Chongqing') || tz.includes('Urumqi')) return 'CNY';
+      if (tz.includes('Kolkata') || tz.includes('Calcutta')) return 'INR';
+      if (tz.includes('Berlin') || tz.includes('Paris') || tz.includes('Rome') || tz.includes('Madrid') || tz.includes('Amsterdam') || tz.includes('Athens') || tz.includes('Brussels') || tz.includes('Vienna')) return 'EUR';
+      if (tz.includes('Toronto') || tz.includes('Vancouver')) return 'CAD';
+      if (tz.includes('Sydney') || tz.includes('Melbourne') || tz.includes('Brisbane')) return 'AUD';
+      if (tz.includes('Sao_Paulo')) return 'BRL';
+      if (tz.includes('New_York') || tz.includes('Chicago') || tz.includes('Los_Angeles') || tz.includes('Denver')) return 'USD';
+    }
+  } catch (err) {
+    console.info('Auto-currency detection fallback:', err);
+  }
+
+  return 'EGP';
+}

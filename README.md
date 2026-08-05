@@ -7,6 +7,7 @@ CargoProfit FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Ma
 ## 🌟 Key Features
 
 ### 1. Landed Cost & Profit Calculator
+- **Trade Operation Selection**: Choose between **Import** (استيراد) and **Export** (تصدير) shipment operations with saved history, filtering, and report badging.
 - **Dual Cost Entry Mode**: Input either Unit Purchase Price (per piece) OR Total Purchase Cost for all units — changing either automatically calculates the other based on quantity.
 - **Instant Product & SKU Auto-Fill**: Selecting or typing a product title or SKU automatically matches saved items from history and pre-fills the title, SKU, category, price, currency, weight, duty rate, and attached cargo/invoice image.
 - **Multi-Currency Support**: Supports EGP (Egyptian Pound), USD, EUR, GBP, JPY, CNY, AED, SAR, BRL, and all major world currencies.
@@ -33,7 +34,12 @@ CargoProfit FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Ma
 ---
 
 ### 3. Historical Dashboard & Analytics
-- **Saved Calculation History**: Store landed cost calculations in browser persistent storage (`localStorage`).
+- **Saved Calculation History**: Store landed cost calculations in browser persistent storage (`localStorage`) and isolated per-user Firestore database storage.
+- **Multi-Select Checkboxes & Batch Operations**:
+  - **Select All / Deselect All Controls**: Toggle selection across filtered calculation records in desktop table headers and mobile card headers.
+  - **Batch PDF Summary Export**: Select multiple records and export them as a single compiled PDF summary report with combined financial metrics.
+  - **Batch Deletion**: Select multiple records and permanently delete them simultaneously from the database with confirmation prompts.
+  - **Multi-Item Client Quotes**: Generate unified commercial offers for multiple selected shipment calculations.
 - **Financial Analytics Charts**: Visual trend breakdown (Landed Cost vs Net Profit) using Recharts.
 - **Cost Composition Pie Chart**: Itemized expense structure distribution (Product, Freight, Duty, Insurance, Handling).
 - **PDF Report Generation**: Download official PDF reports for individual calculations or complete historical summaries using `jspdf` and `jspdf-autotable`.

@@ -343,6 +343,17 @@ export default function App() {
     setHistory((prev) => prev.filter((item) => item.id !== id));
   };
 
+  const handleBatchDeleteRecords = async (ids: string[]) => {
+    for (const id of ids) {
+      try {
+        await deleteCalculationFromFirestore(id);
+      } catch (err: any) {
+        console.info('Firestore notice (local storage active):', err?.message || err);
+      }
+    }
+    setHistory((prev) => prev.filter((item) => !ids.includes(item.id)));
+  };
+
   const handleClearAllHistory = async () => {
     if (window.confirm(lang === 'ar' ? 'هل أنت تأكد من رغبتك في مسح كافة السجلات التاريخية؟' : 'Are you sure you want to clear all historical calculation records?')) {
       try {
@@ -515,6 +526,7 @@ export default function App() {
             <DashboardView
               history={history}
               onDeleteRecord={handleDeleteRecord}
+              onBatchDeleteRecords={handleBatchDeleteRecords}
               onClearAllHistory={handleClearAllHistory}
               onLoadIntoCalculator={handleLoadIntoCalculator}
               t={t}

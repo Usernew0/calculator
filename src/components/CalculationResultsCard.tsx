@@ -40,8 +40,17 @@ export const CalculationResultsCard: React.FC<CalculationResultsCardProps> = ({
       <div className="bg-slate-900 dark:bg-slate-950 text-white p-5 border-b border-slate-800">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-xs uppercase font-bold tracking-wider text-emerald-400 mb-1">
-              {t.landedCostBannerTitle}
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs uppercase font-bold tracking-wider text-emerald-400">
+                {t.landedCostBannerTitle}
+              </span>
+              <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider ${
+                (input.tradeDirection || 'import') === 'export'
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                  : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+              }`}>
+                {(input.tradeDirection || 'import') === 'export' ? (t.exportBadge || (lang === 'ar' ? 'تصدير' : 'Export')) : (t.importBadge || (lang === 'ar' ? 'استيراد' : 'Import'))}
+              </span>
             </div>
             <h2 className="text-xl font-bold text-white line-clamp-1">{input.title || t.calculationSummaryDefault}</h2>
             <p className="text-xs text-slate-400 mt-0.5">

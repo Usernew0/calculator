@@ -1,5 +1,7 @@
 export type FreightMethod = 'air_express' | 'air_standard' | 'sea_lcl' | 'sea_fcl' | 'road_freight';
 
+export type TradeDirection = 'import' | 'export';
+
 export type WeightUnit = 'kg' | 'g' | 'lbs' | 'tonnes';
 
 export type TransportRateBasis = 'per_kg' | 'per_g' | 'per_lb' | 'per_tonne' | 'per_item' | 'per_cbm' | 'flat';
@@ -26,6 +28,7 @@ export interface CalculationInput {
   title: string;
   skuSupplier: string;
   category: string;
+  tradeDirection?: TradeDirection; // 'import' | 'export'
   quantity: number;
   invoiceImage?: string; // Captured camera photo or uploaded document (Base64 / Data URL)
   

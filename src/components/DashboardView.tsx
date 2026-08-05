@@ -39,12 +39,15 @@ import {
   ArrowUpDown,
   Filter,
   Calendar,
+  ArrowDownLeft,
+  ArrowUpRight,
 } from 'lucide-react';
 import { ClientQuoteModal } from './ClientQuoteModal';
 
 interface DashboardViewProps {
   history: CalculationResult[];
   onDeleteRecord: (id: string) => void;
+  onBatchDeleteRecords?: (ids: string[]) => void;
   onClearAllHistory: () => void;
   onLoadIntoCalculator: (result: CalculationResult) => void;
   t: typeof translations['en'];
@@ -55,6 +58,7 @@ interface DashboardViewProps {
 export const DashboardView: React.FC<DashboardViewProps> = ({
   history,
   onDeleteRecord,
+  onBatchDeleteRecords,
   onClearAllHistory,
   onLoadIntoCalculator,
   t,
@@ -63,11 +67,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedMethodFilter, setSelectedMethodFilter] = useState<string>('all');
+  const [selectedDirectionFilter, setSelectedDirectionFilter] = useState<string>('all');
   const [selectedCurrencyFilter] = useState<string>('all');
   const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'landed_desc' | 'profit_desc'>('date_desc');
   const [selectedDetailModal, setSelectedDetailModal] = useState<CalculationResult | null>(null);
   const [recordToDelete, setRecordToDelete] = useState<CalculationResult | null>(null);
   const [showClearAllConfirm, setShowClearAllConfirm] = useState<boolean>(false);
+  const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState<boolean>(false);
   const [selectedQuoteItems, setSelectedQuoteItems] = useState<CalculationResult[] | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
@@ -82,8 +88,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
       const matchMethod = selectedMethodFilter === 'all' || item.input.freightMethod === selectedMethodFilter;
       const matchCurrency = selectedCurrencyFilter === 'all' || item.input.targetCurrency === selectedCurrencyFilter;
+      const matchDirection =
+        selectedDirectionFilter === 'all' || (item.input.tradeDirection || 'import') === selectedDirectionFilter;
 
-      return matchSearch && matchMethod && matchCurrency;
+      return matchSearch && matchMethod && matchCurrency && matchDirection;
     });
 
     return list.sort((a, b) => {
@@ -93,7 +101,63 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       if (sortBy === 'profit_desc') return b.totalProfitTarget - a.totalProfitTarget;
       return 0;
     });
-  }, [history, searchQuery, selectedMethodFilter, selectedCurrencyFilter, sortBy]);
+  }, [history, searchQuery, selectedMethodFilter, selectedDirectionFilter, selectedCurrencyFilter, sortBy]);
+
+  // Multi-Select Helpers & Actions
+  const isAllFilteredSelected =
+    filteredHistory.length > 0 && filteredHistory.every((item) => selectedIds.includes(item.id));
+
+  const handleToggleSelectAll = () => {
+    if (isAllFilteredSelected) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(filteredHistory.map((item) => item.id));
+    }
+  };
+
+  const handleExecuteBatchDelete = () => {
+    if (selectedIds.length === 0) return;
+    if (onBatchDeleteRecords) {
+      onBatchDeleteRecords(selectedIds);
+    } else {
+      selectedIds.forEach((id) => onDeleteRecord(id));
+    }
+    setSelectedIds([]);
+    setShowBatchDeleteConfirm(false);
+  };
+
+  const handleExportSelectedPDF = () => {
+    const selectedItems = history.filter((item) => selectedIds.includes(item.id));
+    if (selectedItems.length > 0) {
+      exportHistoricalSummaryPDF(selectedItems, lang);
+    }
+  };
+
+  // Trade Direction Helper Badge Component
+  const renderTradeDirectionBadge = (dir?: string) => {
+    const isExport = dir === 'export';
+    return (
+      <span
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+          isExport
+            ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30'
+            : 'bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/30'
+        }`}
+      >
+        {isExport ? (
+          <>
+            <ArrowUpRight className="w-3 h-3 text-amber-500" />
+            <span>{t.exportBadge || (lang === 'ar' ? 'تصدير' : 'Export')}</span>
+          </>
+        ) : (
+          <>
+            <ArrowDownLeft className="w-3 h-3 text-blue-500" />
+            <span>{t.importBadge || (lang === 'ar' ? 'استيراد' : 'Import')}</span>
+          </>
+        )}
+      </span>
+    );
+  };
 
   // Freight Mode Helper Badge Component
   const renderFreightBadge = (method: string) => {
@@ -448,6 +512,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </select>
             </div>
 
+            {/* Trade Direction Filter (Import / Export) */}
+            <div className="relative">
+              <select
+                value={selectedDirectionFilter}
+                onChange={(e) => setSelectedDirectionFilter(e.target.value)}
+                className="px-3.5 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700/80 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-semibold focus:outline-hidden focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 cursor-pointer min-h-[40px] hover:border-slate-400 dark:hover:border-slate-600 transition-colors"
+              >
+                <option value="all" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{t.allTradeDirections || (lang === 'ar' ? 'جميع العمليات' : 'All Trade Types')}</option>
+                <option value="import" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{t.importBadge || (lang === 'ar' ? 'استيراد' : 'Import')}</option>
+                <option value="export" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{t.exportBadge || (lang === 'ar' ? 'تصدير' : 'Export')}</option>
+              </select>
+            </div>
+
             {/* Sort Select Control (Dark & Light Mode High Contrast) */}
             <div className="flex items-center gap-1.5 min-h-[40px] px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700/80 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-semibold focus-within:ring-2 focus-within:ring-emerald-500/50 focus-within:border-emerald-500 hover:border-slate-400 dark:hover:border-slate-600 transition-colors">
               <ArrowUpDown className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400 shrink-0" />
@@ -476,39 +553,91 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         {/* Multi-Select Active Action Bar */}
         {selectedIds.length > 0 && (
-          <div className="p-3.5 bg-gradient-to-r from-blue-900/40 via-slate-900 to-indigo-900/40 border border-blue-500/40 rounded-2xl flex flex-wrap items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2">
-            <div className="flex items-center gap-2.5 text-xs font-black text-blue-300">
-              <CheckSquare className="w-4 h-4 text-blue-400" />
-              <span>
+          <div className="p-3.5 sm:p-4 bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 border border-blue-500/40 rounded-2xl flex flex-wrap items-center justify-between gap-3 shadow-xl animate-in fade-in slide-in-from-top-2">
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={handleToggleSelectAll}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-xl text-xs font-bold border border-blue-500/30 transition-all cursor-pointer min-h-[36px]"
+              >
+                {isAllFilteredSelected ? (
+                  <CheckSquare className="w-4 h-4 text-blue-400 shrink-0" />
+                ) : (
+                  <Square className="w-4 h-4 text-slate-400 shrink-0" />
+                )}
+                <span>
+                  {isAllFilteredSelected
+                    ? (lang === 'ar' ? 'إلغاء تحديد الكل' : 'Deselect All')
+                    : (lang === 'ar' ? 'تحديد الكل' : 'Select All')}
+                </span>
+              </button>
+
+              <span className="text-xs font-black text-white bg-blue-500/20 px-3 py-1.5 rounded-xl border border-blue-500/30 min-h-[36px] flex items-center">
                 {lang === 'ar'
-                  ? `تم تحديد ${selectedIds.length} من أصل ${filteredHistory.length} حسبة`
-                  : `Selected ${selectedIds.length} of ${filteredHistory.length} calculations`}
+                  ? `تم تحديد ${selectedIds.length} من أصل ${filteredHistory.length}`
+                  : `Selected ${selectedIds.length} of ${filteredHistory.length}`}
               </span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Export Selected PDF Report */}
               <button
+                type="button"
+                onClick={handleExportSelectedPDF}
+                className="px-3.5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-md shadow-amber-950/40 transition-all active:scale-95 min-h-[38px]"
+                title={lang === 'ar' ? 'تصدير تقرير PDF مجمع للحسبات المحددة' : 'Export compiled PDF report for selected items'}
+              >
+                <Download className="w-4 h-4 text-slate-950 shrink-0" />
+                <span>
+                  {lang === 'ar'
+                    ? `تصدير PDF (${selectedIds.length})`
+                    : `Export PDF (${selectedIds.length})`}
+                </span>
+              </button>
+
+              {/* Create Multi-Item Client Offer */}
+              <button
+                type="button"
                 onClick={() => {
                   const selectedItems = history.filter((item) => selectedIds.includes(item.id));
                   if (selectedItems.length > 0) {
                     setSelectedQuoteItems(selectedItems);
                   }
                 }}
-                className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-black flex items-center gap-2 cursor-pointer shadow-md shadow-blue-950/50 transition-all active:scale-95 min-h-[40px]"
+                className="px-3.5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-md shadow-blue-950/50 transition-all active:scale-95 min-h-[38px]"
+                title={lang === 'ar' ? 'إنشاء عرض سعر عميل موحد' : 'Create compiled client offer'}
               >
-                <FileText className="w-4 h-4" />
+                <FileText className="w-4 h-4 shrink-0" />
                 <span>
                   {lang === 'ar'
-                    ? `إنشاء عرض سعر عميل شامل (${selectedIds.length} بنود)`
-                    : `Create Multi-Item Client Offer (${selectedIds.length} Items)`}
+                    ? `عرض سعر (${selectedIds.length})`
+                    : `Client Offer (${selectedIds.length})`}
                 </span>
               </button>
 
+              {/* Delete Selected Records */}
               <button
-                onClick={() => setSelectedIds([])}
-                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold cursor-pointer transition-colors border border-slate-700 min-h-[40px]"
+                type="button"
+                onClick={() => setShowBatchDeleteConfirm(true)}
+                className="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-md shadow-rose-950/50 transition-all active:scale-95 min-h-[38px]"
+                title={lang === 'ar' ? 'حذف السجلات المحددة نهائياً' : 'Delete selected records permanently'}
               >
-                {lang === 'ar' ? 'إلغاء التحديد' : 'Deselect All'}
+                <Trash2 className="w-4 h-4 shrink-0" />
+                <span>
+                  {lang === 'ar'
+                    ? `حذف المحدد (${selectedIds.length})`
+                    : `Delete Selected (${selectedIds.length})`}
+                </span>
+              </button>
+
+              {/* Clear Selection */}
+              <button
+                type="button"
+                onClick={() => setSelectedIds([])}
+                className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold cursor-pointer transition-colors border border-slate-700 min-h-[38px] min-w-[38px] flex items-center justify-center"
+                title={lang === 'ar' ? 'إلغاء التحديد' : 'Deselect All'}
+              >
+                <X className="w-4 h-4" />
               </button>
             </div>
           </div>
@@ -516,6 +645,33 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         {/* 1. Mobile Responsive Cards View (< 768px) */}
         <div className="md:hidden space-y-3">
+          {filteredHistory.length > 0 && (
+            <div className="flex items-center justify-between px-1 py-1">
+              <button
+                type="button"
+                onClick={handleToggleSelectAll}
+                className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-300 hover:text-blue-500 transition-colors cursor-pointer min-h-[32px]"
+              >
+                {isAllFilteredSelected ? (
+                  <CheckSquare className="w-4 h-4 text-blue-500" />
+                ) : (
+                  <Square className="w-4 h-4 text-slate-400" />
+                )}
+                <span>
+                  {isAllFilteredSelected
+                    ? (lang === 'ar' ? 'إلغاء تحديد الكل' : 'Deselect All')
+                    : (lang === 'ar' ? 'تحديد الكل' : 'Select All')}
+                </span>
+              </button>
+
+              {selectedIds.length > 0 && (
+                <span className="text-[11px] font-black text-blue-600 dark:text-blue-400 bg-blue-500/10 dark:bg-blue-950/40 px-2.5 py-0.5 rounded-full border border-blue-500/30">
+                  {lang === 'ar' ? `تم تحديد ${selectedIds.length}` : `${selectedIds.length} Selected`}
+                </span>
+              )}
+            </div>
+          )}
+
           {filteredHistory.length === 0 ? (
             <div className="py-10 text-center text-slate-400 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700">
               {history.length === 0 ? t.noRecordsSaved : t.noFilteredRecords}
@@ -575,6 +731,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                             {item.input.skuSupplier || 'N/A'}
                           </span>
                           <span className="text-slate-300 dark:text-slate-700">•</span>
+                          {renderTradeDirectionBadge(item.input.tradeDirection)}
                           {renderFreightBadge(item.input.freightMethod)}
                         </div>
                       </div>
@@ -672,17 +829,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <th className="py-3.5 px-3 text-center w-10">
                   <button
                     type="button"
-                    onClick={() => {
-                      if (selectedIds.length === filteredHistory.length && filteredHistory.length > 0) {
-                        setSelectedIds([]);
-                      } else {
-                        setSelectedIds(filteredHistory.map((i) => i.id));
-                      }
-                    }}
+                    onClick={handleToggleSelectAll}
                     className="text-slate-400 hover:text-white cursor-pointer min-h-[28px] min-w-[28px] flex items-center justify-center mx-auto"
-                    title={lang === 'ar' ? 'تحديد الكل' : 'Select All'}
+                    title={isAllFilteredSelected ? (lang === 'ar' ? 'إلغاء تحديد الكل' : 'Deselect All') : (lang === 'ar' ? 'تحديد الكل' : 'Select All')}
                   >
-                    {filteredHistory.length > 0 && selectedIds.length === filteredHistory.length ? (
+                    {isAllFilteredSelected ? (
                       <CheckSquare className="w-4 h-4 text-blue-400" />
                     ) : (
                       <Square className="w-4 h-4" />
@@ -803,7 +954,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         </div>
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
-                        {renderFreightBadge(item.input.freightMethod)}
+                        <div className="flex flex-col gap-1 items-start">
+                          {renderTradeDirectionBadge(item.input.tradeDirection)}
+                          {renderFreightBadge(item.input.freightMethod)}
+                        </div>
                       </td>
                       <td className="py-3 px-4 text-right rtl:text-left font-semibold text-slate-900 dark:text-slate-100">
                         {item.input.quantity.toLocaleString()}
@@ -998,6 +1152,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     <span className="text-slate-400 text-[11px] block">{t.modalFreightMethod}</span>
                     <span className="font-extrabold text-slate-800 dark:text-slate-200 uppercase">{selectedDetailModal.input.freightMethod.replace('_', ' ')}</span>
                   </div>
+                  <div>
+                    <span className="text-slate-400 text-[11px] block">{t.tradeDirectionLabel || (lang === 'ar' ? 'نوع العملية' : 'Trade Operation')}</span>
+                    <span className="font-extrabold text-slate-800 dark:text-slate-200">
+                      {selectedDetailModal.input.tradeDirection === 'export' ? (lang === 'ar' ? 'تصدير (Export)' : 'Export Shipment') : (lang === 'ar' ? 'استيراد (Import)' : 'Import Shipment')}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Cargo / Invoice Picture Attachment if present */}
@@ -1190,6 +1350,66 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 >
                   <Trash2 className="w-4 h-4" />
                   <span>{lang === 'ar' ? 'تأكيد الحذف' : 'Confirm Delete'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Delete Confirmation Modal */}
+      {showBatchDeleteConfirm && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-3xl border border-rose-500/30 shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="p-5 bg-gradient-to-r from-rose-950 via-slate-900 to-slate-900 border-b border-rose-900/40 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-rose-100">
+                    {lang === 'ar' ? 'تأكيد حذف السجلات المحددة' : 'Confirm Batch Delete Records'}
+                  </h3>
+                  <p className="text-[11px] text-rose-300/80 font-medium">
+                    {lang === 'ar' ? `حذف ${selectedIds.length} سجلات حسابية محددة` : `Delete ${selectedIds.length} selected calculations`}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBatchDeleteConfirm(false)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-700 dark:text-rose-300 text-xs font-semibold flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                <span>
+                  {lang === 'ar'
+                    ? `هل أنت تأكد من رغبتك في حذف عدد (${selectedIds.length}) سجلات حسابية محددة نهائياً من قاعدة البيانات؟ لا يمكن التراجع عن هذا الإجراء.`
+                    : `Are you sure you want to permanently delete the ${selectedIds.length} selected calculation records from the database? This action cannot be undone.`}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowBatchDeleteConfirm(false)}
+                  className="px-4 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                >
+                  {lang === 'ar' ? 'إلغاء' : 'Cancel'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleExecuteBatchDelete}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer shadow-lg shadow-rose-950/50"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>{lang === 'ar' ? 'تأكيد الحذف المحدد' : 'Confirm Delete Selected'}</span>
                 </button>
               </div>
             </div>

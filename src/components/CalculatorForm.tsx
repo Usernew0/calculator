@@ -22,6 +22,8 @@ import {
   Loader2,
   CheckCircle2,
   BookOpen,
+  ArrowDownLeft,
+  ArrowUpRight,
 } from 'lucide-react';
 import { HsCodeLibraryModal } from './HsCodeLibraryModal';
 import { HsCodeItem } from '../data/hsCodes';
@@ -40,6 +42,7 @@ const DEFAULT_INPUT: CalculationInput = {
   title: '',
   skuSupplier: '',
   category: '',
+  tradeDirection: 'import',
   quantity: 0,
   originalPrice: 0,
   originalCurrency: 'EGP',
@@ -219,6 +222,7 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
         weight: matched.weight || currentForm.weight,
         weightUnit: matched.weightUnit || currentForm.weightUnit,
         dutyPercentage: matched.dutyPercentage ?? currentForm.dutyPercentage,
+        tradeDirection: matched.tradeDirection || currentForm.tradeDirection || 'import',
       };
     }
 
@@ -356,6 +360,40 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
             </datalist>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Trade Operation Type Toggle: Import vs Export */}
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-2">
+                  {t.tradeDirectionLabel || (lang === 'ar' ? 'نوع العملية التجارية' : 'Trade Operation Type')}
+                </label>
+                <div className="grid grid-cols-2 gap-2.5 p-1 bg-slate-100 dark:bg-slate-800/80 rounded-2xl border border-slate-200 dark:border-slate-700/80">
+                  <button
+                    type="button"
+                    onClick={() => handleChange('tradeDirection', 'import')}
+                    className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      (formData.tradeDirection || 'import') === 'import'
+                        ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20 ring-2 ring-blue-500/30'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-700/50'
+                    }`}
+                  >
+                    <ArrowDownLeft className={`w-4 h-4 ${(formData.tradeDirection || 'import') === 'import' ? 'text-white' : 'text-blue-500'}`} />
+                    <span>{t.importOption || (lang === 'ar' ? 'شحنة استيراد (Import)' : 'Import Shipment')}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleChange('tradeDirection', 'export')}
+                    className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      formData.tradeDirection === 'export'
+                        ? 'bg-amber-600 text-white shadow-md shadow-amber-600/20 ring-2 ring-amber-500/30'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-700/50'
+                    }`}
+                  >
+                    <ArrowUpRight className={`w-4 h-4 ${formData.tradeDirection === 'export' ? 'text-white' : 'text-amber-500'}`} />
+                    <span>{t.exportOption || (lang === 'ar' ? 'شحنة تصدير (Export)' : 'Export Shipment')}</span>
+                  </button>
+                </div>
+              </div>
+
               <div className="sm:col-span-2">
                 <div className="flex items-center justify-between mb-1">
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
