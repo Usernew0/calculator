@@ -7,6 +7,8 @@ CargoProfit FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Ma
 ## 🌟 Key Features
 
 ### 1. Landed Cost & Profit Calculator
+- **Dual Cost Entry Mode**: Input either Unit Purchase Price (per piece) OR Total Purchase Cost for all units — changing either automatically calculates the other based on quantity.
+- **Instant Product & SKU Auto-Fill**: Selecting or typing a product title or SKU automatically matches saved items from history and pre-fills the title, SKU, category, price, currency, weight, duty rate, and attached cargo/invoice image.
 - **Multi-Currency Support**: Supports EGP (Egyptian Pound), USD, EUR, GBP, JPY, CNY, AED, SAR, BRL, and all major world currencies.
 - **Default Currency**: Default base and target currency set to **EGP** for seamless Egyptian trade calculations.
 - **Freight Mode Engine**:
@@ -42,19 +44,10 @@ CargoProfit FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Ma
 ### 4. UI & Accessibility Design
 - **Responsive Web & Mobile Layout**:
   - **Desktop**: Multi-column layout with sticky calculation result sidecards and side-by-side analytics.
-  - **Mobile**: Touch-friendly inputs (min 44px height), stacked vertical forms, icon-collapsible navigation, and horizontally scrollable tables/tickers (`no-scrollbar`).
+  - **Mobile**: Touch-friendly inputs (min 44px height), stacked vertical forms, collapsible mobile drawer menu with hamburger toggle, and horizontally scrollable tables/tickers (`no-scrollbar`).
+- **Bilingual Support**: Native Arabic (RTL) and English (LTR) language support with Cairo font family.
 - **Light & Dark Theme Toggle**: Built-in toggle supporting dark and light themes with preference persistence.
-- **Enhanced Custom Scrollbars**: Modern, sleek scrollbars across webkit browsers and Firefox with theme adaptation.
-
----
-
-## 🚀 Technical Stack
-
-- **Frontend**: React 18, TypeScript, Vite
-- **Styling**: Tailwind CSS v4, Lucide React Icons
-- **Charts**: Recharts
-- **PDF Export**: jsPDF & jsPDF-AutoTable
-- **Backend Server**: Express (Node.js) with live FX rate proxy endpoint (`/api/exchange-rates`)
+- **Auto-Updated Documentation**: Maintained via `AGENTS.md` and `DOCUMENTATION.md` for seamless developer tracking.
 
 ---
 
@@ -62,9 +55,17 @@ CargoProfit FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Ma
 
 | Device | Screen Width | Layout Strategy |
 | :--- | :--- | :--- |
-| **Mobile** | `< 640px` | Single-column stacked layout, icon-only header tabs, horizontal scroll for tables |
-| **Tablet** | `640px – 1024px` | 2-column grids for inputs, touch-optimized controls |
+| **Mobile** | `< 640px` | Single-column stacked layout, hamburger mobile drawer navigation, touch targets $\ge 44\text{px}$, responsive mobile history card grid |
+| **Tablet** | `640px – 1024px` | 2-column input grid, inline controls, responsive ticker bar |
 | **Desktop** | `> 1024px` | 12-column grid system with sticky results panel and full analytics charts |
+
+---
+
+## 📚 Project Documentation & Guidelines
+
+- **`AGENTS.md`**: Persistent rules and standards for automated updates and responsiveness.
+- **`RESPONSIVE.md`**: Mobile responsive hamburger menu matrix, touch target specifications, and breakpoint layout rules.
+- **`DOCUMENTATION.md`**: Technical specification, real-time rates architecture, PDF engine, and auto-updated revision log.
 
 ---
 

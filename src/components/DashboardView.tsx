@@ -30,7 +30,17 @@ import {
   AlertCircle,
   X,
   Copy,
+  FileText,
+  CheckSquare,
+  Square,
+  Plane,
+  Ship,
+  Truck,
+  ArrowUpDown,
+  Filter,
+  Calendar,
 } from 'lucide-react';
+import { ClientQuoteModal } from './ClientQuoteModal';
 
 interface DashboardViewProps {
   history: CalculationResult[];
@@ -39,6 +49,7 @@ interface DashboardViewProps {
   onLoadIntoCalculator: (result: CalculationResult) => void;
   t: typeof translations['en'];
   lang: Language;
+  currentUserCompany?: string;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -48,17 +59,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onLoadIntoCalculator,
   t,
   lang,
+  currentUserCompany = '',
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedMethodFilter, setSelectedMethodFilter] = useState<string>('all');
   const [selectedCurrencyFilter] = useState<string>('all');
+  const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'landed_desc' | 'profit_desc'>('date_desc');
   const [selectedDetailModal, setSelectedDetailModal] = useState<CalculationResult | null>(null);
   const [recordToDelete, setRecordToDelete] = useState<CalculationResult | null>(null);
   const [showClearAllConfirm, setShowClearAllConfirm] = useState<boolean>(false);
+  const [selectedQuoteItems, setSelectedQuoteItems] = useState<CalculationResult[] | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [zoomedImage, setZoomedImage] = useState<string | null>(null);
 
-  // Filtered list
+  // Filtered & Sorted list
   const filteredHistory = useMemo(() => {
-    return history.filter((item) => {
+    const list = history.filter((item) => {
       const matchSearch =
         item.input.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (item.input.skuSupplier && item.input.skuSupplier.toLowerCase().includes(searchQuery.toLowerCase())) ||
@@ -69,7 +85,63 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
       return matchSearch && matchMethod && matchCurrency;
     });
-  }, [history, searchQuery, selectedMethodFilter, selectedCurrencyFilter]);
+
+    return list.sort((a, b) => {
+      if (sortBy === 'date_desc') return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      if (sortBy === 'date_asc') return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      if (sortBy === 'landed_desc') return b.totalLandedCostTarget - a.totalLandedCostTarget;
+      if (sortBy === 'profit_desc') return b.totalProfitTarget - a.totalProfitTarget;
+      return 0;
+    });
+  }, [history, searchQuery, selectedMethodFilter, selectedCurrencyFilter, sortBy]);
+
+  // Freight Mode Helper Badge Component
+  const renderFreightBadge = (method: string) => {
+    switch (method) {
+      case 'air_express':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30">
+            <Plane className="w-3 h-3 text-amber-500" />
+            <span>{lang === 'ar' ? 'سريع جوي' : 'Air Express'}</span>
+          </span>
+        );
+      case 'air_standard':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/30">
+            <Plane className="w-3 h-3 text-sky-500" />
+            <span>{lang === 'ar' ? 'شحن جوي' : 'Air Cargo'}</span>
+          </span>
+        );
+      case 'sea_lcl':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/30">
+            <Ship className="w-3 h-3 text-teal-500" />
+            <span>{lang === 'ar' ? 'بحري جزئي LCL' : 'Sea LCL'}</span>
+          </span>
+        );
+      case 'sea_fcl':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/30">
+            <Ship className="w-3 h-3 text-blue-500" />
+            <span>{lang === 'ar' ? 'بحري كلي FCL' : 'Sea FCL'}</span>
+          </span>
+        );
+      case 'road_freight':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/30">
+            <Truck className="w-3 h-3 text-purple-500" />
+            <span>{lang === 'ar' ? 'شحن بري' : 'Road Freight'}</span>
+          </span>
+        );
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-500/10 text-slate-600 dark:text-slate-400 border border-slate-500/30">
+            <Package className="w-3 h-3 text-slate-400" />
+            <span>{method.toUpperCase()}</span>
+          </span>
+        );
+    }
+  };
 
   // Key KPI Aggregations
   const totalShipments = history.length;
@@ -334,43 +406,67 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       </div>
 
       {/* Historical Data Table */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 p-6 shadow-xs space-y-4 transition-colors duration-200">
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 p-4 sm:p-6 shadow-xs space-y-4 transition-colors duration-200">
+        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
           <div>
-            <h2 className="font-bold text-slate-800 dark:text-slate-100 text-lg">{t.historicalRecordsTableTitle}</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="font-bold text-slate-800 dark:text-slate-100 text-lg">{t.historicalRecordsTableTitle}</h2>
+              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                {filteredHistory.length} {lang === 'ar' ? 'حسبة' : 'records'}
+              </span>
+            </div>
             <p className="text-xs text-slate-500 dark:text-slate-400">{t.historicalRecordsTableSub}</p>
           </div>
 
-          {/* Filters & Search */}
-          <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-            <div className="relative flex-1 md:w-56">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3" />
+          {/* Filters, Search & Sort */}
+          <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
+            {/* Search Input */}
+            <div className="relative flex-1 min-w-[160px] sm:w-56">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3 rtl:left-auto rtl:right-3 pointer-events-none" />
               <input
                 type="text"
                 placeholder={t.searchHistoryPlaceholder}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                className="w-full pl-8 pr-3 rtl:pl-3 rtl:pr-8 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700/80 bg-slate-50/80 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-hidden focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 dark:focus:border-emerald-500 min-h-[40px] transition-all"
               />
             </div>
 
-            <select
-              value={selectedMethodFilter}
-              onChange={(e) => setSelectedMethodFilter(e.target.value)}
-              className="px-3 py-1.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-medium"
-            >
-              <option value="all">{t.allFreightModes}</option>
-              <option value="air_express">{t.airExpress}</option>
-              <option value="air_standard">{t.airCargo}</option>
-              <option value="sea_lcl">{t.seaLcl}</option>
-              <option value="sea_fcl">{t.seaFcl}</option>
-              <option value="road_freight">{t.roadFreight}</option>
-            </select>
+            {/* Freight Method Filter */}
+            <div className="relative">
+              <select
+                value={selectedMethodFilter}
+                onChange={(e) => setSelectedMethodFilter(e.target.value)}
+                className="px-3.5 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700/80 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-semibold focus:outline-hidden focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 cursor-pointer min-h-[40px] hover:border-slate-400 dark:hover:border-slate-600 transition-colors"
+              >
+                <option value="all" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{t.allFreightModes}</option>
+                <option value="air_express" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{t.airExpress}</option>
+                <option value="air_standard" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{t.airCargo}</option>
+                <option value="sea_lcl" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{t.seaLcl}</option>
+                <option value="sea_fcl" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{t.seaFcl}</option>
+                <option value="road_freight" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{t.roadFreight}</option>
+              </select>
+            </div>
+
+            {/* Sort Select Control (Dark & Light Mode High Contrast) */}
+            <div className="flex items-center gap-1.5 min-h-[40px] px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700/80 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-semibold focus-within:ring-2 focus-within:ring-emerald-500/50 focus-within:border-emerald-500 hover:border-slate-400 dark:hover:border-slate-600 transition-colors">
+              <ArrowUpDown className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400 shrink-0" />
+              <select
+                value={sortBy}
+                onChange={(e: any) => setSortBy(e.target.value)}
+                className="text-xs bg-transparent text-slate-900 dark:text-slate-100 font-bold focus:outline-hidden cursor-pointer"
+              >
+                <option value="date_desc" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{lang === 'ar' ? 'الترتيب: الأحدث أولاً' : 'Sort: Newest First'}</option>
+                <option value="date_asc" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{lang === 'ar' ? 'الترتيب: الأقدم أولاً' : 'Sort: Oldest First'}</option>
+                <option value="landed_desc" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{lang === 'ar' ? 'الترتيب: أعلى تكلفة وصول' : 'Sort: Highest Landed Cost'}</option>
+                <option value="profit_desc" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{lang === 'ar' ? 'الترتيب: أعلى صافي ربح' : 'Sort: Highest Net Profit'}</option>
+              </select>
+            </div>
 
             {history.length > 0 && (
               <button
-                onClick={onClearAllHistory}
-                className="text-xs text-rose-600 dark:text-rose-400 hover:text-rose-800 font-semibold px-2 py-1 rounded hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors cursor-pointer"
+                onClick={() => setShowClearAllConfirm(true)}
+                className="text-xs text-rose-600 dark:text-rose-400 hover:text-rose-800 dark:hover:text-rose-300 font-bold px-3 py-2 rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors cursor-pointer min-h-[40px] border border-transparent hover:border-rose-200 dark:hover:border-rose-900/50"
               >
                 {t.clearAll}
               </button>
@@ -378,92 +474,399 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        {/* Table */}
-        <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-xl">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-900 dark:bg-slate-950 text-white uppercase text-[10px] font-bold tracking-wider">
+        {/* Multi-Select Active Action Bar */}
+        {selectedIds.length > 0 && (
+          <div className="p-3.5 bg-gradient-to-r from-blue-900/40 via-slate-900 to-indigo-900/40 border border-blue-500/40 rounded-2xl flex flex-wrap items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2">
+            <div className="flex items-center gap-2.5 text-xs font-black text-blue-300">
+              <CheckSquare className="w-4 h-4 text-blue-400" />
+              <span>
+                {lang === 'ar'
+                  ? `تم تحديد ${selectedIds.length} من أصل ${filteredHistory.length} حسبة`
+                  : `Selected ${selectedIds.length} of ${filteredHistory.length} calculations`}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  const selectedItems = history.filter((item) => selectedIds.includes(item.id));
+                  if (selectedItems.length > 0) {
+                    setSelectedQuoteItems(selectedItems);
+                  }
+                }}
+                className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-black flex items-center gap-2 cursor-pointer shadow-md shadow-blue-950/50 transition-all active:scale-95 min-h-[40px]"
+              >
+                <FileText className="w-4 h-4" />
+                <span>
+                  {lang === 'ar'
+                    ? `إنشاء عرض سعر عميل شامل (${selectedIds.length} بنود)`
+                    : `Create Multi-Item Client Offer (${selectedIds.length} Items)`}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setSelectedIds([])}
+                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold cursor-pointer transition-colors border border-slate-700 min-h-[40px]"
+              >
+                {lang === 'ar' ? 'إلغاء التحديد' : 'Deselect All'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 1. Mobile Responsive Cards View (< 768px) */}
+        <div className="md:hidden space-y-3">
+          {filteredHistory.length === 0 ? (
+            <div className="py-10 text-center text-slate-400 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700">
+              {history.length === 0 ? t.noRecordsSaved : t.noFilteredRecords}
+            </div>
+          ) : (
+            filteredHistory.map((item) => {
+              const curr = item.input.targetCurrency;
+              const isSelected = selectedIds.includes(item.id);
+              return (
+                <div
+                  key={item.id}
+                  className={`p-4 rounded-2xl border transition-all ${
+                    isSelected
+                      ? 'bg-blue-500/10 dark:bg-blue-950/30 border-blue-500/50 shadow-sm'
+                      : 'bg-slate-50/70 dark:bg-slate-800/60 border-slate-200 dark:border-slate-800'
+                  }`}
+                >
+                  {/* Top Bar: Checkbox + Title + Date */}
+                  <div className="flex items-start justify-between gap-3 mb-2.5">
+                    <div className="flex items-start gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedIds((prev) =>
+                            prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id]
+                          );
+                        }}
+                        className="mt-0.5 text-slate-400 hover:text-blue-500 cursor-pointer min-h-[32px] min-w-[32px] flex items-center justify-center"
+                      >
+                        {isSelected ? (
+                          <CheckSquare className="w-5 h-5 text-blue-500" />
+                        ) : (
+                          <Square className="w-5 h-5" />
+                        )}
+                      </button>
+
+                      {item.input.invoiceImage && (
+                        <div
+                          onClick={() => setZoomedImage(item.input.invoiceImage!)}
+                          className="w-11 h-11 shrink-0 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 cursor-pointer hover:ring-2 hover:ring-emerald-500 transition-all"
+                          title={t.viewFullImage || 'View Image'}
+                        >
+                          <img
+                            src={item.input.invoiceImage}
+                            alt={item.input.title}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      )}
+
+                      <div>
+                        <h3 className="font-bold text-slate-900 dark:text-slate-100 text-sm leading-snug">
+                          {item.input.title}
+                        </h3>
+                        <div className="flex flex-wrap items-center gap-2 mt-1">
+                          <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">
+                            {item.input.skuSupplier || 'N/A'}
+                          </span>
+                          <span className="text-slate-300 dark:text-slate-700">•</span>
+                          {renderFreightBadge(item.input.freightMethod)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <span className="text-[10px] text-slate-400 dark:text-slate-500 font-semibold whitespace-nowrap bg-white dark:bg-slate-900 px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-800">
+                      {new Date(item.createdAt).toLocaleDateString()}
+                    </span>
+                  </div>
+
+                  {/* 4-Metric Grid */}
+                  <div className="grid grid-cols-2 gap-2 my-3 p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-200/80 dark:border-slate-800 text-xs">
+                    <div>
+                      <div className="text-[10px] text-slate-400 uppercase font-bold">{t.thQty}</div>
+                      <div className="font-bold text-slate-800 dark:text-slate-200">
+                        {item.input.quantity.toLocaleString()} {lang === 'ar' ? 'قطع' : 'pcs'}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-[10px] text-slate-400 uppercase font-bold">{t.thTotalLanded}</div>
+                      <div className="font-extrabold text-slate-900 dark:text-white">
+                        {formatCurrency(item.totalLandedCostTarget, curr)}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-[10px] text-emerald-600 dark:text-emerald-400 uppercase font-bold">{t.thSellingPrice}</div>
+                      <div className="font-bold text-emerald-600 dark:text-emerald-400">
+                        {formatCurrency(item.suggestedSellingPricePerUnitTarget, curr)}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-[10px] text-teal-600 dark:text-teal-400 uppercase font-bold">{t.thNetProfit} ({item.actualMarginPercentage.toFixed(1)}%)</div>
+                      <div className="font-bold text-teal-600 dark:text-teal-400">
+                        {formatCurrency(item.totalProfitTarget, curr)}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Mobile Actions Toolbar */}
+                  <div className="flex flex-wrap items-center justify-between gap-1.5 pt-2 border-t border-slate-200/60 dark:border-slate-800">
+                    <button
+                      onClick={() => setSelectedQuoteItems([item])}
+                      className="flex-1 py-2 px-3 bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 dark:text-blue-400 border border-blue-500/30 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 min-h-[44px] transition-all active:scale-95"
+                    >
+                      <FileText className="w-4 h-4 text-blue-500 shrink-0" />
+                      <span>{lang === 'ar' ? 'عرض سعر' : 'Offer'}</span>
+                    </button>
+
+                    <button
+                      onClick={() => setSelectedDetailModal(item)}
+                      className="p-2.5 text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 bg-indigo-500/10 dark:bg-indigo-950/30 border border-indigo-500/30 rounded-xl min-h-[44px] min-w-[44px] flex items-center justify-center transition-all active:scale-95"
+                      title={t.inspectDetails}
+                    >
+                      <Eye className="w-4 h-4 shrink-0" />
+                    </button>
+
+                    <button
+                      onClick={() => onLoadIntoCalculator(item)}
+                      className="flex-1 py-2 px-3 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 min-h-[44px] transition-all active:scale-95"
+                    >
+                      <Copy className="w-4 h-4 text-emerald-500 shrink-0" />
+                      <span>{t.duplicateBtn || (lang === 'ar' ? 'تكرار' : 'Duplicate')}</span>
+                    </button>
+
+                    <button
+                      onClick={() => exportSingleCalculationPDF(item, lang)}
+                      className="p-2.5 text-amber-600 dark:text-amber-400 hover:text-amber-700 bg-amber-500/10 dark:bg-amber-950/30 border border-amber-500/30 rounded-xl min-h-[44px] min-w-[44px] flex items-center justify-center transition-all active:scale-95"
+                      title={t.downloadPdf}
+                    >
+                      <Download className="w-4 h-4 shrink-0" />
+                    </button>
+
+                    <button
+                      onClick={() => setRecordToDelete(item)}
+                      className="p-2.5 text-rose-600 dark:text-rose-400 hover:text-rose-700 bg-rose-500/10 dark:bg-rose-950/30 border border-rose-500/30 rounded-xl min-h-[44px] min-w-[44px] flex items-center justify-center transition-all active:scale-95"
+                      title={t.deleteRecord}
+                    >
+                      <Trash2 className="w-4 h-4 shrink-0" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* 2. Desktop High-Density Table View (>= 768px) */}
+        <div className="hidden md:block overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xs">
+          <table className="w-full text-left rtl:text-right text-xs">
+            <thead className="bg-slate-900 dark:bg-slate-950 text-white uppercase text-[10px] font-bold tracking-wider sticky top-0 border-b border-slate-800">
               <tr>
-                <th className="py-3 px-4">{t.thDate}</th>
-                <th className="py-3 px-4">{t.thShipment}</th>
-                <th className="py-3 px-4">{t.thFreightMode}</th>
-                <th className="py-3 px-4 text-right">{t.thQty}</th>
-                <th className="py-3 px-4 text-right">{t.thTotalLanded}</th>
-                <th className="py-3 px-4 text-right">{t.thSellingPrice}</th>
-                <th className="py-3 px-4 text-right">{t.thNetProfit}</th>
-                <th className="py-3 px-4 text-right">{t.thMargin}</th>
-                <th className="py-3 px-4 text-center">{t.thActions}</th>
+                <th className="py-3.5 px-3 text-center w-10">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selectedIds.length === filteredHistory.length && filteredHistory.length > 0) {
+                        setSelectedIds([]);
+                      } else {
+                        setSelectedIds(filteredHistory.map((i) => i.id));
+                      }
+                    }}
+                    className="text-slate-400 hover:text-white cursor-pointer min-h-[28px] min-w-[28px] flex items-center justify-center mx-auto"
+                    title={lang === 'ar' ? 'تحديد الكل' : 'Select All'}
+                  >
+                    {filteredHistory.length > 0 && selectedIds.length === filteredHistory.length ? (
+                      <CheckSquare className="w-4 h-4 text-blue-400" />
+                    ) : (
+                      <Square className="w-4 h-4" />
+                    )}
+                  </button>
+                </th>
+
+                <th className="py-3.5 px-4 text-slate-300">
+                  <button
+                    type="button"
+                    onClick={() => setSortBy(sortBy === 'date_desc' ? 'date_asc' : 'date_desc')}
+                    className="flex items-center gap-1.5 hover:text-emerald-400 transition-colors cursor-pointer"
+                  >
+                    <span>{t.thDate}</span>
+                    <ArrowUpDown className={`w-3 h-3 ${sortBy.startsWith('date') ? 'text-emerald-400 font-bold' : 'text-slate-500'}`} />
+                  </button>
+                </th>
+
+                <th className="py-3.5 px-4 text-slate-300">{t.thShipment}</th>
+
+                <th className="py-3.5 px-4 text-slate-300">{t.thFreightMode}</th>
+
+                <th className="py-3.5 px-4 text-right rtl:text-left text-slate-300">{t.thQty}</th>
+
+                <th className="py-3.5 px-4 text-right rtl:text-left text-slate-300">
+                  <button
+                    type="button"
+                    onClick={() => setSortBy('landed_desc')}
+                    className="flex items-center gap-1.5 justify-end rtl:justify-start hover:text-emerald-400 transition-colors cursor-pointer w-full"
+                  >
+                    <span>{t.thTotalLanded}</span>
+                    <ArrowUpDown className={`w-3 h-3 ${sortBy === 'landed_desc' ? 'text-emerald-400 font-bold' : 'text-slate-500'}`} />
+                  </button>
+                </th>
+
+                <th className="py-3.5 px-4 text-right rtl:text-left text-slate-300">{t.thSellingPrice}</th>
+
+                <th className="py-3.5 px-4 text-right rtl:text-left text-slate-300">
+                  <button
+                    type="button"
+                    onClick={() => setSortBy('profit_desc')}
+                    className="flex items-center gap-1.5 justify-end rtl:justify-start hover:text-emerald-400 transition-colors cursor-pointer w-full"
+                  >
+                    <span>{t.thNetProfit}</span>
+                    <ArrowUpDown className={`w-3 h-3 ${sortBy === 'profit_desc' ? 'text-emerald-400 font-bold' : 'text-slate-500'}`} />
+                  </button>
+                </th>
+
+                <th className="py-3.5 px-4 text-right rtl:text-left text-slate-300">{t.thMargin}</th>
+
+                <th className="py-3.5 px-4 text-center text-slate-300">{t.thActions}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-medium">
               {filteredHistory.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-slate-400">
+                  <td colSpan={10} className="py-10 text-center text-slate-400">
                     {history.length === 0 ? t.noRecordsSaved : t.noFilteredRecords}
                   </td>
                 </tr>
               ) : (
                 filteredHistory.map((item) => {
                   const curr = item.input.targetCurrency;
+                  const isSelected = selectedIds.includes(item.id);
                   return (
-                    <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-                      <td className="py-3 px-4 whitespace-nowrap text-slate-500 dark:text-slate-400">
+                    <tr
+                      key={item.id}
+                      className={`transition-colors ${
+                        isSelected
+                          ? 'bg-blue-500/10 dark:bg-blue-950/30'
+                          : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                      }`}
+                    >
+                      <td className="py-3 px-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedIds((prev) =>
+                              prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id]
+                            );
+                          }}
+                          className="text-slate-400 hover:text-blue-500 cursor-pointer"
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="w-4 h-4 text-blue-500" />
+                          ) : (
+                            <Square className="w-4 h-4" />
+                          )}
+                        </button>
+                      </td>
+                      <td className="py-3 px-4 whitespace-nowrap text-slate-500 dark:text-slate-400 font-mono text-[11px]">
                         {new Date(item.createdAt).toLocaleDateString()}
                       </td>
                       <td className="py-3 px-4">
-                        <div className="font-bold text-slate-900 dark:text-slate-100">{item.input.title}</div>
-                        <div className="text-[10px] text-slate-400">{item.input.skuSupplier || 'N/A'}</div>
+                        <div className="flex items-center gap-3">
+                          {item.input.invoiceImage ? (
+                            <div
+                              onClick={() => setZoomedImage(item.input.invoiceImage!)}
+                              className="w-10 h-10 shrink-0 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 cursor-pointer hover:ring-2 hover:ring-emerald-500 transition-all group"
+                              title={t.viewFullImage || 'View Image'}
+                            >
+                              <img
+                                src={item.input.invoiceImage}
+                                alt={item.input.title}
+                                className="w-full h-full object-cover group-hover:scale-110 transition-transform"
+                              />
+                            </div>
+                          ) : (
+                            <div className="w-10 h-10 shrink-0 rounded-xl bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-slate-400">
+                              <Package className="w-5 h-5 text-slate-400" />
+                            </div>
+                          )}
+
+                          <div>
+                            <div className="font-bold text-slate-900 dark:text-slate-100">{item.input.title}</div>
+                            <div className="text-[10px] text-slate-400 font-mono">{item.input.skuSupplier || 'N/A'}</div>
+                          </div>
+                        </div>
                       </td>
-                      <td className="py-3 px-4 uppercase text-[10px] font-bold text-slate-600 dark:text-slate-300">
-                        <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                          {item.input.freightMethod.replace('_', ' ')}
-                        </span>
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        {renderFreightBadge(item.input.freightMethod)}
                       </td>
-                      <td className="py-3 px-4 text-right font-semibold text-slate-900 dark:text-slate-100">{item.input.quantity.toLocaleString()}</td>
-                      <td className="py-3 px-4 text-right font-extrabold text-slate-900 dark:text-slate-100">
+                      <td className="py-3 px-4 text-right rtl:text-left font-semibold text-slate-900 dark:text-slate-100">
+                        {item.input.quantity.toLocaleString()}
+                      </td>
+                      <td className="py-3 px-4 text-right rtl:text-left font-extrabold text-slate-900 dark:text-slate-100">
                         {formatCurrency(item.totalLandedCostTarget, curr)}
                       </td>
-                      <td className="py-3 px-4 text-right font-bold text-emerald-600 dark:text-emerald-400">
+                      <td className="py-3 px-4 text-right rtl:text-left font-bold text-emerald-600 dark:text-emerald-400">
                         {formatCurrency(item.suggestedSellingPricePerUnitTarget, curr)}
                       </td>
-                      <td className="py-3 px-4 text-right font-bold text-teal-600 dark:text-teal-400">
+                      <td className="py-3 px-4 text-right rtl:text-left font-bold text-teal-600 dark:text-teal-400">
                         {formatCurrency(item.totalProfitTarget, curr)}
                       </td>
-                      <td className="py-3 px-4 text-right font-bold text-blue-600 dark:text-blue-400">
+                      <td className="py-3 px-4 text-right rtl:text-left font-bold text-blue-600 dark:text-blue-400">
                         {item.actualMarginPercentage.toFixed(1)}%
                       </td>
                       <td className="py-3 px-4">
                         <div className="flex items-center justify-center gap-1">
                           <button
-                            onClick={() => setSelectedDetailModal(item)}
-                            title={t.inspectDetails}
-                            className="p-1.5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg cursor-pointer"
+                            type="button"
+                            onClick={() => setSelectedQuoteItems([item])}
+                            title={lang === 'ar' ? 'إنشاء عرض سعر للعميل' : 'Create Client Offer'}
+                            className="px-2.5 py-1.5 bg-blue-500/10 hover:bg-blue-500/25 text-blue-600 dark:text-blue-400 border border-blue-500/30 rounded-lg font-bold cursor-pointer text-xs flex items-center gap-1.5 transition-all shadow-2xs hover:scale-105 active:scale-95"
                           >
-                            <Eye className="w-3.5 h-3.5" />
+                            <FileText className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                            <span>{lang === 'ar' ? 'عرض سعر' : 'Offer'}</span>
                           </button>
 
                           <button
+                            type="button"
+                            onClick={() => setSelectedDetailModal(item)}
+                            title={t.inspectDetails || (lang === 'ar' ? 'معاينة تفاصيل الحسبة' : 'Inspect Details')}
+                            className="p-1.5 bg-indigo-500/10 hover:bg-indigo-500/25 text-indigo-600 dark:text-indigo-400 border border-indigo-500/30 rounded-lg font-bold cursor-pointer text-xs flex items-center justify-center transition-all shadow-2xs hover:scale-105 active:scale-95"
+                          >
+                            <Eye className="w-3.5 h-3.5 shrink-0" />
+                          </button>
+
+                          <button
+                            type="button"
                             onClick={() => onLoadIntoCalculator(item)}
                             title={t.duplicateTooltip || (lang === 'ar' ? 'تكرار وتحميل في الحاسبة' : 'Duplicate record & load into calculator')}
-                            className="px-2.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 rounded-lg font-bold cursor-pointer text-xs flex items-center gap-1 transition-all shadow-2xs"
+                            className="px-2.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/25 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 rounded-lg font-bold cursor-pointer text-xs flex items-center gap-1.5 transition-all shadow-2xs hover:scale-105 active:scale-95"
                           >
-                            <Copy className="w-3.5 h-3.5 text-emerald-500" />
+                            <Copy className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                             <span>{t.duplicateBtn || (lang === 'ar' ? 'تكرار' : 'Duplicate')}</span>
                           </button>
 
                           <button
+                            type="button"
                             onClick={() => exportSingleCalculationPDF(item, lang)}
-                            title={t.downloadPdf}
-                            className="p-1.5 text-slate-600 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg cursor-pointer"
+                            title={t.downloadPdf || (lang === 'ar' ? 'تحميل تقرير PDF' : 'Download PDF')}
+                            className="p-1.5 bg-amber-500/10 hover:bg-amber-500/25 text-amber-600 dark:text-amber-400 border border-amber-500/30 rounded-lg font-bold cursor-pointer text-xs flex items-center justify-center transition-all shadow-2xs hover:scale-105 active:scale-95"
                           >
-                            <Download className="w-3.5 h-3.5" />
+                            <Download className="w-3.5 h-3.5 shrink-0" />
                           </button>
 
                           <button
+                            type="button"
                             onClick={() => setRecordToDelete(item)}
-                            title={t.deleteRecord}
-                            className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg cursor-pointer"
+                            title={t.deleteRecord || (lang === 'ar' ? 'حذف الحسبة' : 'Delete Record')}
+                            className="p-1.5 bg-rose-500/10 hover:bg-rose-500/25 text-rose-600 dark:text-rose-400 border border-rose-500/30 rounded-lg font-bold cursor-pointer text-xs flex items-center justify-center transition-all shadow-2xs hover:scale-105 active:scale-95"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Trash2 className="w-3.5 h-3.5 shrink-0" />
                           </button>
                         </div>
                       </td>
@@ -476,87 +879,240 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* Detail Modal */}
+      {/* Detail View Modal (Executive Landed Cost Audit) */}
       {selectedDetailModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto space-y-4 text-slate-900 dark:text-slate-100">
-            <div className="flex justify-between items-start border-b border-slate-100 dark:border-slate-800 pb-3">
+        <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-3xl w-full max-h-[92vh] overflow-y-auto flex flex-col divide-y divide-slate-100 dark:divide-slate-800/80 text-slate-900 dark:text-slate-100">
+            {/* Modal Header */}
+            <div className="p-5 sm:p-6 bg-gradient-to-r from-slate-900 via-slate-900 to-slate-950 text-white rounded-t-3xl flex items-start justify-between gap-4">
               <div>
-                <h3 className="font-bold text-lg text-slate-900 dark:text-slate-100">{selectedDetailModal.input.title}</h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  {t.calculatedOn} {new Date(selectedDetailModal.createdAt).toLocaleString()}
+                <div className="flex flex-wrap items-center gap-2 mb-1.5">
+                  <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                    {selectedDetailModal.input.targetCurrency}
+                  </span>
+                  {renderFreightBadge(selectedDetailModal.input.freightMethod)}
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    {selectedDetailModal.input.skuSupplier || 'N/A'}
+                  </span>
+                </div>
+                <h3 className="font-extrabold text-xl sm:text-2xl text-white tracking-tight leading-snug">
+                  {selectedDetailModal.input.title}
+                </h3>
+                <p className="text-xs text-slate-400 mt-1 flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                  <span>{t.calculatedOn} {new Date(selectedDetailModal.createdAt).toLocaleString()}</span>
                 </p>
               </div>
+
               <button
+                type="button"
                 onClick={() => setSelectedDetailModal(null)}
-                className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 font-bold text-lg p-1 cursor-pointer"
+                className="p-2 rounded-2xl bg-slate-800 hover:bg-rose-500/20 hover:text-rose-400 text-slate-400 transition-colors cursor-pointer border border-slate-700 min-h-[40px] min-w-[40px] flex items-center justify-center"
+                title={t.modalClose || 'Close'}
               >
-                ✕
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 dark:bg-slate-800/80 p-3 rounded-xl text-center text-xs">
-              <div>
-                <div className="text-slate-500 dark:text-slate-400 text-[10px] uppercase font-bold">{t.landedCostPerUnit}</div>
-                <div className="font-extrabold text-slate-900 dark:text-slate-100 mt-0.5">
-                  {formatCurrency(selectedDetailModal.landedCostPerUnitTarget, selectedDetailModal.input.targetCurrency)}
+            {/* Modal Body */}
+            <div className="p-5 sm:p-6 space-y-6">
+              {/* Executive 4-KPI Overview Bar */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="p-3.5 bg-slate-50 dark:bg-slate-800/70 rounded-2xl border border-slate-200/80 dark:border-slate-800">
+                  <div className="text-[10px] text-slate-400 uppercase font-black tracking-wider mb-1">
+                    {t.colTotalLandedCost}
+                  </div>
+                  <div className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                    {formatCurrency(selectedDetailModal.totalLandedCostTarget, selectedDetailModal.input.targetCurrency)}
+                  </div>
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    {formatCurrency(selectedDetailModal.landedCostPerUnitTarget, selectedDetailModal.input.targetCurrency)} / {lang === 'ar' ? 'وحدة' : 'unit'}
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-emerald-500/5 dark:bg-emerald-950/20 rounded-2xl border border-emerald-500/20">
+                  <div className="text-[10px] text-emerald-600 dark:text-emerald-400 uppercase font-black tracking-wider mb-1">
+                    {t.thSellingPrice}
+                  </div>
+                  <div className="text-base sm:text-lg font-black text-emerald-600 dark:text-emerald-400">
+                    {formatCurrency(selectedDetailModal.suggestedSellingPricePerUnitTarget, selectedDetailModal.input.targetCurrency)}
+                  </div>
+                  <div className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 mt-0.5">
+                    {lang === 'ar' ? 'سعر الوحدة المقترح' : 'Per Unit Price'}
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-teal-500/5 dark:bg-teal-950/20 rounded-2xl border border-teal-500/20">
+                  <div className="text-[10px] text-teal-600 dark:text-teal-400 uppercase font-black tracking-wider mb-1">
+                    {t.thNetProfit}
+                  </div>
+                  <div className="text-base sm:text-lg font-black text-teal-600 dark:text-teal-400">
+                    {formatCurrency(selectedDetailModal.totalProfitTarget, selectedDetailModal.input.targetCurrency)}
+                  </div>
+                  <div className="text-[10px] text-teal-600/80 dark:text-teal-400/80 mt-0.5 font-bold">
+                    {selectedDetailModal.actualMarginPercentage.toFixed(1)}% {t.colMargin}
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-blue-500/5 dark:bg-blue-950/20 rounded-2xl border border-blue-500/20">
+                  <div className="text-[10px] text-blue-600 dark:text-blue-400 uppercase font-black tracking-wider mb-1">
+                    {t.thQty}
+                  </div>
+                  <div className="text-base sm:text-lg font-black text-blue-600 dark:text-blue-400">
+                    {selectedDetailModal.input.quantity.toLocaleString()} {lang === 'ar' ? 'قطع' : 'pcs'}
+                  </div>
+                  <div className="text-[10px] text-blue-600/80 dark:text-blue-400/80 mt-0.5">
+                    {selectedDetailModal.input.originalPrice} {selectedDetailModal.input.originalCurrency} / {lang === 'ar' ? 'قطعة' : 'pc'}
+                  </div>
                 </div>
               </div>
 
-              <div>
-                <div className="text-slate-500 dark:text-slate-400 text-[10px] uppercase font-bold">{t.sellingPricePerUnit}</div>
-                <div className="font-extrabold text-emerald-600 dark:text-emerald-400 mt-0.5">
-                  {formatCurrency(
-                    selectedDetailModal.suggestedSellingPricePerUnitTarget,
-                    selectedDetailModal.input.targetCurrency
-                  )}
+              {/* Section 1: Product & Shipment Logistics Specs */}
+              <div className="space-y-2.5">
+                <h4 className="font-bold text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2">
+                  <Package className="w-4 h-4 text-emerald-500" />
+                  <span>{t.modalProductSpecs || (lang === 'ar' ? 'المواصفات اللوجستية والمنتج' : 'Product & Logistics Specs')}</span>
+                </h4>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs bg-slate-50 dark:bg-slate-800/50 p-4 rounded-2xl border border-slate-200/60 dark:border-slate-800">
+                  <div>
+                    <span className="text-slate-400 text-[11px] block">{t.modalQty}</span>
+                    <span className="font-extrabold text-slate-800 dark:text-slate-200">{selectedDetailModal.input.quantity.toLocaleString()}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[11px] block">{t.modalOrigPrice}</span>
+                    <span className="font-extrabold text-slate-800 dark:text-slate-200">{selectedDetailModal.input.originalPrice} {selectedDetailModal.input.originalCurrency}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[11px] block">{t.modalExchangeRate || 'Applied FX Rate'}</span>
+                    <span className="font-extrabold text-slate-800 dark:text-slate-200">1 {selectedDetailModal.input.originalCurrency} = {selectedDetailModal.input.exchangeRate} {selectedDetailModal.input.targetCurrency}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[11px] block">{t.modalChargeableWeight}</span>
+                    <span className="font-extrabold text-slate-800 dark:text-slate-200">{selectedDetailModal.chargeableWeightKg.toFixed(1)} kg</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[11px] block">{t.modalVolumetricCbm}</span>
+                    <span className="font-extrabold text-slate-800 dark:text-slate-200">{selectedDetailModal.volumeCBM.toFixed(3)} CBM</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[11px] block">{t.modalFreightMethod}</span>
+                    <span className="font-extrabold text-slate-800 dark:text-slate-200 uppercase">{selectedDetailModal.input.freightMethod.replace('_', ' ')}</span>
+                  </div>
                 </div>
+
+                {/* Cargo / Invoice Picture Attachment if present */}
+                {selectedDetailModal.input.invoiceImage && (
+                  <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200/80 dark:border-slate-800 flex items-center gap-4 mt-3">
+                    <div
+                      onClick={() => setZoomedImage(selectedDetailModal.input.invoiceImage!)}
+                      className="relative w-20 h-20 shrink-0 rounded-xl overflow-hidden border border-slate-300 dark:border-slate-700 bg-black/5 dark:bg-black/20 cursor-pointer hover:ring-2 hover:ring-emerald-500 transition-all group"
+                    >
+                      <img
+                        src={selectedDetailModal.input.invoiceImage}
+                        alt="Cargo attached document"
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                      />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                        <span>{t.imageFound || (lang === 'ar' ? 'صورة الشحنة / الفاتورة المرفقة' : 'Attached Cargo / Invoice Photo')}</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        {lang === 'ar' ? 'انقر على الصورة لمعاينتها بحجم كامل مكبر' : 'Click thumbnail to inspect image in full high resolution'}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setZoomedImage(selectedDetailModal.input.invoiceImage!)}
+                        className="mt-1.5 px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 rounded-lg text-[11px] font-bold cursor-pointer transition-all"
+                      >
+                        {t.viewFullImage || (lang === 'ar' ? 'معاينة بالحجم الكامل' : 'Zoom Image')}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              <div>
-                <div className="text-slate-500 dark:text-slate-400 text-[10px] uppercase font-bold">{t.totalNetProfitCard}</div>
-                <div className="font-extrabold text-teal-600 dark:text-teal-400 mt-0.5">
-                  {formatCurrency(selectedDetailModal.totalProfitTarget, selectedDetailModal.input.targetCurrency)}
-                </div>
-              </div>
+              {/* Section 2: Detailed Landed Cost Expenses Matrix */}
+              <div className="space-y-2.5">
+                <h4 className="font-bold text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2">
+                  <DollarSign className="w-4 h-4 text-emerald-500" />
+                  <span>{t.modalCostBreakdown || (lang === 'ar' ? 'تفاصيل هيكل المصاريف' : 'Detailed Expenses Breakdown')}</span>
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                  <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-800 flex justify-between items-center">
+                    <span className="text-slate-600 dark:text-slate-300 font-medium">{t.modalFobCost || 'Product Purchase Value'}</span>
+                    <span className="font-black text-slate-900 dark:text-slate-100">{formatCurrency(selectedDetailModal.productTotalCostTarget, selectedDetailModal.input.targetCurrency)}</span>
+                  </div>
 
-              <div>
-                <div className="text-slate-500 dark:text-slate-400 text-[10px] uppercase font-bold">{t.marginPercentage}</div>
-                <div className="font-extrabold text-blue-600 dark:text-blue-400 mt-0.5">
-                  {selectedDetailModal.actualMarginPercentage.toFixed(1)}%
+                  <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-800 flex justify-between items-center">
+                    <span className="text-slate-600 dark:text-slate-300 font-medium">{t.modalFreightCost || 'Main Freight Shipping'}</span>
+                    <span className="font-black text-slate-900 dark:text-slate-100">{formatCurrency(selectedDetailModal.freightCostTarget, selectedDetailModal.input.targetCurrency)}</span>
+                  </div>
+
+                  <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-800 flex justify-between items-center">
+                    <span className="text-slate-600 dark:text-slate-300 font-medium">{t.modalInsuranceCost || 'Cargo Insurance'}</span>
+                    <span className="font-black text-slate-900 dark:text-slate-100">{formatCurrency(selectedDetailModal.insuranceCostTarget, selectedDetailModal.input.targetCurrency)}</span>
+                  </div>
+
+                  <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-800 flex justify-between items-center">
+                    <span className="text-slate-600 dark:text-slate-300 font-medium">{t.modalDutiesVal || 'Customs Duty & Taxes'} ({selectedDetailModal.input.dutyPercentage}%)</span>
+                    <span className="font-black text-slate-900 dark:text-slate-100">{formatCurrency(selectedDetailModal.customsDutyTarget, selectedDetailModal.input.targetCurrency)}</span>
+                  </div>
+
+                  <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-800 flex justify-between items-center">
+                    <span className="text-slate-600 dark:text-slate-300 font-medium">{t.modalPortHandling || 'Port Clearance & Local Handling'}</span>
+                    <span className="font-black text-slate-900 dark:text-slate-100">{formatCurrency(selectedDetailModal.clearanceCostTarget, selectedDetailModal.input.targetCurrency)}</span>
+                  </div>
+
+                  <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-800 flex justify-between items-center">
+                    <span className="text-slate-600 dark:text-slate-300 font-medium">{t.modalInlandCost || 'Internal Transport'}</span>
+                    <span className="font-black text-slate-900 dark:text-slate-100">{formatCurrency(selectedDetailModal.inlandCostTarget, selectedDetailModal.input.targetCurrency)}</span>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div className="space-y-2 text-xs">
-              <h4 className="font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider text-[11px]">{t.inputsAndSpecs}</h4>
-              <div className="grid grid-cols-2 gap-2 text-slate-600 dark:text-slate-300 bg-slate-50/50 dark:bg-slate-800/50 p-3 rounded-xl">
-                <div>{t.quantityLabel}: <strong>{selectedDetailModal.input.quantity}</strong></div>
-                <div>{t.unitPriceLabel}: <strong>{selectedDetailModal.input.originalPrice} {selectedDetailModal.input.originalCurrency}</strong></div>
-                <div>{t.freightMethodLabel}: <strong>{selectedDetailModal.input.freightMethod}</strong></div>
-                <div>{t.customsDutyLabel}: <strong>{selectedDetailModal.input.dutyPercentage}%</strong></div>
-                <div>{t.chargeableWeightLabel}: <strong>{selectedDetailModal.chargeableWeightKg.toFixed(1)} kg</strong></div>
-                <div>{t.volumetricCbmLabel}: <strong>{selectedDetailModal.volumeCBM.toFixed(3)} CBM</strong></div>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+            {/* Modal Footer Actions Toolbar */}
+            <div className="p-4 sm:p-5 bg-slate-50/80 dark:bg-slate-950/80 rounded-b-3xl flex flex-wrap items-center justify-end gap-2.5">
               <button
+                type="button"
+                onClick={() => {
+                  setSelectedQuoteItems([selectedDetailModal]);
+                  setSelectedDetailModal(null);
+                }}
+                className="px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-black flex items-center gap-2 cursor-pointer shadow-md shadow-blue-950/40 transition-all active:scale-95 min-h-[42px]"
+              >
+                <FileText className="w-4 h-4" />
+                <span>{lang === 'ar' ? 'إنشاء عرض سعر للعميل' : 'Create Client Offer'}</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => {
                   onLoadIntoCalculator(selectedDetailModal);
                   setSelectedDetailModal(null);
                 }}
-                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+                className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-xs font-black flex items-center gap-2 cursor-pointer shadow-md shadow-emerald-950/30 transition-all active:scale-95 min-h-[42px]"
               >
-                <Copy className="w-3.5 h-3.5" />
+                <Copy className="w-4 h-4" />
                 <span>{t.duplicateInCalc || (lang === 'ar' ? 'تكرار في الحاسبة' : 'Duplicate in Calculator')}</span>
               </button>
+
               <button
+                type="button"
                 onClick={() => exportSingleCalculationPDF(selectedDetailModal, lang)}
-                className="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition-colors flex items-center gap-1.5 cursor-pointer"
+                className="px-4 py-2.5 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 text-white rounded-xl text-xs font-black flex items-center gap-2 cursor-pointer transition-all border border-slate-700 min-h-[42px]"
               >
-                <Download className="w-3.5 h-3.5 text-emerald-400" />
+                <Download className="w-4 h-4 text-amber-400" />
                 <span>{t.exportPdfReport}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedDetailModal(null)}
+                className="px-4 py-2.5 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer min-h-[42px]"
+              >
+                {t.modalClose || (lang === 'ar' ? 'إغلاق' : 'Close')}
               </button>
             </div>
           </div>
@@ -699,6 +1255,44 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <span>{lang === 'ar' ? 'تأكيد مسح الجميع' : 'Confirm Clear All'}</span>
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Client Commercial Quote Modal */}
+      {selectedQuoteItems && selectedQuoteItems.length > 0 && (
+        <ClientQuoteModal
+          isOpen={true}
+          onClose={() => setSelectedQuoteItems(null)}
+          results={selectedQuoteItems}
+          lang={lang}
+          currentUserCompany={currentUserCompany}
+        />
+      )}
+
+      {/* High-Resolution Image Lightbox Modal */}
+      {zoomedImage && (
+        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="relative max-w-4xl max-h-[90vh] w-full flex flex-col items-center justify-center">
+            <button
+              type="button"
+              onClick={() => setZoomedImage(null)}
+              className="absolute -top-12 right-0 p-2 text-white bg-slate-800 hover:bg-rose-600 rounded-full cursor-pointer transition-colors border border-slate-700 shadow-xl"
+              title={lang === 'ar' ? 'إغلاق المعاينة' : 'Close Preview'}
+            >
+              <X className="w-6 h-6" />
+            </button>
+
+            <div className="rounded-3xl overflow-hidden border border-slate-700 bg-black/80 shadow-2xl max-h-[80vh] flex items-center justify-center">
+              <img
+                src={zoomedImage}
+                alt="Enlarged cargo or invoice document"
+                className="max-h-[80vh] w-auto max-w-full object-contain"
+              />
+            </div>
+
+            <div className="mt-3 text-center text-xs text-slate-300 font-medium bg-slate-900/80 px-4 py-1.5 rounded-full border border-slate-800">
+              {lang === 'ar' ? 'معاينة مكبرة لصورة الشحنة والمستند' : 'High resolution preview of cargo document'}
             </div>
           </div>
         </div>

@@ -33,6 +33,7 @@ interface CalculatorFormProps {
   t: typeof translations['en'];
   lang: Language;
   initialInput?: CalculationInput | null;
+  history?: CalculationResult[];
 }
 
 const DEFAULT_INPUT: CalculationInput = {
@@ -75,9 +76,28 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
   t,
   lang,
   initialInput,
+  history = [],
 }) => {
   const [formData, setFormData] = useState<CalculationInput>(DEFAULT_INPUT);
   const [isPreFilledNoticeVisible, setIsPreFilledNoticeVisible] = useState<boolean>(false);
+  const [isHistoryProductModalOpen, setIsHistoryProductModalOpen] = useState<boolean>(false);
+  const [historyProductSearch, setHistoryProductSearch] = useState<string>('');
+  const [rawTotalCost, setRawTotalCost] = useState<string | null>(null);
+
+  // Extract unique saved products from history calculations
+  const uniqueHistoryProducts = useMemo(() => {
+    if (!history || history.length === 0) return [];
+    const map = new Map<string, CalculationInput>();
+    history.forEach((item) => {
+      if (item.input && item.input.title && item.input.title.trim()) {
+        const key = `${item.input.title.trim().toLowerCase()}||${(item.input.skuSupplier || '').trim().toLowerCase()}`;
+        if (!map.has(key)) {
+          map.set(key, item.input);
+        }
+      }
+    });
+    return Array.from(map.values());
+  }, [history]);
 
   React.useEffect(() => {
     if (initialInput) {
@@ -170,11 +190,52 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
     return calculateTradeAndFreight(formData, rates);
   }, [formData, rates]);
 
+  const autoFillFromHistory = (
+    field: 'title' | 'skuSupplier',
+    val: string,
+    currentForm: CalculationInput
+  ): CalculationInput => {
+    if (!val || val.trim().length < 1) return { ...currentForm, [field]: val };
+
+    const clean = val.trim().toLowerCase();
+    const matched = uniqueHistoryProducts.find((p) => {
+      if (field === 'title') {
+        return p.title && p.title.trim().toLowerCase() === clean;
+      } else {
+        return p.skuSupplier && p.skuSupplier.trim().toLowerCase() === clean;
+      }
+    });
+
+    if (matched) {
+      return {
+        ...currentForm,
+        [field]: val,
+        title: field === 'skuSupplier' ? (matched.title || currentForm.title) : val,
+        skuSupplier: field === 'title' ? (matched.skuSupplier || currentForm.skuSupplier) : val,
+        invoiceImage: matched.invoiceImage || currentForm.invoiceImage,
+        category: matched.category || currentForm.category,
+        originalPrice: matched.originalPrice || currentForm.originalPrice,
+        originalCurrency: matched.originalCurrency || currentForm.originalCurrency,
+        weight: matched.weight || currentForm.weight,
+        weightUnit: matched.weightUnit || currentForm.weightUnit,
+        dutyPercentage: matched.dutyPercentage ?? currentForm.dutyPercentage,
+      };
+    }
+
+    return { ...currentForm, [field]: val };
+  };
+
   const handleChange = (
     field: keyof CalculationInput,
     value: string | number | boolean | ExtraFee[] | undefined
   ) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
+    setRawTotalCost(null);
+    setFormData((prev) => {
+      if ((field === 'title' || field === 'skuSupplier') && typeof value === 'string') {
+        return autoFillFromHistory(field, value, prev);
+      }
+      return { ...prev, [field]: value };
+    });
   };
 
   const handleResetForm = () => {
@@ -241,29 +302,74 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
         <div className="lg:col-span-7 space-y-6">
           {/* Section 1: Item & Basic Info */}
           <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 p-5 shadow-xs transition-colors duration-200">
-            <div className="flex items-center justify-between gap-2 mb-4 pb-2 border-b border-slate-100 dark:border-slate-800">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4 pb-2 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-2">
                 <Package className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                 <h2 className="font-bold text-slate-800 dark:text-slate-100 text-base">{t.section1Title}</h2>
               </div>
-              <button
-                type="button"
-                onClick={handleResetForm}
-                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-                title={t.clearAllInputs}
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>{t.clearAllInputs}</span>
-              </button>
+
+              <div className="flex items-center gap-2">
+                {uniqueHistoryProducts.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setIsHistoryProductModalOpen(true)}
+                    className="px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 dark:text-blue-400 border border-blue-500/30 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer active:scale-95 min-h-[36px]"
+                    title={t.quickSelectFromHistory || 'Pick Saved Product / SKU from History'}
+                  >
+                    <BookOpen className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                    <span>{t.selectProductFromHistoryBtn || (lang === 'ar' ? 'اختر منتج من السجل' : 'Select Saved Product')}</span>
+                    <span className="px-1.5 py-0.5 rounded-full bg-blue-500/20 text-[10px] font-black">
+                      {uniqueHistoryProducts.length}
+                    </span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleResetForm}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer min-h-[36px]"
+                  title={t.clearAllInputs}
+                >
+                  <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                  <span>{t.clearAllInputs}</span>
+                </button>
+              </div>
             </div>
+
+            {/* Datalists for Autocomplete Native Browser Support */}
+            <datalist id="calc-history-titles">
+              {uniqueHistoryProducts.map((p, idx) => (
+                <option key={`title-opt-${idx}`} value={p.title}>
+                  {p.skuSupplier ? `SKU: ${p.skuSupplier}` : ''}
+                </option>
+              ))}
+            </datalist>
+
+            <datalist id="calc-history-skus">
+              {uniqueHistoryProducts.map((p, idx) => (
+                p.skuSupplier ? (
+                  <option key={`sku-opt-${idx}`} value={p.skuSupplier}>
+                    {p.title}
+                  </option>
+                ) : null
+              ))}
+            </datalist>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="sm:col-span-2">
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
-                  {t.productTitleLabel}
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
+                    {t.productTitleLabel}
+                  </label>
+                  {uniqueHistoryProducts.length > 0 && (
+                    <span className="text-[10px] text-slate-400 font-medium">
+                      {t.orEnterNewProduct || (lang === 'ar' ? 'اختر سابقاً أو اكتب اسم جديد' : 'Select from history or type new')}
+                    </span>
+                  )}
+                </div>
                 <input
                   type="text"
+                  list="calc-history-titles"
                   value={formData.title}
                   onChange={(e) => handleChange('title', e.target.value)}
                   placeholder={t.productTitlePlaceholder}
@@ -277,6 +383,7 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
                 </label>
                 <input
                   type="text"
+                  list="calc-history-skus"
                   value={formData.skuSupplier}
                   onChange={(e) => handleChange('skuSupplier', e.target.value)}
                   placeholder={t.skuPlaceholder}
@@ -426,12 +533,18 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
 
           {/* Section 2: Original Price & Currency */}
           <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 p-5 shadow-xs transition-colors duration-200">
-            <div className="flex items-center gap-2 mb-4 pb-2 border-b border-slate-100 dark:border-slate-800">
-              <DollarSign className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-              <h2 className="font-bold text-slate-800 dark:text-slate-100 text-base">{t.section2Title}</h2>
+            <div className="flex items-center justify-between gap-2 mb-4 pb-2 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <DollarSign className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                <h2 className="font-bold text-slate-800 dark:text-slate-100 text-base">{t.section2Title}</h2>
+              </div>
+              <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/50 px-2.5 py-1 rounded-full border border-indigo-200 dark:border-indigo-800">
+                {formData.originalCurrency}
+              </span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Option A: Unit Price */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
                   {t.unitPriceLabel}
@@ -452,7 +565,40 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
                 </div>
               </div>
 
+              {/* Option B: Total Purchase Cost for All Units */}
               <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
+                  {t.totalPriceLabel || (lang === 'ar' ? 'إجمالي سعر الشراء (جميع القطع)' : 'Total Purchase Cost (All Units)')}
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-2.5 text-slate-400 font-bold text-sm">
+                    {getCurrencySymbol(formData.originalCurrency)}
+                  </span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={rawTotalCost !== null ? rawTotalCost : ((formData.originalPrice * formData.quantity) > 0 ? (formData.originalPrice * formData.quantity) : '')}
+                    onChange={(e) => {
+                      const valStr = e.target.value;
+                      setRawTotalCost(valStr);
+                      const numVal = parseFloat(valStr);
+                      const qty = formData.quantity > 0 ? formData.quantity : 1;
+                      if (!isNaN(numVal) && numVal >= 0) {
+                        setFormData((prev) => ({ ...prev, originalPrice: numVal / qty }));
+                      } else if (valStr === '') {
+                        setFormData((prev) => ({ ...prev, originalPrice: 0 }));
+                      }
+                    }}
+                    onBlur={() => setRawTotalCost(null)}
+                    placeholder={t.totalPricePlaceholder || '0.00'}
+                    className="w-full pl-9 pr-3.5 py-2 text-sm font-extrabold text-emerald-600 dark:text-emerald-400 bg-white dark:bg-slate-800 rounded-xl border border-slate-300 dark:border-slate-700 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-emerald-500/30"
+                  />
+                </div>
+              </div>
+
+              {/* Currency Selector */}
+              <div className="sm:col-span-2">
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
                   {t.originalCurrencyLabel}
                 </label>
@@ -469,12 +615,21 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
                 </select>
               </div>
 
-              <div className="sm:col-span-2 bg-indigo-50/60 dark:bg-indigo-950/40 rounded-xl p-3 border border-indigo-100 dark:border-indigo-900/60 text-xs text-indigo-900 dark:text-indigo-200 flex justify-between items-center font-medium">
-                <span>{t.totalPurchaseCostBanner}</span>
-                <span className="font-extrabold text-sm text-indigo-950 dark:text-indigo-100">
+              {/* Helpful Banner */}
+              <div className="sm:col-span-2 bg-indigo-50/60 dark:bg-indigo-950/40 rounded-xl p-3 border border-indigo-100 dark:border-indigo-900/60 text-xs text-indigo-900 dark:text-indigo-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 font-medium">
+                <div>
+                  <div className="font-bold text-slate-900 dark:text-slate-100">
+                    {t.costInputModeHelp || (lang === 'ar' ? 'أدخل سعر القطعة الواحدة أو الإجمالي لجميع القطع — تعديل أيهما يحسب الآخر تلقائياً.' : 'Enter Unit Price OR Total Batch Cost — changing either calculates the other automatically.')}
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    {formData.quantity} {lang === 'ar' ? 'قطعة' : 'units'} × {getCurrencySymbol(formData.originalCurrency)}{formData.originalPrice.toFixed(2)}
+                  </div>
+                </div>
+
+                <div className="font-black text-base text-indigo-950 dark:text-indigo-100 shrink-0">
                   {getCurrencySymbol(formData.originalCurrency)}
-                  {(formData.originalPrice * formData.quantity).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                </span>
+                  {(formData.originalPrice * formData.quantity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
               </div>
             </div>
           </div>
@@ -1051,6 +1206,139 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
         onSelectHsCode={handleSelectHsCode}
         lang={lang}
       />
+
+      {/* Select Saved Product from History Modal */}
+      {isHistoryProductModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col divide-y divide-slate-100 dark:divide-slate-800 text-slate-900 dark:text-slate-100 overflow-hidden">
+            {/* Header */}
+            <div className="p-5 bg-gradient-to-r from-slate-900 via-slate-900 to-slate-950 text-white flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-blue-500/20 text-blue-400 border border-blue-500/30">
+                  <BookOpen className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-lg text-white">
+                    {t.quickSelectFromHistory || (lang === 'ar' ? 'اختر منتج من سجل الحسابات' : 'Select Product from History')}
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {uniqueHistoryProducts.length} {t.savedProductsCount || (lang === 'ar' ? 'منتجات محفوظة' : 'saved products available')}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsHistoryProductModalOpen(false)}
+                className="p-2 rounded-2xl bg-slate-800 hover:bg-rose-500/20 hover:text-rose-400 text-slate-400 transition-colors cursor-pointer border border-slate-700 min-h-[40px] min-w-[40px] flex items-center justify-center"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Search filter input */}
+            <div className="p-4 bg-slate-50 dark:bg-slate-950/50">
+              <input
+                type="text"
+                value={historyProductSearch}
+                onChange={(e) => setHistoryProductSearch(e.target.value)}
+                placeholder={lang === 'ar' ? 'ابحث باسم المنتج أو رمز SKU...' : 'Search by product title or SKU...'}
+                className="w-full px-4 py-2.5 text-sm rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:ring-2 focus:ring-blue-500/30"
+              />
+            </div>
+
+            {/* List Body */}
+            <div className="p-4 overflow-y-auto space-y-2.5 max-h-[50vh]">
+              {uniqueHistoryProducts
+                .filter((p) => {
+                  if (!historyProductSearch.trim()) return true;
+                  const q = historyProductSearch.toLowerCase();
+                  return (
+                    (p.title && p.title.toLowerCase().includes(q)) ||
+                    (p.skuSupplier && p.skuSupplier.toLowerCase().includes(q))
+                  );
+                })
+                .map((prod, idx) => (
+                  <div
+                    key={`prod-hist-${idx}`}
+                    onClick={() => {
+                      setFormData((prev) => ({
+                        ...prev,
+                        title: prod.title || '',
+                        skuSupplier: prod.skuSupplier || '',
+                        category: prod.category || prev.category,
+                        originalPrice: prod.originalPrice || prev.originalPrice,
+                        originalCurrency: prod.originalCurrency || prev.originalCurrency,
+                        weight: prod.weight || prev.weight,
+                        weightUnit: prod.weightUnit || prev.weightUnit,
+                        dutyPercentage: prod.dutyPercentage ?? prev.dutyPercentage,
+                        invoiceImage: prod.invoiceImage || prev.invoiceImage,
+                      }));
+                      setIsHistoryProductModalOpen(false);
+                      setIsPreFilledNoticeVisible(true);
+                    }}
+                    className="p-3.5 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/80 dark:border-slate-700 hover:border-blue-500 dark:hover:border-blue-500 hover:shadow-md transition-all cursor-pointer flex items-center justify-between gap-3 group"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      {prod.invoiceImage ? (
+                        <div className="w-12 h-12 shrink-0 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-900">
+                          <img
+                            src={prod.invoiceImage}
+                            alt={prod.title}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                          />
+                        </div>
+                      ) : (
+                        <div className="w-12 h-12 shrink-0 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-400">
+                          <Package className="w-6 h-6 text-slate-400" />
+                        </div>
+                      )}
+
+                      <div className="min-w-0">
+                        <div className="font-bold text-slate-900 dark:text-slate-100 text-sm truncate group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                          {prod.title}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                          <span className="font-mono text-[11px] font-semibold bg-slate-100 dark:bg-slate-900 px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-800">
+                            {prod.skuSupplier || 'N/A'}
+                          </span>
+                          <span>•</span>
+                          <span>{prod.originalPrice} {prod.originalCurrency}</span>
+                          <span>•</span>
+                          <span>{prod.weight} {prod.weightUnit}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="shrink-0 px-3 py-2 bg-blue-500/10 hover:bg-blue-500 text-blue-600 hover:text-white dark:text-blue-400 dark:hover:text-white border border-blue-500/30 rounded-xl text-xs font-bold transition-all"
+                    >
+                      {lang === 'ar' ? 'استخدام البيانات' : 'Use Product'}
+                    </button>
+                  </div>
+                ))}
+
+              {uniqueHistoryProducts.length === 0 && (
+                <div className="py-12 text-center text-slate-400 text-xs">
+                  {t.noHistoryProducts || (lang === 'ar' ? 'لا توجد منتجات محفوظة في السجل بعد' : 'No saved products found in history yet')}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 bg-slate-50 dark:bg-slate-950/50 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setIsHistoryProductModalOpen(false)}
+                className="px-4 py-2 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                {t.modalClose || (lang === 'ar' ? 'إغلاق' : 'Close')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -22,13 +22,17 @@ export interface ClientQuoteData {
 }
 
 export async function generateClientQuotePDFBlob(
-  result: CalculationResult,
+  resultInput: CalculationResult | CalculationResult[],
   quote: ClientQuoteData,
   lang: Language = 'en'
 ): Promise<{ blob: Blob; fileName: string; pdf: jsPDF }> {
   const isArabic = lang === 'ar';
-  const input = result.input;
-  const targetCurr = input.targetCurrency;
+  const resultsList: CalculationResult[] = Array.isArray(resultInput) ? resultInput : [resultInput];
+  const firstResult = resultsList[0];
+  if (!firstResult) throw new Error('No calculation result provided');
+
+  const targetCurr = firstResult.input.targetCurrency;
+  const grandTotalRevenue = resultsList.reduce((acc, r) => acc + r.totalRevenueTarget, 0);
 
   const container = document.createElement('div');
   container.style.position = 'fixed';
@@ -45,6 +49,8 @@ export async function generateClientQuotePDFBlob(
   const expiryDate = new Date(new Date(quote.quoteDate).getTime() + quote.validityDays * 24 * 60 * 60 * 1000).toLocaleDateString(
     isArabic ? 'ar-EG' : 'en-US'
   );
+
+  const isMulti = resultsList.length > 1;
 
   container.innerHTML = `
     <div style="border: 2px solid #0f172a; border-radius: 16px; overflow: hidden; background: #ffffff; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);">
@@ -91,7 +97,11 @@ export async function generateClientQuotePDFBlob(
 
         <!-- Product Details -->
         <div style="margin-bottom: 20px;">
-          <div style="font-size: 12px; font-weight: 800; color: #0f172a; text-transform: uppercase; margin-bottom: 8px;">${isArabic ? 'تفاصيل البضاعة والكمية المطلوب عرضها:' : 'OFFERED ITEM & FREIGHT SPECIFICATIONS:'}</div>
+          <div style="font-size: 12px; font-weight: 800; color: #0f172a; text-transform: uppercase; margin-bottom: 8px;">
+            ${isArabic
+              ? (isMulti ? `تفاصيل البنود والمنتجات المشمولة بالعرض (${resultsList.length} بنود):` : 'تفاصيل البضاعة والكمية المطلوب عرضها:')
+              : (isMulti ? `OFFERED ITEMS & FREIGHT SPECIFICATIONS (${resultsList.length} Items):` : 'OFFERED ITEM & FREIGHT SPECIFICATIONS:')}
+          </div>
           <table style="width: 100%; border-collapse: collapse; font-size: 11px; text-align: ${isArabic ? 'right' : 'left'};">
             <thead>
               <tr style="background: #0f172a; color: #ffffff;">
@@ -103,20 +113,22 @@ export async function generateClientQuotePDFBlob(
               </tr>
             </thead>
             <tbody>
-              <tr style="background: #ffffff;">
-                <td style="padding: 12px 10px; border: 1px solid #e2e8f0; font-weight: 800; font-size: 12px;">
-                  ${input.title || (isArabic ? 'شحنة بضائع' : 'General Cargo Line Item')}
-                  <div style="font-size: 10px; font-weight: 500; color: #64748b; margin-top: 2px;">SKU: ${input.skuSupplier || 'GENERAL-SKU'} | Category: ${input.category || 'General Cargo'}</div>
-                </td>
-                <td style="padding: 12px 10px; border: 1px solid #e2e8f0; text-align: center; font-weight: 800; font-size: 13px;">${input.quantity.toLocaleString()}</td>
-                <td style="padding: 12px 10px; border: 1px solid #e2e8f0; text-align: center; font-weight: 700;">${input.freightMethod.toUpperCase().replace('_', ' ')}</td>
-                <td style="padding: 12px 10px; border: 1px solid #e2e8f0; font-weight: 800; text-align: ${isArabic ? 'left' : 'right'}; color: #0284c7;">
-                  ${formatCurrency(result.suggestedSellingPricePerUnitTarget, targetCurr)}
-                </td>
-                <td style="padding: 12px 10px; border: 1px solid #e2e8f0; font-weight: 900; text-align: ${isArabic ? 'left' : 'right'}; color: #0f172a; font-size: 13px;">
-                  ${formatCurrency(result.totalRevenueTarget, targetCurr)}
-                </td>
-              </tr>
+              ${resultsList.map((res) => `
+                <tr style="background: #ffffff; border-bottom: 1px solid #e2e8f0;">
+                  <td style="padding: 10px; border: 1px solid #e2e8f0; font-weight: 800; font-size: 11px;">
+                    ${res.input.title || (isArabic ? 'شحنة بضائع' : 'General Cargo Line Item')}
+                    <div style="font-size: 10px; font-weight: 500; color: #64748b; margin-top: 2px;">SKU: ${res.input.skuSupplier || 'GENERAL-SKU'} | Category: ${res.input.category || 'General Cargo'}</div>
+                  </td>
+                  <td style="padding: 10px; border: 1px solid #e2e8f0; text-align: center; font-weight: 800; font-size: 12px;">${res.input.quantity.toLocaleString()}</td>
+                  <td style="padding: 10px; border: 1px solid #e2e8f0; text-align: center; font-weight: 700;">${res.input.freightMethod.toUpperCase().replace('_', ' ')}</td>
+                  <td style="padding: 10px; border: 1px solid #e2e8f0; font-weight: 800; text-align: ${isArabic ? 'left' : 'right'}; color: #0284c7;">
+                    ${formatCurrency(res.suggestedSellingPricePerUnitTarget, targetCurr)}
+                  </td>
+                  <td style="padding: 10px; border: 1px solid #e2e8f0; font-weight: 900; text-align: ${isArabic ? 'left' : 'right'}; color: #0f172a; font-size: 12px;">
+                    ${formatCurrency(res.totalRevenueTarget, targetCurr)}
+                  </td>
+                </tr>
+              `).join('')}
             </tbody>
           </table>
         </div>
@@ -126,9 +138,9 @@ export async function generateClientQuotePDFBlob(
           <div style="margin-bottom: 20px;">
             <div style="font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; margin-bottom: 6px;">${isArabic ? 'تحليل التكلفة التقديرية المشمولة بالعرض:' : 'INCLUDED COST BREAKDOWN COMPONENTS:'}</div>
             <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; font-size: 10px; background: #f1f5f9; padding: 12px; border-radius: 8px; border: 1px solid #cbd5e1;">
-              <div>• Base Product Cost: <strong>${formatCurrency(result.totalOriginalPriceTarget, targetCurr)}</strong></div>
-              <div>• Freight & Transport: <strong>${formatCurrency(result.freightCostTarget, targetCurr)}</strong></div>
-              <div>• Customs Duties & Fees: <strong>${formatCurrency(result.dutyCostTarget + result.customsClearanceTarget, targetCurr)}</strong></div>
+              <div>• Base Product Cost: <strong>${formatCurrency(resultsList.reduce((acc, r) => acc + r.totalOriginalPriceTarget, 0), targetCurr)}</strong></div>
+              <div>• Freight & Transport: <strong>${formatCurrency(resultsList.reduce((acc, r) => acc + r.freightCostTarget, 0), targetCurr)}</strong></div>
+              <div>• Customs Duties & Fees: <strong>${formatCurrency(resultsList.reduce((acc, r) => acc + r.dutyCostTarget + r.customsClearanceTarget, 0), targetCurr)}</strong></div>
             </div>
           </div>
         ` : ''}
@@ -136,11 +148,13 @@ export async function generateClientQuotePDFBlob(
         <!-- Total Grand Summary Highlight -->
         <div style="background: #0f172a; color: #ffffff; padding: 16px 20px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
           <div>
-            <div style="font-size: 10px; font-weight: 800; color: #38bdf8; text-transform: uppercase;">${isArabic ? 'إجمالي قيمة العقد / العرض الشامل' : 'TOTAL OFFER VALUE (ALL INCLUSIVE)'}</div>
+            <div style="font-size: 10px; font-weight: 800; color: #38bdf8; text-transform: uppercase;">
+              ${isArabic ? (isMulti ? `إجمالي قيمة العرض الشامل (${resultsList.length} بنود)` : 'إجمالي قيمة العقد / العرض الشامل') : (isMulti ? `TOTAL OFFER VALUE (${resultsList.length} ITEMS)` : 'TOTAL OFFER VALUE (ALL INCLUSIVE)')}
+            </div>
             <div style="font-size: 11px; color: #cbd5e1; margin-top: 2px;">Incoterms (${quote.incoterms}) - Delivery included to client destination</div>
           </div>
           <div style="font-size: 22px; font-weight: 900; color: #38bdf8; font-family: monospace;">
-            ${formatCurrency(result.totalRevenueTarget, targetCurr)}
+            ${formatCurrency(grandTotalRevenue, targetCurr)}
           </div>
         </div>
 
@@ -188,7 +202,9 @@ export async function generateClientQuotePDFBlob(
 
     pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
     const cleanClientName = (quote.clientName || 'Client').replace(/[^\w\u0600-\u06FF]/g, '_');
-    const fileName = `Commercial_Quote_${quote.quoteRef}_${cleanClientName}.pdf`;
+    const fileName = isMulti
+      ? `Multi_Commercial_Quote_${quote.quoteRef}_${cleanClientName}.pdf`
+      : `Commercial_Quote_${quote.quoteRef}_${cleanClientName}.pdf`;
     const blob = pdf.output('blob');
 
     return { blob, fileName, pdf };
@@ -198,12 +214,12 @@ export async function generateClientQuotePDFBlob(
 }
 
 export async function exportClientQuotePDF(
-  result: CalculationResult,
+  resultInput: CalculationResult | CalculationResult[],
   quote: ClientQuoteData,
   lang: Language = 'en'
 ): Promise<void> {
   try {
-    const { pdf, fileName } = await generateClientQuotePDFBlob(result, quote, lang);
+    const { pdf, fileName } = await generateClientQuotePDFBlob(resultInput, quote, lang);
     pdf.save(fileName);
   } catch (error) {
     console.error('Error generating Quote PDF:', error);
@@ -211,30 +227,57 @@ export async function exportClientQuotePDF(
 }
 
 export async function shareClientQuotePDFWhatsApp(
-  result: CalculationResult,
+  resultInput: CalculationResult | CalculationResult[],
   quote: ClientQuoteData,
   lang: Language = 'en'
 ): Promise<void> {
   const isArabic = lang === 'ar';
   try {
-    const { blob, fileName, pdf } = await generateClientQuotePDFBlob(result, quote, lang);
+    const { blob, fileName, pdf } = await generateClientQuotePDFBlob(resultInput, quote, lang);
     const file = new File([blob], fileName, { type: 'application/pdf' });
-    const targetCurr = result.input.targetCurrency;
-    const totalPriceFormatted = formatCurrency(result.totalRevenueTarget, targetCurr);
+    const resultsList = Array.isArray(resultInput) ? resultInput : [resultInput];
+    const targetCurr = resultsList[0]?.input.targetCurrency || 'USD';
+    const grandTotalRevenue = resultsList.reduce((acc, r) => acc + r.totalRevenueTarget, 0);
 
-    const summaryText = isArabic
-      ? `📄 *عرض سعر تجاري - ${quote.sellerCompany || 'Global Trade'}*\n` +
-        `• رقم العرض: ${quote.quoteRef}\n` +
-        `• العميل: ${quote.clientName || 'عميل كريم'} (${quote.clientCompany || '-'})\n` +
-        `• الصنف: ${result.input.title || 'شحنة بضائع'} (${result.input.quantity.toLocaleString()} قطعة)\n` +
-        `• إجمالي قيمة العرض: ${totalPriceFormatted}\n` +
-        `• شرط التسليم: ${quote.incoterms} | الصلاحية: ${quote.validityDays} يوم`
-      : `📄 *COMMERCIAL QUOTATION - ${quote.sellerCompany || 'Global Trade'}*\n` +
-        `• Ref: ${quote.quoteRef}\n` +
-        `• Client: ${quote.clientName || 'Valued Client'} (${quote.clientCompany || '-'})\n` +
-        `• Item: ${result.input.title || 'Cargo Shipment'} (${result.input.quantity.toLocaleString()} units)\n` +
-        `• Total Offer: ${totalPriceFormatted}\n` +
-        `• Incoterms: ${quote.incoterms} | Validity: ${quote.validityDays} Days`;
+    const isMulti = resultsList.length > 1;
+
+    let summaryText = '';
+    if (isMulti) {
+      const itemsListText = resultsList
+        ? resultsList.map((r, i) => `  ${i + 1}. ${r.input.title} (${r.input.quantity.toLocaleString()} units): ${formatCurrency(r.totalRevenueTarget, targetCurr)}`).join('\n')
+        : '';
+
+      summaryText = isArabic
+        ? `📄 *عرض سعر تجاري متعدد (${resultsList.length} منتجات) - ${quote.sellerCompany || 'Global Trade'}*\n` +
+          `• رقم العرض: ${quote.quoteRef}\n` +
+          `• العميل: ${quote.clientName || 'عميل كريم'} (${quote.clientCompany || '-'})\n` +
+          `• البنود المشمولة:\n${itemsListText}\n` +
+          `• إجمالي قيمة العرض الكلي: ${formatCurrency(grandTotalRevenue, targetCurr)}\n` +
+          `• شرط التسليم: ${quote.incoterms} | الصلاحية: ${quote.validityDays} يوم`
+        : `📄 *MULTI-ITEM COMMERCIAL QUOTATION (${resultsList.length} Items) - ${quote.sellerCompany || 'Global Trade'}*\n` +
+          `• Ref: ${quote.quoteRef}\n` +
+          `• Client: ${quote.clientName || 'Valued Client'} (${quote.clientCompany || '-'})\n` +
+          `• Items Included:\n${itemsListText}\n` +
+          `• Grand Total Offer: ${formatCurrency(grandTotalRevenue, targetCurr)}\n` +
+          `• Incoterms: ${quote.incoterms} | Validity: ${quote.validityDays} Days`;
+    } else {
+      const result = resultsList[0];
+      const totalPriceFormatted = formatCurrency(result.totalRevenueTarget, targetCurr);
+
+      summaryText = isArabic
+        ? `📄 *عرض سعر تجاري - ${quote.sellerCompany || 'Global Trade'}*\n` +
+          `• رقم العرض: ${quote.quoteRef}\n` +
+          `• العميل: ${quote.clientName || 'عميل كريم'} (${quote.clientCompany || '-'})\n` +
+          `• الصنف: ${result.input.title || 'شحنة بضائع'} (${result.input.quantity.toLocaleString()} قطعة)\n` +
+          `• إجمالي قيمة العرض: ${totalPriceFormatted}\n` +
+          `• شرط التسليم: ${quote.incoterms} | الصلاحية: ${quote.validityDays} يوم`
+        : `📄 *COMMERCIAL QUOTATION - ${quote.sellerCompany || 'Global Trade'}*\n` +
+          `• Ref: ${quote.quoteRef}\n` +
+          `• Client: ${quote.clientName || 'Valued Client'} (${quote.clientCompany || '-'})\n` +
+          `• Item: ${result.input.title || 'Cargo Shipment'} (${result.input.quantity.toLocaleString()} units)\n` +
+          `• Total Offer: ${totalPriceFormatted}\n` +
+          `• Incoterms: ${quote.incoterms} | Validity: ${quote.validityDays} Days`;
+    }
 
     // Try Web Share API with PDF file
     if (navigator.canShare && navigator.canShare({ files: [file] })) {

@@ -15,6 +15,18 @@ import {
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { CalculationResult, UserProfile } from "../types";
 import firebaseConfig from "../../firebase-applet-config.json";
+import {
+  saveUserProfileToSupabase,
+  getUserProfileFromSupabase,
+  getAllUsersFromSupabase,
+  deleteUserFromSupabase,
+  saveCalculationToSupabase,
+  deleteCalculationFromSupabase,
+  clearAllCalculationsFromSupabase,
+  getCalculationsFromSupabase,
+  subscribeToCalculationsSupabase,
+  subscribeToUsersSupabase,
+} from "./supabase";
 
 // Initialize Firebase App
 const app = initializeApp(firebaseConfig);
@@ -98,9 +110,17 @@ export async function seedDefaultDataToFirestore(): Promise<void> {
 }
 
 /**
- * Save user profile schema to Firestore database under users collection
+ * Save user profile schema to Firestore database and Supabase
  */
 export async function saveUserProfileToFirestore(profile: UserProfile): Promise<void> {
+  // Save to Supabase
+  try {
+    await saveUserProfileToSupabase(profile);
+  } catch (err) {
+    console.warn("Supabase user save notice:", err);
+  }
+
+  // Save to Firestore (for Auth & Status checks)
   try {
     await ensureAuth();
     const docKey = (profile.username || profile.userId).toLowerCase().trim();
@@ -122,60 +142,96 @@ export async function saveUserProfileToFirestore(profile: UserProfile): Promise<
 }
 
 /**
- * Fetch user profile schema from Firestore database by Username
+ * Fetch user profile schema from Firestore (for auth/status) or Supabase
  */
 export async function getUserProfileFromFirestore(username: string): Promise<UserProfile | null> {
+  let profile: UserProfile | null = null;
+
+  // Try Firestore first (Auth & Status verification)
   try {
     await ensureAuth();
     const docKey = username.toLowerCase().trim();
     const docRef = doc(db, USERS_COLLECTION, docKey);
     const snap = await getDoc(docRef);
     if (snap.exists()) {
-      return snap.data() as UserProfile;
+      profile = snap.data() as UserProfile;
+    } else {
+      const qSnap = await getDocs(query(collection(db, USERS_COLLECTION)));
+      qSnap.forEach((docSnap) => {
+        const data = docSnap.data() as UserProfile;
+        if (
+          docSnap.id === docKey ||
+          data.username?.toLowerCase() === docKey ||
+          data.userId?.toLowerCase() === docKey
+        ) {
+          profile = data;
+        }
+      });
     }
-    const qSnap = await getDocs(query(collection(db, USERS_COLLECTION)));
-    let found: UserProfile | null = null;
-    qSnap.forEach((docSnap) => {
-      const data = docSnap.data() as UserProfile;
-      if (
-        docSnap.id === docKey ||
-        data.username?.toLowerCase() === docKey ||
-        data.userId?.toLowerCase() === docKey
-      ) {
-        found = data;
-      }
-    });
-    if (found) return found;
   } catch (error: any) {
     console.info("Firestore user fetch notice:", error?.message || error);
   }
 
-  return null;
+  // Fallback / merge from Supabase if needed
+  if (!profile) {
+    try {
+      profile = await getUserProfileFromSupabase(username);
+    } catch (err) {
+      console.warn("Supabase user fetch fallback notice:", err);
+    }
+  }
+
+  return profile;
 }
 
 /**
- * Fetch all user profile schemas from Firestore database
+ * Fetch all user profile schemas from Firestore & Supabase
  */
 export async function getAllUsersFromFirestore(): Promise<UserProfile[]> {
+  const usersMap = new Map<string, UserProfile>();
+
+  // Fetch from Supabase
+  try {
+    const supabaseUsers = await getAllUsersFromSupabase();
+    supabaseUsers.forEach((u) => {
+      if (u.username || u.userId) {
+        usersMap.set((u.username || u.userId).toLowerCase(), u);
+      }
+    });
+  } catch (err) {
+    console.warn("Supabase fetch all users notice:", err);
+  }
+
+  // Fetch from Firestore
   try {
     await ensureAuth();
     const qSnap = await getDocs(query(collection(db, USERS_COLLECTION)));
-    const users: UserProfile[] = [];
     qSnap.forEach((docSnap) => {
-      users.push(docSnap.data() as UserProfile);
+      const u = docSnap.data() as UserProfile;
+      const key = (u.username || u.userId || docSnap.id).toLowerCase();
+      if (!usersMap.has(key)) {
+        usersMap.set(key, u);
+      }
     });
-    return users;
   } catch (error: any) {
     console.info("Firestore fetch users notice:", error?.message || error);
   }
 
-  return [];
+  return Array.from(usersMap.values());
 }
 
 /**
- * Delete a user profile schema from Firestore database
+ * Delete a user profile schema from Firestore & Supabase
  */
 export async function deleteUserFromFirestore(key: string): Promise<void> {
+  // Delete from Supabase
+  try {
+    await deleteUserFromSupabase(key);
+  } catch (err) {
+    console.warn("Supabase delete user notice:", err);
+  }
+
+  // Delete from Firestore
   try {
     await ensureAuth();
     const docKey = key.toLowerCase().trim();
@@ -188,7 +244,7 @@ export async function deleteUserFromFirestore(key: string): Promise<void> {
 }
 
 /**
- * Subscribe to real-time updates from Firestore calculations collection
+ * Subscribe to real-time updates from Supabase and Firestore calculations collection
  * Supports per-user data privacy filtering via filterUserId
  */
 export function subscribeToCalculations(
@@ -196,8 +252,20 @@ export function subscribeToCalculations(
   filterUserId?: string | null,
   onError?: (error: unknown) => void
 ) {
-  let unsub: (() => void) | null = null;
+  let unsubFirestore: (() => void) | null = null;
+  let unsubSupabase: (() => void) | null = null;
   let isCancelled = false;
+
+  // Subscribe to Supabase real-time
+  try {
+    unsubSupabase = subscribeToCalculationsSupabase((supabaseData) => {
+      if (supabaseData && supabaseData.length > 0) {
+        onUpdate(supabaseData);
+      }
+    }, filterUserId);
+  } catch (err) {
+    console.warn("Supabase calculations subscription notice:", err);
+  }
 
   const initSubscription = async () => {
     await ensureAuth();
@@ -209,7 +277,7 @@ export function subscribeToCalculations(
           ? query(collection(db, CALCULATIONS_COLLECTION), orderBy("createdAt", "desc"))
           : query(collection(db, CALCULATIONS_COLLECTION));
 
-        unsub = onSnapshot(
+        unsubFirestore = onSnapshot(
           q,
           (snapshot) => {
             const results: CalculationResult[] = [];
@@ -228,7 +296,9 @@ export function subscribeToCalculations(
               (a, b) =>
                 new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
             );
-            onUpdate(results);
+            if (results.length > 0) {
+              onUpdate(results);
+            }
           },
           (error) => {
             console.info(
@@ -239,8 +309,6 @@ export function subscribeToCalculations(
               // Retry with basic query if orderBy fails due to missing index or permission constraints
               createListener(false);
             } else {
-              // Fallback to empty array on permission/connection limit
-              onUpdate([]);
               if (onError) onError(error);
             }
           }
@@ -261,14 +329,23 @@ export function subscribeToCalculations(
 
   return () => {
     isCancelled = true;
-    if (unsub) unsub();
+    if (unsubFirestore) unsubFirestore();
+    if (unsubSupabase) unsubSupabase();
   };
 }
 
 /**
- * Save or update a calculation record in Firestore
+ * Save or update a calculation record in Supabase and Firestore
  */
 export async function saveCalculationToFirestore(calc: CalculationResult): Promise<void> {
+  // Save to Supabase
+  try {
+    await saveCalculationToSupabase(calc);
+  } catch (err) {
+    console.warn("Supabase calculation save notice:", err);
+  }
+
+  // Save to Firestore
   try {
     await ensureAuth();
     const docRef = doc(db, CALCULATIONS_COLLECTION, calc.id);
@@ -280,9 +357,17 @@ export async function saveCalculationToFirestore(calc: CalculationResult): Promi
 }
 
 /**
- * Delete a single calculation record from Firestore
+ * Delete a single calculation record from Supabase and Firestore
  */
 export async function deleteCalculationFromFirestore(id: string): Promise<void> {
+  // Delete from Supabase
+  try {
+    await deleteCalculationFromSupabase(id);
+  } catch (err) {
+    console.warn("Supabase calculation delete notice:", err);
+  }
+
+  // Delete from Firestore
   try {
     await ensureAuth();
     const docRef = doc(db, CALCULATIONS_COLLECTION, id);
@@ -294,13 +379,20 @@ export async function deleteCalculationFromFirestore(id: string): Promise<void> 
 }
 
 /**
- * Subscribe to real-time updates from Firestore users collection
+ * Subscribe to real-time updates from Supabase and Firestore users collection
  */
 export function subscribeToUsers(
   onUpdate: (data: UserProfile[]) => void,
   onError?: (error: unknown) => void
 ) {
-  let unsub: (() => void) | null = null;
+  // Subscribe to Supabase real-time
+  const unsubSupabase = subscribeToUsersSupabase((supabaseUsers) => {
+    if (supabaseUsers && supabaseUsers.length > 0) {
+      onUpdate(supabaseUsers);
+    }
+  });
+
+  let unsubFirestore: (() => void) | null = null;
   let isCancelled = false;
 
   const initSubscription = async () => {
@@ -309,23 +401,23 @@ export function subscribeToUsers(
 
     try {
       const q = query(collection(db, USERS_COLLECTION));
-      unsub = onSnapshot(
+      unsubFirestore = onSnapshot(
         q,
         (snapshot) => {
           const results: UserProfile[] = [];
           snapshot.forEach((docSnap) => {
             results.push(docSnap.data() as UserProfile);
           });
-          onUpdate(results);
+          if (results.length > 0) {
+            onUpdate(results);
+          }
         },
         (error) => {
           console.info("Firestore users real-time subscription status:", error?.message || error);
-          onUpdate([]);
           if (onError) onError(error);
         }
       );
     } catch (err) {
-      onUpdate([]);
       if (onError) onError(err);
     }
   };
@@ -334,7 +426,8 @@ export function subscribeToUsers(
 
   return () => {
     isCancelled = true;
-    if (unsub) unsub();
+    if (unsubSupabase) unsubSupabase();
+    if (unsubFirestore) unsubFirestore();
   };
 }
 
@@ -375,9 +468,17 @@ export async function syncAllDataWithFirestore(): Promise<{
 }
 
 /**
- * Clear calculation records from Firestore for a specific user (or all if omitted)
+ * Clear calculation records from Supabase and Firestore for a specific user (or all if omitted)
  */
 export async function clearAllCalculationsFromFirestore(filterUserId?: string | null): Promise<void> {
+  // Clear from Supabase
+  try {
+    await clearAllCalculationsFromSupabase(filterUserId);
+  } catch (err) {
+    console.warn("Supabase clear calculations notice:", err);
+  }
+
+  // Clear from Firestore
   try {
     await ensureAuth();
     const querySnapshot = await getDocs(collection(db, CALCULATIONS_COLLECTION));

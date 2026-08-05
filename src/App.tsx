@@ -495,6 +495,7 @@ export default function App() {
               t={t}
               lang={lang}
               initialInput={calculatorInitialInput}
+              history={history}
             />
           )}
 
@@ -518,6 +519,7 @@ export default function App() {
               onLoadIntoCalculator={handleLoadIntoCalculator}
               t={t}
               lang={lang}
+              currentUserCompany={userProfile?.companyName || userProfile?.fullName || ''}
             />
           )}
         </main>

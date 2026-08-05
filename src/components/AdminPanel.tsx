@@ -8,6 +8,11 @@ import {
   subscribeToCalculations,
   syncAllDataWithFirestore,
 } from '../lib/firebase';
+import {
+  checkSupabaseHealth,
+  SupabaseHealthReport,
+  SUPABASE_REQUIRED_DDL_SQL,
+} from '../lib/supabase';
 import { Language, translations } from '../data/translations';
 import {
   ShieldCheck,
@@ -44,6 +49,12 @@ import {
   Zap,
   Clock,
   Save,
+  Copy,
+  Check,
+  Activity,
+  Server,
+  Table,
+  FileCode,
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -130,6 +141,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isRealtimeConnected, setIsRealtimeConnected] = useState<boolean>(true);
   const [syncedCalculationsCount, setSyncedCalculationsCount] = useState<number>(0);
 
+  // Supabase Health & Auto-Check state
+  const [supabaseHealth, setSupabaseHealth] = useState<SupabaseHealthReport | null>(null);
+  const [isCheckingSupabase, setIsCheckingSupabase] = useState<boolean>(false);
+  const [showSqlModal, setShowSqlModal] = useState<boolean>(false);
+  const [copiedSql, setCopiedSql] = useState<boolean>(false);
+
+  const runSupabaseAutoCheck = async () => {
+    setIsCheckingSupabase(true);
+    try {
+      const report = await checkSupabaseHealth();
+      setSupabaseHealth(report);
+      return report;
+    } catch (err) {
+      console.warn("Auto-check Supabase exception:", err);
+    } finally {
+      setIsCheckingSupabase(false);
+    }
+    return null;
+  };
+
   // Load all users from Firestore or Local Storage fallback
   const fetchUsers = async () => {
     setIsLoading(true);
@@ -154,6 +185,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Real-Time subscription on component mount
   useEffect(() => {
     fetchUsers();
+    runSupabaseAutoCheck();
 
     // Subscribe to real-time users collection updates
     const unsubscribeUsers = subscribeToUsers(
@@ -190,11 +222,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     };
   }, []);
 
-  // Manual Bidirectional Real-Time Push & Pull Sync
+  // Manual Bidirectional Real-Time Push & Pull Sync across Firestore & Supabase
   const handleManualSync = async () => {
     setIsSyncing(true);
     try {
-      const result = await syncAllDataWithFirestore();
+      const [result, sbReport] = await Promise.all([
+        syncAllDataWithFirestore(),
+        runSupabaseAutoCheck(),
+      ]);
       let userList = [...result.users];
       if (
         currentUser &&
@@ -206,18 +241,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setSyncedCalculationsCount(result.calculations.length);
       setLastSyncedAt(result.syncedAt);
       setIsRealtimeConnected(true);
+
+      const sbUsersCount = sbReport?.usersCount ?? 0;
+      const sbCalcsCount = sbReport?.calculationsCount ?? 0;
+
       showNotification(
         'success',
         lang === 'ar'
-          ? `تمت مزامنة البيانات وتحديثها فورياً بنجاح مع Firestore (${result.users.length} حساب، ${result.calculations.length} عملية حسابية)`
-          : `Real-time synchronization complete! (${result.users.length} users & ${result.calculations.length} calculations pushed/fetched)`
+          ? `تمت مزامنة البيانات وتحديثها فورياً مع Firestore و Supabase (${result.users.length} حساب، ${result.calculations.length} عملية حسابية | Supabase: ${sbUsersCount} حسابات، ${sbCalcsCount} عمليات)`
+          : `Dual sync complete! (${result.users.length} users & ${result.calculations.length} calculations synced. Supabase verified: ${sbUsersCount} users, ${sbCalcsCount} calcs)`
       );
     } catch (err: any) {
       showNotification(
         'error',
         lang === 'ar'
-          ? 'تعذر إكمال المزامنة مع Firestore. يرجى التحقق من الاتصال.'
-          : 'Sync error: Unable to push/pull latest Firestore data.'
+          ? 'تعذر إكمال المزامنة الكلية. يرجى التحقق من الاتصال.'
+          : 'Sync error: Unable to push/pull latest database records.'
       );
     } finally {
       setIsSyncing(false);
@@ -397,12 +436,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-black text-base text-white tracking-tight">CargoProfit</span>
-                <span className="px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-black uppercase tracking-wider">
-                  Admin Portal
-                </span>
               </div>
-              <p className="text-[11px] text-slate-400 font-medium">
-                {lang === 'ar' ? 'نظام إدارة المستخدمين وقواعد البيانات' : 'System Administration & User Management'}
+              <p className="px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-black uppercase tracking-wider">
+                  Admin Portal
               </p>
             </div>
           </div>
@@ -531,6 +567,166 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
         </div>
 
+        {/* Dual Database Sync & Auto-Check Status Panel */}
+        <div className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-5 shadow-xl space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-700/80">
+            <div className="flex items-center gap-2.5">
+              <Server className="w-5 h-5 text-amber-400" />
+              <div>
+                <h3 className="font-bold text-sm text-white flex items-center gap-2">
+                  <span>{lang === 'ar' ? 'حالة المزامنة وفحص قواعد البيانات (Firestore & Supabase)' : 'Database Sync & Diagnostics (Firestore & Supabase)'}</span>
+                </h3>
+                <p className="text-xs text-slate-400">
+                  {lang === 'ar'
+                    ? 'يتم حفظ المصادقة وحالة الحسابات في Firestore، ويتم حفظ كافة البيانات والعمليات في Supabase'
+                    : 'Firestore manages Auth & Account Status, Supabase stores complete application data'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={runSupabaseAutoCheck}
+                disabled={isCheckingSupabase}
+                className="px-3.5 py-1.5 rounded-xl bg-indigo-600/30 hover:bg-indigo-600/50 border border-indigo-500/40 text-indigo-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+                title="Run diagnostic auto-check on Supabase connection and tables"
+              >
+                <Activity className={`w-3.5 h-3.5 ${isCheckingSupabase ? 'animate-spin text-indigo-400' : 'text-indigo-400'}`} />
+                <span>
+                  {isCheckingSupabase
+                    ? lang === 'ar' ? 'جاري الفحص...' : 'Checking...'
+                    : lang === 'ar' ? 'فحص تلقائي لـ Supabase' : 'Auto-Check Supabase'}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setShowSqlModal(true)}
+                className="px-3 py-1.5 rounded-xl bg-slate-700/80 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+                title="View SQL DDL schema script for Supabase tables"
+              >
+                <FileCode className="w-3.5 h-3.5 text-amber-400" />
+                <span>{lang === 'ar' ? 'سكربت إنشاء الجداول (SQL)' : 'SQL DDL Setup'}</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Database 1: Firebase Firestore (Auth & Status) */}
+            <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-700/70 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Database className="w-4 h-4 text-amber-400" />
+                  <span className="font-bold text-xs text-slate-200">Firebase Firestore</span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    Auth & Account Status
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[11px] font-bold">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span>{isRealtimeConnected ? 'Online' : 'Connecting'}</span>
+                </div>
+              </div>
+              <div className="text-xs text-slate-400 space-y-1 font-mono">
+                <div className="flex justify-between">
+                  <span>{lang === 'ar' ? 'المزامنة الحية:' : 'Real-Time Sync:'}</span>
+                  <span className="text-emerald-400 font-bold">Active (Firestore Listener)</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>{lang === 'ar' ? 'مجموعة الحسابات :' : 'users collection:'}</span>
+                  <span className="text-slate-200 font-bold">{users.length} {lang === 'ar' ? 'حسابات' : 'records'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Database 2: Supabase PostgreSQL (Full Application Data) */}
+            <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-700/70 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Table className="w-4 h-4 text-emerald-400" />
+                  <span className="font-bold text-xs text-slate-200">Supabase PostgreSQL</span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    Full Data Storage
+                  </span>
+                </div>
+                {supabaseHealth ? (
+                  supabaseHealth.usersTableOk && supabaseHealth.calculationsTableOk ? (
+                    <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[11px] font-bold">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>{lang === 'ar' ? 'سليم ومتصل' : 'Healthy & Ready'}</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[11px] font-bold">
+                      <AlertCircle className="w-3.5 h-3.5" />
+                      <span>{lang === 'ar' ? 'يحتاج تهيئة جداول' : 'Tables Action Needed'}</span>
+                    </div>
+                  )
+                ) : (
+                  <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[11px] font-bold">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Checking...</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="text-xs text-slate-400 space-y-1 font-mono">
+                <div className="flex justify-between items-center">
+                  <span className="flex items-center gap-1">
+                    <Table className="w-3 h-3 text-slate-500" />
+                    <span>users table:</span>
+                  </span>
+                  {supabaseHealth?.usersTableOk ? (
+                    <span className="text-emerald-400 font-bold">
+                      ✓ OK ({supabaseHealth.usersCount} {lang === 'ar' ? 'سجل' : 'rows'})
+                    </span>
+                  ) : (
+                    <span className="text-amber-400 font-bold flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      {supabaseHealth?.usersError || 'Missing Table'}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <span className="flex items-center gap-1">
+                    <Table className="w-3 h-3 text-slate-500" />
+                    <span>calculations table:</span>
+                  </span>
+                  {supabaseHealth?.calculationsTableOk ? (
+                    <span className="text-emerald-400 font-bold">
+                      ✓ OK ({supabaseHealth.calculationsCount} {lang === 'ar' ? 'سجل' : 'rows'})
+                    </span>
+                  ) : (
+                    <span className="text-amber-400 font-bold flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      {supabaseHealth?.calculationsError || 'Missing Table'}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Warning Banner if Supabase tables missing */}
+          {supabaseHealth && (!supabaseHealth.usersTableOk || !supabaseHealth.calculationsTableOk) && (
+            <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-500/40 text-xs text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>
+                  {lang === 'ar'
+                    ? 'تنبيه: يبدو أن بعض الجداول لم تُنشأ بعد في حساب Supabase الخاص بك. يمكنك نسخ وتنسيق سكربت SQL وتشغيله في Supabase SQL Editor بخطوة واحدة.'
+                    : 'Notice: Some tables have not been created in your Supabase project yet. Click to view & copy the SQL setup script to execute in Supabase SQL Editor.'}
+                </span>
+              </div>
+              <button
+                onClick={() => setShowSqlModal(true)}
+                className="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black shrink-0 transition-colors text-[11px] cursor-pointer"
+              >
+                {lang === 'ar' ? 'فتح سكربت SQL' : 'View SQL Script'}
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* Real-Time Live Sync Status Strip */}
         <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-300 shadow-inner">
           <div className="flex items-center gap-3">
@@ -542,7 +738,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <span>
                 {isRealtimeConnected
                   ? lang === 'ar'
-                    ? 'المزامنة الفورية نشطة (Firestore Real-Time Sync Active)'
+                    ? 'المزامنة الفورية نشطة'
                     : 'Firestore Real-Time Listener Active'
                   : lang === 'ar'
                   ? 'جاري الاتصال بـ Firestore...'
@@ -628,7 +824,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           <div>
             <div className="text-2xl font-black text-slate-900 dark:text-white">{adminUsers}</div>
             <div className="text-xs text-slate-500 dark:text-slate-400 font-semibold">
-              {lang === 'ar' ? 'مدراء النظام (Admins)' : 'System Admins'}
+              {lang === 'ar' ? 'مدراء النظام' : 'System Admins'}
             </div>
           </div>
         </div>
@@ -1183,6 +1379,87 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 >
                   {isDeletingUser ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                   <span>{lang === 'ar' ? 'تأكيد الحذف النهائى' : 'Confirm Delete'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Supabase SQL DDL Schema Setup Modal */}
+      {showSqlModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 w-full max-w-2xl rounded-3xl border border-slate-700 shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+            {/* Modal Header */}
+            <div className="p-5 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 border-b border-slate-700 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                  <FileCode className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-100">
+                    {lang === 'ar' ? 'سكربت إنشاء جداول Supabase (SQL DDL Setup)' : 'Supabase SQL DDL Schema Setup Script'}
+                  </h3>
+                  <p className="text-[11px] text-slate-400 font-medium">
+                    {lang === 'ar' ? 'قم بنسخ هذا السكربت وتشغيله في Supabase SQL Editor' : 'Copy and run this script in Supabase SQL Editor to initialize tables'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSqlModal(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-4">
+              <div className="p-3.5 rounded-xl bg-indigo-950/40 border border-indigo-500/30 text-indigo-200 text-xs font-semibold flex items-start gap-2.5">
+                <CheckCircle2 className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+                <span>
+                  {lang === 'ar'
+                    ? 'هذا السكربت ينشئ جدول `users` لبيانات المستخدمين وجدول `calculations` للعمليات الحسابية وعروض الأسعار مع تفعيل سياسات الوصول RLS.'
+                    : 'This script creates the `users` table for account data, the `calculations` table for quotes/freight logs, and configures permissive RLS policies.'}
+                </span>
+              </div>
+
+              <div className="relative">
+                <pre className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-emerald-400 font-mono text-xs overflow-x-auto max-h-72 leading-relaxed">
+                  {SUPABASE_REQUIRED_DDL_SQL}
+                </pre>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(SUPABASE_REQUIRED_DDL_SQL);
+                    setCopiedSql(true);
+                    setTimeout(() => setCopiedSql(false), 2500);
+                  }}
+                  className="absolute top-3 right-3 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black transition-all flex items-center gap-1.5 shadow-md cursor-pointer"
+                >
+                  {copiedSql ? <Check className="w-3.5 h-3.5 text-slate-950" /> : <Copy className="w-3.5 h-3.5 text-slate-950" />}
+                  <span>{copiedSql ? (lang === 'ar' ? 'تم النسخ!' : 'Copied!') : (lang === 'ar' ? 'نسخ السكربت' : 'Copy SQL')}</span>
+                </button>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="flex items-center justify-between pt-2">
+                <a
+                  href="https://supabase.com/dashboard"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs text-amber-400 hover:underline font-bold flex items-center gap-1"
+                >
+                  <Globe className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? 'الانتقال إلى لوحة تحكم Supabase SQL Editor' : 'Open Supabase Dashboard'}</span>
+                </a>
+
+                <button
+                  type="button"
+                  onClick={() => setShowSqlModal(false)}
+                  className="px-5 py-2 rounded-xl bg-slate-800 text-slate-200 text-xs font-bold hover:bg-slate-700 transition-colors cursor-pointer"
+                >
+                  {lang === 'ar' ? 'إغلاق' : 'Close'}
                 </button>
               </div>
             </div>

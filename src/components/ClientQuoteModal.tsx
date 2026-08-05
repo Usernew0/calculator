@@ -14,7 +14,8 @@ const WhatsappIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
 interface ClientQuoteModalProps {
   isOpen: boolean;
   onClose: () => void;
-  result: CalculationResult;
+  result?: CalculationResult | null;
+  results?: CalculationResult[];
   lang: Language;
   currentUserCompany?: string;
 }
@@ -23,9 +24,16 @@ export const ClientQuoteModal: React.FC<ClientQuoteModalProps> = ({
   isOpen,
   onClose,
   result,
+  results,
   lang,
   currentUserCompany = '',
 }) => {
+  const items: CalculationResult[] = React.useMemo(() => {
+    if (results && results.length > 0) return results;
+    if (result) return [result];
+    return [];
+  }, [result, results]);
+
   const [quoteData, setQuoteData] = useState<ClientQuoteData>(() => {
     const randomRef = `QT-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
     const today = new Date().toISOString().split('T')[0];
@@ -51,11 +59,11 @@ export const ClientQuoteModal: React.FC<ClientQuoteModalProps> = ({
   const [isExporting, setIsExporting] = useState(false);
   const [isSharingWhatsApp, setIsSharingWhatsApp] = useState(false);
 
-  if (!isOpen) return null;
+  if (!isOpen || items.length === 0) return null;
 
-  const targetCurr = result.input.targetCurrency;
-  const unitPrice = result.suggestedSellingPricePerUnitTarget;
-  const totalPrice = result.totalRevenueTarget;
+  const targetCurr = items[0]?.input.targetCurrency || 'USD';
+  const totalPrice = items.reduce((acc, r) => acc + r.totalRevenueTarget, 0);
+  const isMulti = items.length > 1;
 
   const handleChange = <K extends keyof ClientQuoteData>(key: K, value: ClientQuoteData[K]) => {
     setQuoteData((prev) => ({ ...prev, [key]: value }));
@@ -64,7 +72,7 @@ export const ClientQuoteModal: React.FC<ClientQuoteModalProps> = ({
   const handleExportPdf = async () => {
     setIsExporting(true);
     try {
-      await exportClientQuotePDF(result, quoteData, lang);
+      await exportClientQuotePDF(items, quoteData, lang);
     } catch (e) {
       console.error(e);
     } finally {
@@ -75,7 +83,7 @@ export const ClientQuoteModal: React.FC<ClientQuoteModalProps> = ({
   const handleShareWhatsApp = async () => {
     setIsSharingWhatsApp(true);
     try {
-      await shareClientQuotePDFWhatsApp(result, quoteData, lang);
+      await shareClientQuotePDFWhatsApp(items, quoteData, lang);
     } catch (e) {
       console.error(e);
     } finally {
@@ -85,15 +93,44 @@ export const ClientQuoteModal: React.FC<ClientQuoteModalProps> = ({
 
   const handleCopySummary = () => {
     const isAr = lang === 'ar';
-    const text = isAr
-      ? `📄 *عرض سعر تجاري رسمي*
+    let text = '';
+    if (isMulti) {
+      const itemsSummary = items.map((r, i) => `${i + 1}. ${r.input.title} (${r.input.quantity.toLocaleString()} pcs): ${formatCurrency(r.totalRevenueTarget, targetCurr)}`).join('\n');
+      text = isAr
+        ? `📄 *عرض سعر تجاري متعدد (${items.length} منتجات)*
+رقم العرض: ${quoteData.quoteRef}
+المستفيد: ${quoteData.clientName || 'العميل'} (${quoteData.clientCompany || 'شركة العميل'})
+المورد: ${quoteData.sellerCompany}
+
+📦 *تفاصيل الشحنات والمنتجات:*
+${itemsSummary}
+
+💰 *إجمالي قيمة العرض الكلي:* ${formatCurrency(totalPrice, targetCurr)}
+⏱️ *الصلاحية:* ${quoteData.validityDays} يوم من تاريخ ${quoteData.quoteDate}
+💳 *شروط الدفع:* ${quoteData.paymentTerms}`
+        : `📄 *MULTI-ITEM COMMERCIAL FREIGHT QUOTATION (${items.length} Items)*
+Quote Ref: ${quoteData.quoteRef}
+Client: ${quoteData.clientName || 'Valued Client'} (${quoteData.clientCompany || 'Client Co'})
+Issuer: ${quoteData.sellerCompany}
+
+📦 *CARGO ITEMS:*
+${itemsSummary}
+
+💰 *GRAND TOTAL OFFER:* ${formatCurrency(totalPrice, targetCurr)}
+⏱️ *Validity:* ${quoteData.validityDays} Days from ${quoteData.quoteDate}
+💳 *Payment Terms:* ${quoteData.paymentTerms}`;
+    } else {
+      const single = items[0];
+      const unitPrice = single.suggestedSellingPricePerUnitTarget;
+      text = isAr
+        ? `📄 *عرض سعر تجاري رسمي*
 رقم العرض: ${quoteData.quoteRef}
 المستفيد: ${quoteData.clientName || 'العميل'} (${quoteData.clientCompany || 'شركة العميل'})
 المورد: ${quoteData.sellerCompany}
 
 📦 *تفاصيل الشحنة:*
-المنتج: ${result.input.title || 'شحنة تجارية'}
-الكمية: ${result.input.quantity.toLocaleString()} قطعة
+المنتج: ${single.input.title || 'شحنة تجارية'}
+الكمية: ${single.input.quantity.toLocaleString()} قطعة
 شروط التسليم (Incoterms): ${quoteData.incoterms}
 
 💰 *القيمة المالية:*
@@ -104,14 +141,14 @@ export const ClientQuoteModal: React.FC<ClientQuoteModalProps> = ({
 💳 *شروط الدفع:* ${quoteData.paymentTerms}
 
 نرحب بتأكيد الطلب للاستبدال والبدء بالتجهيز.`
-      : `📄 *COMMERCIAL FREIGHT QUOTATION*
+        : `📄 *COMMERCIAL FREIGHT QUOTATION*
 Quote Ref: ${quoteData.quoteRef}
 Client: ${quoteData.clientName || 'Valued Client'} (${quoteData.clientCompany || 'Client Co'})
 Issuer: ${quoteData.sellerCompany}
 
 📦 *CARGO DETAILS:*
-Item: ${result.input.title || 'Cargo Shipment'}
-Quantity: ${result.input.quantity.toLocaleString()} units
+Item: ${single.input.title || 'Cargo Shipment'}
+Quantity: ${single.input.quantity.toLocaleString()} units
 Incoterms: ${quoteData.incoterms}
 
 💰 *OFFER PRICING:*
@@ -120,6 +157,7 @@ Total Quotation Price: ${formatCurrency(totalPrice, targetCurr)}
 
 ⏱️ *Validity:* ${quoteData.validityDays} Days from ${quoteData.quoteDate}
 💳 *Payment Terms:* ${quoteData.paymentTerms}`;
+    }
 
     navigator.clipboard.writeText(text);
     setIsCopySuccess(true);
@@ -401,14 +439,51 @@ Total Quotation Price: ${formatCurrency(totalPrice, targetCurr)}
               </div>
             </div>
 
-            {/* Price Preview */}
+            {/* Items Table Preview */}
+            <div className="overflow-x-auto border border-slate-200 rounded-lg">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-100 text-slate-700 font-bold uppercase text-[10px]">
+                  <tr>
+                    <th className="p-2">{lang === 'ar' ? 'البند / المنتج' : 'Item Description'}</th>
+                    <th className="p-2 text-center">{lang === 'ar' ? 'الكمية' : 'Qty'}</th>
+                    <th className="p-2 text-center">{lang === 'ar' ? 'الشحن' : 'Mode'}</th>
+                    <th className="p-2 text-right">{lang === 'ar' ? 'سعر القطعة' : 'Unit Price'}</th>
+                    <th className="p-2 text-right">{lang === 'ar' ? 'الإجمالي' : 'Total'}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium">
+                  {items.map((item, idx) => (
+                    <tr key={item.id || idx}>
+                      <td className="p-2 font-bold text-slate-900">
+                        {item.input.title || (lang === 'ar' ? 'شحنة تجارية' : 'General Item')}
+                        <div className="text-[10px] font-normal text-slate-500">
+                          SKU: {item.input.skuSupplier || 'N/A'}
+                        </div>
+                      </td>
+                      <td className="p-2 text-center font-semibold">{item.input.quantity.toLocaleString()}</td>
+                      <td className="p-2 text-center uppercase text-[10px]">{item.input.freightMethod.replace('_', ' ')}</td>
+                      <td className="p-2 text-right font-semibold text-blue-600">
+                        {formatCurrency(item.suggestedSellingPricePerUnitTarget, item.input.targetCurrency)}
+                      </td>
+                      <td className="p-2 text-right font-extrabold text-slate-900">
+                        {formatCurrency(item.totalRevenueTarget, item.input.targetCurrency)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Price Preview Grand Total */}
             <div className="p-4 rounded-xl bg-slate-900 text-white flex justify-between items-center">
               <div>
                 <div className="text-[10px] uppercase font-bold text-blue-400">
-                  {lang === 'ar' ? 'إجمالي قيمة العرض الشامل' : 'TOTAL QUOTATION OFFER'}
+                  {lang === 'ar' ? (isMulti ? `إجمالي قيمة العرض الشامل (${items.length} منتجات)` : 'إجمالي قيمة العرض الشامل') : (isMulti ? `TOTAL QUOTATION OFFER (${items.length} ITEMS)` : 'TOTAL QUOTATION OFFER')}
                 </div>
                 <div className="text-xs text-slate-300 mt-0.5">
-                  {result.input.quantity.toLocaleString()} units × {formatCurrency(unitPrice, targetCurr)} / unit
+                  {isMulti
+                    ? (lang === 'ar' ? `إجمالي عدد القطع: ${items.reduce((s, i) => s + i.input.quantity, 0).toLocaleString()} قطعة` : `Total Units: ${items.reduce((s, i) => s + i.input.quantity, 0).toLocaleString()}`)
+                    : `${items[0].input.quantity.toLocaleString()} units × ${formatCurrency(items[0].suggestedSellingPricePerUnitTarget, targetCurr)} / unit`}
                 </div>
               </div>
 
