@@ -21,7 +21,10 @@ import {
   X,
   Loader2,
   CheckCircle2,
+  BookOpen,
 } from 'lucide-react';
+import { HsCodeLibraryModal } from './HsCodeLibraryModal';
+import { HsCodeItem } from '../data/hsCodes';
 
 interface CalculatorFormProps {
   rates: Record<string, number>;
@@ -143,6 +146,23 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
     } finally {
       setIsScanningAi(false);
     }
+  };
+
+  const [isHsModalOpen, setIsHsModalOpen] = useState(false);
+
+  const handleSelectHsCode = (item: HsCodeItem) => {
+    setFormData((prev) => {
+      const desc = lang === 'ar' ? item.descriptionAr : item.descriptionEn;
+      const cat = lang === 'ar' ? item.categoryAr : item.categoryEn;
+      const updatedTitle = prev.title ? prev.title : desc;
+      return {
+        ...prev,
+        dutyPercentage: item.dutyRate,
+        category: prev.category || cat,
+        title: updatedTitle,
+        showCustomRates: true,
+      };
+    });
   };
 
   // Compute live calculation
@@ -772,9 +792,20 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
               <div className="space-y-4 pt-2 border-t border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 p-4 rounded-xl">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
-                      {t.customsDutyLabel}
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
+                        {t.customsDutyLabel}
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setIsHsModalOpen(true)}
+                        className="text-[11px] font-bold text-amber-600 dark:text-amber-400 hover:text-amber-500 hover:underline flex items-center gap-1 cursor-pointer"
+                        title={lang === 'ar' ? 'البحث عن كود التعريفة الجمركية' : 'Lookup Tariff HS Code'}
+                      >
+                        <BookOpen className="w-3.5 h-3.5" />
+                        <span>{lang === 'ar' ? 'مكتبة الـ HS Code' : 'HS Code Library'}</span>
+                      </button>
+                    </div>
                     <input
                       type="number"
                       step="0.1"
@@ -1012,6 +1043,14 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
           />
         </div>
       </div>
+
+      {/* HS Code Customs Duty Library Modal */}
+      <HsCodeLibraryModal
+        isOpen={isHsModalOpen}
+        onClose={() => setIsHsModalOpen(false)}
+        onSelectHsCode={handleSelectHsCode}
+        lang={lang}
+      />
     </div>
   );
 };

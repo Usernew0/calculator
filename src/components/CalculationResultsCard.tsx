@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { CalculationResult } from '../types';
 import { formatCurrency, getCurrencySymbol } from '../data/currencies';
-import { Download, BookmarkCheck, Scale } from 'lucide-react';
+import { Download, BookmarkCheck, Scale, TrendingUp, FileText } from 'lucide-react';
 import { exportSingleCalculationPDF } from '../utils/pdfExport';
 import { translations, Language } from '../data/translations';
+import { PricingStrategyModal } from './PricingStrategyModal';
+import { ClientQuoteModal } from './ClientQuoteModal';
 
 interface CalculationResultsCardProps {
   result: CalculationResult;
@@ -20,6 +22,9 @@ export const CalculationResultsCard: React.FC<CalculationResultsCardProps> = ({
   t,
   lang,
 }) => {
+  const [isPricingModalOpen, setIsPricingModalOpen] = useState(false);
+  const [isQuoteModalOpen, setIsQuoteModalOpen] = useState(false);
+
   const { input } = result;
   const targetCurr = input.targetCurrency;
   const targetSymbol = getCurrencySymbol(targetCurr);
@@ -44,7 +49,25 @@ export const CalculationResultsCard: React.FC<CalculationResultsCardProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setIsPricingModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 border border-teal-500/40 transition-all cursor-pointer"
+              title={lang === 'ar' ? 'استراتيجية تسعير الشحنة وهامش الربحية' : 'Pricing Strategy & Risk Stress Test'}
+            >
+              <TrendingUp className="w-3.5 h-3.5 text-teal-400" />
+              <span>{lang === 'ar' ? 'استراتيجية التسعير' : 'Pricing Strategy'}</span>
+            </button>
+
+            <button
+              onClick={() => setIsQuoteModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/40 transition-all cursor-pointer"
+              title={lang === 'ar' ? 'عرض سعر تجاري للعميل' : 'Generate Commercial Client Quote'}
+            >
+              <FileText className="w-3.5 h-3.5 text-blue-400" />
+              <span>{lang === 'ar' ? 'عرض سعر للعميل' : 'Client Quote'}</span>
+            </button>
+
             <button
               onClick={() => onSave(result)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
@@ -222,6 +245,22 @@ export const CalculationResultsCard: React.FC<CalculationResultsCardProps> = ({
           {t.currencyLabel} <span className="text-slate-900 dark:text-slate-100">{targetCurr} ({targetSymbol})</span>
         </div>
       </div>
+
+      {/* Pricing Strategy & Multi-Tier Profitability Modal */}
+      <PricingStrategyModal
+        isOpen={isPricingModalOpen}
+        onClose={() => setIsPricingModalOpen(false)}
+        result={result}
+        lang={lang}
+      />
+
+      {/* Commercial Client Quote Modal */}
+      <ClientQuoteModal
+        isOpen={isQuoteModalOpen}
+        onClose={() => setIsQuoteModalOpen(false)}
+        result={result}
+        lang={lang}
+      />
     </div>
   );
 };

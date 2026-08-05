@@ -189,9 +189,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center w-full">
           {/* Left / Top Hero Info */}
           <div className="lg:col-span-6 space-y-6 text-center lg:ltr:text-left lg:rtl:text-right">
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold">
-              <Database className="w-3.5 h-3.5 text-emerald-400" />
-            </div>
 
             <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white leading-tight">
               {lang === 'ar' ? (
