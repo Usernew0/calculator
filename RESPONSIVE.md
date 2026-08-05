@@ -1,4 +1,4 @@
-# Responsive Design Specifications & Mobile Navigation Matrix — CargoProfit FX
+# Responsive Design Specifications & Mobile Navigation Matrix — Elegant FX
 
 > **Last Updated**: 2026-08-05  
 > **Target Viewports**: Mobile (< 640px), Tablet (640px - 1024px), Desktop (> 1024px)

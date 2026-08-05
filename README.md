@@ -1,6 +1,6 @@
-# CargoProfit FX — Global Landed Cost & Profit Calculator
+# Elegant FX — Global Landed Cost & Profit Calculator
 
-CargoProfit FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin Analysis web application designed for global trade, importers, exporters, and logistics managers.
+Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin Analysis web application designed for global trade, importers, exporters, and logistics managers.
 
 ---
 
@@ -93,4 +93,4 @@ npm start
 
 ---
 
-*CargoProfit FX — Empowering global trade with precise landed cost insights.*
+*Elegant FX — Empowering global trade with precise landed cost insights.*

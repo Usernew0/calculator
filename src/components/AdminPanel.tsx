@@ -435,7 +435,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-black text-base text-white tracking-tight">CargoProfit</span>
+                <span className="font-black text-base text-white tracking-tight">Elegant</span>
               </div>
               <p className="px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-black uppercase tracking-wider">
                   Admin Portal

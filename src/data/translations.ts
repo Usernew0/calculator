@@ -3,7 +3,7 @@ export type Language = 'en' | 'ar';
 export const translations = {
   en: {
     // Header
-    appName: 'CargoProfit FX',
+    appName: 'Elegant FX',
     appSubtitle: 'Global Landed Cost & Profit Calculator',
     calculatorTab: 'Calculator',
     ratesTab: 'Live FX Rates',
@@ -281,7 +281,7 @@ export const translations = {
 
   ar: {
     // Header
-    appName: 'كارجو بروفيت',
+    appName: 'أليجانت',
     appSubtitle: 'حاسبة تكلفة الشحن والوصول والأرباح العالمية',
     calculatorTab: 'الحاسبة',
     ratesTab: 'أسعار العملات المباشرة',

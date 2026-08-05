@@ -152,7 +152,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           </div>
           <div>
             <span className="text-lg font-black tracking-wider text-white">
-              CargoProfit <span className="text-emerald-400">FX</span>
+              Elegant <span className="text-emerald-400">FX</span>
             </span>
             <span className="hidden sm:inline-block ltr:ml-2 rtl:mr-2 text-xs text-slate-400 font-medium border-l rtl:border-r border-slate-700 ltr:pl-2 rtl:pr-2">
               {lang === 'ar' ? 'نظام حاسبة الشحن والتجارة الدولية' : 'Landed Cost & FX Platform'}
@@ -197,7 +197,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 </>
               ) : (
                 <>
-                  Login to <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-400">CargoProfit Platform</span>
+                  Login to <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-400">Elegant Platform</span>
                 </>
               )}
             </h1>
@@ -377,7 +377,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
       {/* Footer */}
       <footer className="py-4 border-t border-slate-800 text-center text-xs text-slate-500">
-        © 2026 CargoProfit FX. {lang === 'ar' ? 'جميع الحقوق محفوظة - حاسبة الشحن والتكلفة الإجمالية' : 'All Rights Reserved. Landed Cost & Customs Intelligence.'}
+        © 2026 Elegant FX. {lang === 'ar' ? 'جميع الحقوق محفوظة - حاسبة الشحن والتكلفة الإجمالية' : 'All Rights Reserved. Landed Cost & Customs Intelligence.'}
       </footer>
     </div>
   );

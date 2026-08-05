@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CargoProfit Application Database Schema (PostgreSQL / Supabase DDL)
+-- Elegant Application Database Schema (PostgreSQL / Supabase DDL)
 -- Auto-Updated: Syncs with SUPABASE_REQUIRED_DDL_SQL in src/lib/supabase.ts
 -- ==============================================================================
 

@@ -351,7 +351,7 @@ export interface SupabaseHealthReport {
   recommendedSqlDDL: string;
 }
 
-export const SUPABASE_REQUIRED_DDL_SQL = `-- Supabase & PostgreSQL Table Schema Setup for CargoProfit Application
+export const SUPABASE_REQUIRED_DDL_SQL = `-- Supabase & PostgreSQL Table Schema Setup for Elegant Application
 -- Auto-Updated: Includes support for Product Cargo Images, Unit/Total Prices & Freight History
 
 -- 1. Create users table (Stores full user account data & metadata)

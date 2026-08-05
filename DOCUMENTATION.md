@@ -1,4 +1,4 @@
-# CargoProfit FX — System Documentation & Technical Specification
+# Elegant FX — System Documentation & Technical Specification
 
 > **Latest Revision**: 2026-08-05  
 > **Status**: Production Ready & Fully Responsive (Mobile, Tablet & Desktop)
@@ -7,7 +7,7 @@
 
 ## 📱 Mobile & Web Responsive Architecture
 
-CargoProfit FX is engineered with a mobile-first, desktop-optimized responsive layout matrix that dynamically scales across all device form factors.
+Elegant FX is engineered with a mobile-first, desktop-optimized responsive layout matrix that dynamically scales across all device form factors.
 
 ### Breakpoint Specifications
 
