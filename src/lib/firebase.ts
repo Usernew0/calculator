@@ -110,9 +110,50 @@ export async function seedDefaultDataToFirestore(): Promise<void> {
 }
 
 /**
- * Save user profile schema to Firestore database and Supabase
+ * Deduplicate users by unique userId (or lowercased username) so accounts are never duplicated in state or UI.
  */
-export async function saveUserProfileToFirestore(profile: UserProfile): Promise<void> {
+export function deduplicateUsers(usersList: UserProfile[]): UserProfile[] {
+  const usersMap = new Map<string, UserProfile>();
+
+  usersList.forEach((u) => {
+    if (!u) return;
+    const key = (u.userId || u.username || '').toLowerCase().trim();
+    if (!key) return;
+
+    if (!usersMap.has(key)) {
+      usersMap.set(key, u);
+    } else {
+      const existing = usersMap.get(key)!;
+      usersMap.set(key, {
+        ...existing,
+        ...u,
+        createdAt: existing.createdAt || u.createdAt,
+      });
+    }
+  });
+
+  return Array.from(usersMap.values());
+}
+
+/**
+ * Save user profile schema to Firestore database and Supabase.
+ * If oldUsername is provided and differs from the new username, purges the old user document/row.
+ */
+export async function saveUserProfileToFirestore(
+  profile: UserProfile,
+  oldUsername?: string
+): Promise<void> {
+  const newUsernameKey = (profile.username || profile.userId).toLowerCase().trim();
+
+  // If oldUsername is supplied and differs from newUsernameKey, clean up the old document/row
+  if (oldUsername && oldUsername.toLowerCase().trim() !== newUsernameKey) {
+    try {
+      await deleteUserFromFirestore(oldUsername.toLowerCase().trim());
+    } catch (err) {
+      console.warn("Notice: Cleaning up old user document key failed:", err);
+    }
+  }
+
   // Save to Supabase
   try {
     await saveUserProfileToSupabase(profile);
@@ -123,7 +164,7 @@ export async function saveUserProfileToFirestore(profile: UserProfile): Promise<
   // Save to Firestore (for Auth & Status checks)
   try {
     await ensureAuth();
-    const docKey = (profile.username || profile.userId).toLowerCase().trim();
+    const docKey = newUsernameKey;
     const docRef = doc(db, USERS_COLLECTION, docKey);
     await setDoc(
       docRef,
@@ -188,16 +229,14 @@ export async function getUserProfileFromFirestore(username: string): Promise<Use
  * Fetch all user profile schemas from Firestore & Supabase
  */
 export async function getAllUsersFromFirestore(): Promise<UserProfile[]> {
-  const usersMap = new Map<string, UserProfile>();
+  const allUsers: UserProfile[] = [];
 
   // Fetch from Supabase
   try {
     const supabaseUsers = await getAllUsersFromSupabase();
-    supabaseUsers.forEach((u) => {
-      if (u.username || u.userId) {
-        usersMap.set((u.username || u.userId).toLowerCase(), u);
-      }
-    });
+    if (Array.isArray(supabaseUsers)) {
+      allUsers.push(...supabaseUsers);
+    }
   } catch (err) {
     console.warn("Supabase fetch all users notice:", err);
   }
@@ -208,16 +247,15 @@ export async function getAllUsersFromFirestore(): Promise<UserProfile[]> {
     const qSnap = await getDocs(query(collection(db, USERS_COLLECTION)));
     qSnap.forEach((docSnap) => {
       const u = docSnap.data() as UserProfile;
-      const key = (u.username || u.userId || docSnap.id).toLowerCase();
-      if (!usersMap.has(key)) {
-        usersMap.set(key, u);
+      if (u) {
+        allUsers.push(u);
       }
     });
   } catch (error: any) {
     console.info("Firestore fetch users notice:", error?.message || error);
   }
 
-  return Array.from(usersMap.values());
+  return deduplicateUsers(allUsers);
 }
 
 /**
@@ -388,7 +426,7 @@ export function subscribeToUsers(
   // Subscribe to Supabase real-time
   const unsubSupabase = subscribeToUsersSupabase((supabaseUsers) => {
     if (supabaseUsers && supabaseUsers.length > 0) {
-      onUpdate(supabaseUsers);
+      onUpdate(deduplicateUsers(supabaseUsers));
     }
   });
 
@@ -409,7 +447,7 @@ export function subscribeToUsers(
             results.push(docSnap.data() as UserProfile);
           });
           if (results.length > 0) {
-            onUpdate(results);
+            onUpdate(deduplicateUsers(results));
           }
         },
         (error) => {

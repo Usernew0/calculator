@@ -7,6 +7,7 @@ import {
   subscribeToUsers,
   subscribeToCalculations,
   syncAllDataWithFirestore,
+  deduplicateUsers,
 } from '../lib/firebase';
 import {
   checkSupabaseHealth,
@@ -168,12 +169,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       const dbUsers = await getAllUsersFromFirestore();
       
       // Also check local current user profile if not in list
-      let userList = [...dbUsers];
-      if (currentUser && !userList.some((u) => u.username?.toLowerCase() === currentUser.username?.toLowerCase())) {
+      let userList = deduplicateUsers([...dbUsers]);
+      if (
+        currentUser &&
+        !userList.some(
+          (u) =>
+            u.userId?.toLowerCase() === currentUser.userId?.toLowerCase() ||
+            u.username?.toLowerCase() === currentUser.username?.toLowerCase()
+        )
+      ) {
         userList.push(currentUser);
       }
 
-      setUsers(userList);
+      setUsers(deduplicateUsers(userList));
       setLastSyncedAt(new Date());
     } catch (err) {
       console.error('Failed to load users for admin panel:', err);
@@ -190,14 +198,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     // Subscribe to real-time users collection updates
     const unsubscribeUsers = subscribeToUsers(
       (updatedUsers) => {
-        let userList = [...updatedUsers];
+        let userList = deduplicateUsers([...updatedUsers]);
         if (
           currentUser &&
-          !userList.some((u) => u.username?.toLowerCase() === currentUser.username?.toLowerCase())
+          !userList.some(
+            (u) =>
+              u.userId?.toLowerCase() === currentUser.userId?.toLowerCase() ||
+              u.username?.toLowerCase() === currentUser.username?.toLowerCase()
+          )
         ) {
           userList.push(currentUser);
         }
-        setUsers(userList);
+        setUsers(deduplicateUsers(userList));
         setIsRealtimeConnected(true);
         setLastSyncedAt(new Date());
         setIsLoading(false);
@@ -329,7 +341,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     };
 
     try {
-      await saveUserProfileToFirestore(updatedProfile);
+      const oldUsername = editingUser?.username?.trim().toLowerCase();
+      await saveUserProfileToFirestore(updatedProfile, oldUsername);
       showNotification('success', lang === 'ar' ? 'تم حفظ بيانات المستخدم بنجاح في قاعدة البيانات' : 'User account updated in Firestore database successfully');
       setIsModalOpen(false);
       await fetchUsers();
@@ -1171,7 +1184,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <input
                   type="text"
                   required
-                  disabled={!!editingUser}
                   value={formData.username}
                   onChange={(e) => setFormData({ ...formData, username: e.target.value })}
                   placeholder="e.g. ebrahim_trader"
