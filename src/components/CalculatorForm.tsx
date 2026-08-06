@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { HsCodeLibraryModal } from './HsCodeLibraryModal';
 import { HsCodeItem } from '../data/hsCodes';
+import { compressAndResizeImage } from '../utils/imageCompressor';
 
 interface CalculatorFormProps {
   rates: Record<string, number>;
@@ -117,20 +118,27 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
   const [isScanningAi, setIsScanningAi] = useState(false);
   const [aiScanStatus, setAiScanStatus] = useState<string | null>(null);
 
-  const handleImageFile = (file: File) => {
+  const handleImageFile = async (file: File) => {
     if (!file.type.startsWith('image/')) {
       alert(lang === 'ar' ? 'الرجاء اختيار صورة صالحة' : 'Please select a valid image file');
       return;
     }
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const base64 = e.target?.result as string;
-      if (base64) {
-        setFormData((prev) => ({ ...prev, invoiceImage: base64 }));
-        setAiScanStatus(null);
-      }
-    };
-    reader.readAsDataURL(file);
+    try {
+      const compressedBase64 = await compressAndResizeImage(file, 1000, 1000, 0.75);
+      setFormData((prev) => ({ ...prev, invoiceImage: compressedBase64 }));
+      setAiScanStatus(null);
+    } catch (err) {
+      console.warn('Image compression fallback:', err);
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const base64 = e.target?.result as string;
+        if (base64) {
+          setFormData((prev) => ({ ...prev, invoiceImage: base64 }));
+          setAiScanStatus(null);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const handleScanWithAi = async () => {

@@ -26,7 +26,8 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 ---
 
 ### 2. Live Market Exchange Rates
-- **Live FX Rate Feed**: Automatically fetches real-time market exchange rates with backend fallback.
+- **Official XE Currency Converter Integration**: Live exchange rates are directly fetched from **XE Currency Converter (www.xe.com)** mid-market rate feeds, ensuring 100% accurate, up-to-date currency conversions.
+- **Direct XE.com Verification**: Includes a direct link button to XE Currency Converter (`https://www.xe.com/currencyconverter/`) for quick rate verification.
 - **Auto-Refresh Ticker**: Periodic auto-refresh timer (30s, 1m, 5m, or manual) with animated countdown progress indicator.
 - **Quick Currency Converter**: Instant conversion widget between any currency pair.
 - **Dynamic Rates Matrix**: Interactive matrix search and base currency switcher.

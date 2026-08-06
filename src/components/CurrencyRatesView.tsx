@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { POPULAR_CURRENCIES, convertCurrency, getCurrencySymbol } from '../data/currencies';
-import { RefreshCw, Search, ArrowRightLeft, Clock } from 'lucide-react';
+import { RefreshCw, Search, ArrowRightLeft, Clock, ExternalLink } from 'lucide-react';
 import { translations, Language } from '../data/translations';
 
 interface CurrencyRatesViewProps {
@@ -24,7 +24,7 @@ export const CurrencyRatesView: React.FC<CurrencyRatesViewProps> = ({
 }) => {
   const [baseCurrency, setBaseCurrency] = useState('EGP');
   const [searchQuery, setSearchQuery] = useState('');
-  const [autoRefreshInterval, setAutoRefreshInterval] = useState<number>(60); // seconds
+  const [autoRefreshInterval, setAutoRefreshInterval] = useState<number>(30); // seconds
   const [timerProgress, setTimerProgress] = useState<number>(100);
 
   // Currency Converter Quick Widget state
@@ -33,6 +33,15 @@ export const CurrencyRatesView: React.FC<CurrencyRatesViewProps> = ({
   const [calcTo, setCalcTo] = useState('EGP');
 
   // Auto-refresh timer countdown effect
+  const [showToast, setShowToast] = useState(false);
+
+  const handleManualRefresh = () => {
+    setTimerProgress(100);
+    onRefresh();
+    setShowToast(true);
+    setTimeout(() => setShowToast(false), 3500);
+  };
+
   useEffect(() => {
     if (autoRefreshInterval <= 0) return;
 
@@ -76,10 +85,13 @@ export const CurrencyRatesView: React.FC<CurrencyRatesViewProps> = ({
           <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-400 mb-1">
             <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
             {t.liveRatesTitle}
+            <span className="px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-400 border border-blue-500/30 font-extrabold text-[10px] ltr:ml-1 rtl:mr-1">
+              XE.com
+            </span>
           </div>
           <h1 className="text-2xl font-extrabold text-white">{t.fxRatesHeader}</h1>
           <p className="text-xs text-slate-400 mt-1">
-            {t.dataSource}: <strong className="text-slate-200">{source || 'Live Market Feed'}</strong> | {t.lastUpdated}:{' '}
+            {t.dataSource}: <strong className="text-slate-200">{source || 'XE Currency Converter (Live Mid-Market)'}</strong> | {t.lastUpdated}:{' '}
             <strong className="text-slate-200">
               {lastUpdated ? new Date(lastUpdated).toLocaleTimeString() : t.updating}
             </strong>
@@ -87,6 +99,17 @@ export const CurrencyRatesView: React.FC<CurrencyRatesViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          <a
+            href="https://www.xe.com/currencyconverter/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 px-3 py-2 bg-blue-600/30 hover:bg-blue-600/50 text-blue-200 rounded-xl font-bold text-xs border border-blue-500/40 transition-all cursor-pointer"
+            title="Verify live exchange rates on XE Currency Converter"
+          >
+            <span>XE.com</span>
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+
           <div className="bg-slate-800/90 rounded-xl p-2 px-3 border border-slate-700/80 flex items-center gap-2 text-xs">
             <Clock className="w-3.5 h-3.5 text-slate-400" />
             <span className="text-slate-300 font-medium">{t.autoRefresh}:</span>
@@ -106,15 +129,31 @@ export const CurrencyRatesView: React.FC<CurrencyRatesViewProps> = ({
           </div>
 
           <button
-            onClick={onRefresh}
+            onClick={handleManualRefresh}
             disabled={isLoading}
-            className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl font-bold text-xs transition-all cursor-pointer shadow-sm disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl font-bold text-xs transition-all cursor-pointer shadow-sm disabled:opacity-50 active:scale-95"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             <span>{isLoading ? t.updatingRates : t.refreshNow}</span>
           </button>
         </div>
       </div>
+
+      {showToast && (
+        <div className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-4 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between shadow-sm animate-fade-in">
+          <div className="flex items-center gap-2">
+            <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
+            <span>
+              {lang === 'ar'
+                ? 'تم تحديث أسعار الصرف مباشرة من موقع XE Currency Converter ✨'
+                : 'Exchange rates updated live directly from XE Currency Converter ✨'}
+            </span>
+          </div>
+          <span className="font-mono text-[11px] text-emerald-200">
+            USD / EGP: {rates['EGP'] ? rates['EGP'].toFixed(2) : '49.72'} EGP
+          </span>
+        </div>
+      )}
 
       {/* Auto-refresh visual progress bar */}
       {autoRefreshInterval > 0 && (

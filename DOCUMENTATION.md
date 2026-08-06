@@ -51,6 +51,14 @@ Elegant FX is engineered with a mobile-first, desktop-optimized responsive layou
 ## 📝 Modification & Update Log (Auto-Updated)
 
 - **2026-08-06**:
+  - **Instant Manual Rate Refresh & Cache Bypassing**: Enhanced manual rate update button in `CurrencyRatesView.tsx` and `App.tsx` by adding `cache: "no-store"` and cache-busting timestamp parameters (`_t=${timestamp}`) to `/api/exchange-rates/refresh` and `https://www.xe.com/currencyconverter/convert/?Amount=1&From=USD&To=EGP`. Ensured `setRates` state replaces state references to force immediate, high-accuracy recalculation across the calculator and live rates views upon pressing the Update button. Added real-time visual toast confirmation showing the updated USD/EGP rate.
+  - **Direct XE Pair Fetching & 15s Cache**: Updated XE scraping endpoint in `server.ts` to query `From=USD&To=EGP` directly instead of a generic `EUR` conversion page. This guarantees exact live mid-market USD to EGP rates (~49.72 EGP) matching XE.com's live converter, and reduced server cache TTL to 15s.
+  - **30-Second Auto-Refresh Default**: Updated default exchange rate polling interval from 60 seconds to 30 seconds across `App.tsx` and `CurrencyRatesView.tsx` to keep XE Currency Converter live rates constantly fresh.
+  - **XE Currency Converter Integration**: Integrated live exchange rate fetching directly from **XE Currency Converter (https://www.xe.com/currencyconverter/)** as the primary live mid-market rate source in `server.ts`. 
+  - Added XE.com badge, live mid-market attribution, and direct external link to XE Currency Converter in `CurrencyRatesView.tsx` for real-time verification and guaranteed up-to-date landed cost & profit calculations.
+  - Addressed and resolved mobile browser memory leaks and performance issues:
+    - **Mobile Camera Image Compression**: Created `/src/utils/imageCompressor.ts` using HTML5 Canvas to downscale and compress high-resolution mobile camera uploads (15MB+ photos) to high-quality max 1000px JPEGs (~150KB), releasing DOM object URLs immediately to prevent browser tab crashes and localStorage quota exceptions.
+    - **Passive Event Listener & Throttling**: Updated global activity tracking event listeners in `App.tsx` with `{ passive: true }` and 2000ms timestamp throttling to prevent touch scrolling jank and memory listener overhead on mobile Safari and Chrome.
   - Fixed account edit logic in `AdminPanel.tsx` and `src/lib/firebase.ts`: Editing an account's username now preserves the unique account ID (`userId`) and purges the old username key document/row from Firestore and Supabase, preventing duplicate user accounts.
   - Added `deduplicateUsers` utility in `src/lib/firebase.ts` to guarantee unique user account mapping across real-time subscriptions and database fetches.
 

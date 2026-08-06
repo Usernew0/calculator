@@ -50,7 +50,40 @@ const FALLBACK_RATES: Record<string, number> = {
 };
 
 async function fetchLiveExchangeRates(): Promise<{ rates: Record<string, number>; source: string }> {
-  // Try Open ER API first
+  // Primary Source: XE Currency Converter (www.xe.com) - query USD to EGP pair directly with cache-busting
+  try {
+    const timestamp = Date.now();
+    const res = await fetch(`https://www.xe.com/currencyconverter/convert/?Amount=1&From=USD&To=EGP&_t=${timestamp}`, {
+      cache: "no-store",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache"
+      }
+    });
+    if (res.ok) {
+      const html = await res.text();
+      const nextDataMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/s);
+      if (nextDataMatch) {
+        const data = JSON.parse(nextDataMatch[1]);
+        const xeRates = data.props?.pageProps?.initialRatesData?.rates;
+        if (xeRates && typeof xeRates === "object" && Object.keys(xeRates).length > 10) {
+          const ratesFormatted: Record<string, number> = { USD: 1.0 };
+          for (const [code, val] of Object.entries(xeRates)) {
+            if (typeof val === "number" && val > 0) {
+              ratesFormatted[code.toUpperCase()] = val;
+            }
+          }
+          return { rates: ratesFormatted, source: "XE Currency Converter (Live Mid-Market)" };
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Primary XE Currency Converter fetch failed, trying Open ER API...", err);
+  }
+
+  // Backup Source 1: Open ER API
   try {
     const res = await fetch("https://open.er-api.com/v6/latest/USD");
     if (res.ok) {
@@ -60,7 +93,7 @@ async function fetchLiveExchangeRates(): Promise<{ rates: Record<string, number>
       }
     }
   } catch (err) {
-    console.warn("Primary exchange rate API failed, trying backup 1...", err);
+    console.warn("Backup 1 exchange rate API failed, trying backup 2...", err);
   }
 
   // Backup API 1: ExchangeRate-API
@@ -99,12 +132,16 @@ async function fetchLiveExchangeRates(): Promise<{ rates: Record<string, number>
 }
 
 // API Route: Exchange Rates
-app.get("/api/exchange-rates", async (_req, res) => {
+app.get("/api/exchange-rates", async (req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+
   const now = new Date();
-  
-  // Refresh cache if older than 1 minute or not present
-  const ONE_MIN = 60 * 1000;
-  if (!cachedRates || (now.getTime() - new Date(cachedRates.lastUpdated).getTime() > ONE_MIN)) {
+  const force = req.query.force === "true";
+  const FIFTEEN_SEC = 15 * 1000;
+
+  if (force || !cachedRates || (now.getTime() - new Date(cachedRates.lastUpdated).getTime() > FIFTEEN_SEC)) {
     const liveData = await fetchLiveExchangeRates();
     cachedRates = {
       rates: { ...FALLBACK_RATES, ...liveData.rates },
@@ -123,6 +160,10 @@ app.get("/api/exchange-rates", async (_req, res) => {
 
 // Force refresh endpoint
 app.post("/api/exchange-rates/refresh", async (_req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+
   const liveData = await fetchLiveExchangeRates();
   cachedRates = {
     rates: { ...FALLBACK_RATES, ...liveData.rates },

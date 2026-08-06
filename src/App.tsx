@@ -229,11 +229,14 @@ export default function App() {
     lastActivityRef.current = Date.now();
 
     const handleActivity = () => {
-      lastActivityRef.current = Date.now();
+      const now = Date.now();
+      if (now - lastActivityRef.current > 2000) {
+        lastActivityRef.current = now;
+      }
     };
 
     const events = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click'];
-    events.forEach((evt) => window.addEventListener(evt, handleActivity));
+    events.forEach((evt) => window.addEventListener(evt, handleActivity, { passive: true }));
 
     const interval = setInterval(() => {
       const idleMs = Date.now() - lastActivityRef.current;
@@ -261,14 +264,25 @@ export default function App() {
     let success = false;
 
     try {
-      const endpoint = forceRefresh ? '/api/exchange-rates/refresh' : '/api/exchange-rates';
+      const timestamp = Date.now();
+      const endpoint = forceRefresh
+        ? `/api/exchange-rates/refresh?_t=${timestamp}`
+        : `/api/exchange-rates?_t=${timestamp}`;
       const method = forceRefresh ? 'POST' : 'GET';
-      const res = await fetch(endpoint, { method });
+      const res = await fetch(endpoint, {
+        method,
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache',
+        },
+      });
 
       if (res.ok) {
         const data: RatesResponse = await res.json();
         if (data && data.rates && Object.keys(data.rates).length > 0) {
-          setRates((prev) => ({ ...prev, ...data.rates }));
+          // Replace object reference to force dependent component re-calculations
+          setRates({ ...data.rates });
           setLastUpdated(data.lastUpdated || new Date().toISOString());
           setRateSource(data.source || 'Live Server API');
           success = true;
@@ -299,13 +313,13 @@ export default function App() {
     setIsLoadingRates(false);
   }, []);
 
-  // Real-time polling every 60 seconds
+  // Real-time polling every 30 seconds
   useEffect(() => {
     fetchExchangeRates();
 
     const interval = setInterval(() => {
       fetchExchangeRates();
-    }, 60000);
+    }, 30000);
 
     return () => clearInterval(interval);
   }, [fetchExchangeRates]);
