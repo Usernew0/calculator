@@ -8,7 +8,16 @@ import {
   subscribeToCalculations,
   syncAllDataWithFirestore,
   deduplicateUsers,
+  saveSiteFaviconToFirestore,
+  getSiteFaviconFromFirestore,
 } from '../lib/firebase';
+import {
+  FAVICON_PRESETS,
+  DEFAULT_FAVICON,
+  getSavedFavicon,
+  setSavedFaviconLocally,
+  updateWebsiteFavicon,
+} from '../utils/favicon';
 import {
   checkSupabaseHealth,
   SupabaseHealthReport,
@@ -56,6 +65,11 @@ import {
   Server,
   Table,
   FileCode,
+  Image as ImageIcon,
+  Upload,
+  Sparkles,
+  RotateCcw,
+  Link as LinkIcon,
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -134,6 +148,134 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         ? `تم حفظ مهلة عدم النشاط للجلسات بنجاح (${val} دقيقة)`
         : `Session inactivity timeout successfully set to ${val} minutes`
     );
+  };
+
+  // Favicon & Branding State
+  const [currentFavicon, setCurrentFavicon] = useState<string>(() => getSavedFavicon());
+  const [selectedPresetId, setSelectedPresetId] = useState<string>(() => {
+    const saved = getSavedFavicon();
+    const preset = FAVICON_PRESETS.find((p) => p.dataUrl === saved);
+    return preset ? preset.id : 'custom';
+  });
+  const [customFaviconInput, setCustomFaviconInput] = useState<string>('');
+  const [isSavingFavicon, setIsSavingFavicon] = useState<boolean>(false);
+
+  // Load site favicon from Firestore on mount
+  useEffect(() => {
+    getSiteFaviconFromFirestore().then((remoteFavicon) => {
+      if (remoteFavicon) {
+        setCurrentFavicon(remoteFavicon);
+        setSavedFaviconLocally(remoteFavicon);
+        const preset = FAVICON_PRESETS.find((p) => p.dataUrl === remoteFavicon);
+        setSelectedPresetId(preset ? preset.id : 'custom');
+      }
+    });
+  }, []);
+
+  const handleSelectFaviconPreset = (preset: (typeof FAVICON_PRESETS)[0]) => {
+    setSelectedPresetId(preset.id);
+    setCurrentFavicon(preset.dataUrl);
+  };
+
+  const handleCustomFaviconUrlChange = (url: string) => {
+    setCustomFaviconInput(url);
+    setSelectedPresetId('custom');
+    if (url.trim()) {
+      setCurrentFavicon(url.trim());
+    }
+  };
+
+  const handleFaviconFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/') && !file.name.toLowerCase().endsWith('.ico')) {
+      showNotification(
+        'error',
+        lang === 'ar'
+          ? 'يرجى تحميل صورة صالحة (.ico, .png, .svg, .jpg, .webp)'
+          : 'Please upload a valid icon/image file (.ico, .png, .svg, .jpg, .webp)'
+      );
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      if (dataUrl) {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = 64;
+          canvas.height = 64;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, 64, 64);
+            const resizedDataUrl = canvas.toDataURL('image/png');
+            setCurrentFavicon(resizedDataUrl);
+            setSelectedPresetId('custom');
+            setCustomFaviconInput(resizedDataUrl);
+          } else {
+            setCurrentFavicon(dataUrl);
+            setSelectedPresetId('custom');
+          }
+        };
+        img.onerror = () => {
+          setCurrentFavicon(dataUrl);
+          setSelectedPresetId('custom');
+        };
+        img.src = dataUrl;
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handlePublishFavicon = async () => {
+    setIsSavingFavicon(true);
+    try {
+      setSavedFaviconLocally(currentFavicon);
+      updateWebsiteFavicon(currentFavicon);
+      await saveSiteFaviconToFirestore(currentFavicon);
+
+      showNotification(
+        'success',
+        lang === 'ar'
+          ? 'تم نشر وحفظ أيقونة الموقع (Favicon) بنجاح في قاعدة البيانات وتطبيقها فوراً على جميع المتصفحات ✨'
+          : 'Website favicon updated & published to Firestore successfully! ✨'
+      );
+    } catch (err) {
+      showNotification(
+        'error',
+        lang === 'ar'
+          ? 'تعذر حفظ أيقونة الموقع في قاعدة البيانات.'
+          : 'Failed to publish favicon to database.'
+      );
+    } finally {
+      setIsSavingFavicon(false);
+    }
+  };
+
+  const handleResetFavicon = async () => {
+    setIsSavingFavicon(true);
+    try {
+      setCurrentFavicon(DEFAULT_FAVICON);
+      setSelectedPresetId('golden-ship');
+      setCustomFaviconInput('');
+      setSavedFaviconLocally(DEFAULT_FAVICON);
+      updateWebsiteFavicon(DEFAULT_FAVICON);
+      await saveSiteFaviconToFirestore(DEFAULT_FAVICON);
+
+      showNotification(
+        'success',
+        lang === 'ar'
+          ? 'تمت استعادة أيقونة الموقع الافتراضية بنجاح'
+          : 'Default website favicon restored successfully'
+      );
+    } catch (err) {
+      showNotification('error', 'Error resetting favicon');
+    } finally {
+      setIsSavingFavicon(false);
+    }
   };
 
   // Sync state tracking
@@ -738,6 +880,208 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </button>
             </div>
           )}
+        </div>
+
+        {/* Website Favicon & Branding Management Panel */}
+        <div className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-5 shadow-xl space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-700/80">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400">
+                <ImageIcon className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-white flex items-center gap-2">
+                  <span>
+                    {lang === 'ar'
+                      ? 'إعدادات أيقونة وشعار الموقع (Favicon)'
+                      : 'Website Favicon & Branding Settings'}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono text-[10px] font-bold">
+                    Browser Tab Icon
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  {lang === 'ar'
+                    ? 'قم بتخصيص أيقونة الموقع التي تظهر في شريط وتبويبات متصفح الإنترنت لجميع المستخدمين'
+                    : 'Customize the official icon displayed in browser tabs, bookmarks, and mobile shortcuts for all visitors'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-end sm:self-auto">
+              <button
+                onClick={handleResetFavicon}
+                disabled={isSavingFavicon}
+                className="px-3 py-1.5 rounded-xl bg-slate-700/80 hover:bg-slate-700 text-slate-300 border border-slate-600 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                title="Restore default favicon"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
+                <span>{lang === 'ar' ? 'استعادة الافتراضي' : 'Reset Default'}</span>
+              </button>
+
+              <button
+                onClick={handlePublishFavicon}
+                disabled={isSavingFavicon}
+                className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs transition-all flex items-center gap-1.5 shadow-md shadow-emerald-950/40 cursor-pointer disabled:opacity-50 active:scale-95"
+              >
+                {isSavingFavicon ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-950" />
+                ) : (
+                  <Sparkles className="w-3.5 h-3.5 text-slate-950" />
+                )}
+                <span>
+                  {isSavingFavicon
+                    ? lang === 'ar'
+                      ? 'جاري النشر...'
+                      : 'Publishing...'
+                    : lang === 'ar'
+                    ? 'حفظ ونشر الأيقونة'
+                    : 'Publish Favicon'}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* Browser Tab Live Preview Mockup */}
+          <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-2">
+            <div className="flex items-center justify-between text-[11px] font-bold text-slate-400 px-1">
+              <span className="flex items-center gap-1.5 text-amber-400">
+                <Sparkles className="w-3 h-3" />
+                {lang === 'ar' ? 'معاينة فورية لتبويب المتصفح' : 'Live Browser Tab Preview'}
+              </span>
+              <span className="font-mono text-[10px] text-slate-500">https://elegant-freight.com</span>
+            </div>
+
+            {/* Simulated Browser Bar */}
+            <div className="bg-slate-900 border border-slate-800 rounded-lg p-2 flex items-center gap-3">
+              <div className="flex items-center gap-1.5 px-1">
+                <span className="w-2.5 h-2.5 rounded-full bg-rose-500/80" />
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-500/80" />
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/80" />
+              </div>
+
+              {/* Simulated Active Tab */}
+              <div className="bg-slate-800 border-t-2 border-amber-400 rounded-t-lg px-3 py-1.5 flex items-center gap-2 max-w-xs shadow-md">
+                <img
+                  src={currentFavicon}
+                  alt="Favicon Preview"
+                  className="w-4 h-4 object-contain rounded-sm shrink-0"
+                  onError={(e) => {
+                    (e.target as HTMLElement).style.display = 'none';
+                  }}
+                />
+                <span className="text-xs font-semibold text-slate-200 truncate">
+                  {lang === 'ar'
+                    ? 'Elegant - حاسبة تكاليف الاستيراد للشحن'
+                    : 'Elegant - Landed Cost & Freight Calculator'}
+                </span>
+                <span className="text-slate-500 text-[10px] ltr:ml-auto rtl:mr-auto">✕</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Preset Icon Grid */}
+          <div className="space-y-2">
+            <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+              <span>
+                {lang === 'ar'
+                  ? 'اختر من الأيقونات الجاهزة المصممة للموقع:'
+                  : 'Choose from Built-in Preset Icons:'}
+              </span>
+            </label>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+              {FAVICON_PRESETS.map((preset) => {
+                const isSelected = selectedPresetId === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => handleSelectFaviconPreset(preset)}
+                    className={`p-3 rounded-xl border text-start transition-all cursor-pointer flex flex-col items-center gap-2 relative ${
+                      isSelected
+                        ? 'bg-amber-500/15 border-amber-400/80 shadow-md shadow-amber-950/30'
+                        : 'bg-slate-900/60 border-slate-700/70 hover:bg-slate-900 hover:border-slate-600'
+                    }`}
+                  >
+                    {isSelected && (
+                      <span className="absolute top-1.5 ltr:right-1.5 rtl:left-1.5 w-4 h-4 rounded-full bg-amber-400 text-slate-950 flex items-center justify-center text-[10px] font-black">
+                        ✓
+                      </span>
+                    )}
+                    <img
+                      src={preset.dataUrl}
+                      alt={preset.nameEn}
+                      className="w-9 h-9 object-contain rounded-lg p-1 bg-slate-950 border border-slate-800"
+                    />
+                    <span className="text-[11px] font-bold text-slate-200 text-center line-clamp-1">
+                      {lang === 'ar' ? preset.nameAr : preset.nameEn}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Custom Upload or Image URL Input */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+            {/* Option A: Upload Image File */}
+            <div className="p-3.5 rounded-xl bg-slate-900/70 border border-slate-700/70 space-y-2">
+              <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <Upload className="w-3.5 h-3.5 text-amber-400" />
+                <span>{lang === 'ar' ? 'رفع أيقونة مخصصة من جهازك:' : 'Upload Custom Icon File:'}</span>
+              </label>
+
+              <label className="border-2 border-dashed border-slate-700 hover:border-amber-400/70 bg-slate-950/50 rounded-xl p-3 flex items-center justify-center gap-3 cursor-pointer transition-all group">
+                <input
+                  type="file"
+                  accept="image/*,.ico"
+                  onChange={handleFaviconFileUpload}
+                  className="hidden"
+                />
+                <div className="p-2 rounded-lg bg-slate-800 text-amber-400 group-hover:scale-105 transition-transform">
+                  <Upload className="w-4 h-4" />
+                </div>
+                <div className="text-start">
+                  <p className="text-xs font-bold text-slate-200">
+                    {lang === 'ar' ? 'انقر لاختيار صورة أيقونة' : 'Click to select icon image'}
+                  </p>
+                  <p className="text-[10px] text-slate-400">.PNG, .ICO, .SVG, .JPG (64x64 auto-resize)</p>
+                </div>
+              </label>
+            </div>
+
+            {/* Option B: Enter Custom External Image URL */}
+            <div className="p-3.5 rounded-xl bg-slate-900/70 border border-slate-700/70 space-y-2">
+              <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <LinkIcon className="w-3.5 h-3.5 text-amber-400" />
+                <span>
+                  {lang === 'ar'
+                    ? 'أو أدخل رابط أيقونة خارجي (URL):'
+                    : 'Or Enter Custom Icon Image URL:'}
+                </span>
+              </label>
+
+              <div className="relative">
+                <input
+                  type="url"
+                  value={customFaviconInput}
+                  onChange={(e) => handleCustomFaviconUrlChange(e.target.value)}
+                  placeholder="https://example.com/my-favicon.png"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 font-mono"
+                />
+                {customFaviconInput && (
+                  <button
+                    type="button"
+                    onClick={() => handleCustomFaviconUrlChange('')}
+                    className="absolute ltr:right-2.5 rtl:left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Real-Time Live Sync Status Strip */}

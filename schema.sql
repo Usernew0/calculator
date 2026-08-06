@@ -32,19 +32,31 @@ CREATE TABLE IF NOT EXISTS public.calculations (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 3. Optimization Indexes (Enables instant searching by Product SKU, Title, Trade Direction & Cargo Image presence)
+-- 3. Create site_settings table (Stores global branding, favicon, and site config)
+CREATE TABLE IF NOT EXISTS public.site_settings (
+  id TEXT PRIMARY KEY,
+  favicon_url TEXT,
+  settings_data JSONB,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 4. Optimization Indexes (Enables instant searching by Product SKU, Title, Trade Direction & Cargo Image presence)
 CREATE INDEX IF NOT EXISTS idx_calculations_user_id ON public.calculations (user_id);
 CREATE INDEX IF NOT EXISTS idx_calculations_created_at ON public.calculations (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_calculations_product_sku ON public.calculations ((calculation_data->'input'->>'skuSupplier'));
 CREATE INDEX IF NOT EXISTS idx_calculations_trade_direction ON public.calculations ((calculation_data->'input'->>'tradeDirection'));
 CREATE INDEX IF NOT EXISTS idx_calculations_has_image ON public.calculations (((calculation_data->'input'->>'invoiceImage') IS NOT NULL));
 
--- 4. Enable Row Level Security (RLS) and permissive policies for public client app
+-- 5. Enable Row Level Security (RLS) and permissive policies for public client app
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.calculations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.site_settings ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Allow anon read write users" ON public.users;
 CREATE POLICY "Allow anon read write users" ON public.users FOR ALL USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow anon read write calculations" ON public.calculations;
 CREATE POLICY "Allow anon read write calculations" ON public.calculations FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow anon read write site_settings" ON public.site_settings;
+CREATE POLICY "Allow anon read write site_settings" ON public.site_settings FOR ALL USING (true) WITH CHECK (true);

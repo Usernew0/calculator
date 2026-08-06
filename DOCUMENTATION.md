@@ -51,6 +51,11 @@ Elegant FX is engineered with a mobile-first, desktop-optimized responsive layou
 ## 📝 Modification & Update Log (Auto-Updated)
 
 - **2026-08-06**:
+  - **Admin Panel Favicon & Branding Management**: Added a comprehensive Website Favicon & Branding Settings section in `AdminPanel.tsx` allowing system administrators to customize the website icon (`favicon.ico` / `<link rel="icon">`) displayed across browser tabs, mobile web shortcuts, and bookmarks.
+    - Added `src/utils/favicon.ts` with 5 crisp SVG preset icons (Golden Freight Ship, Global Trade Network, Emerald Logistics Box, Express Lightning Trade, Gold Shield Security) and dynamic document `<head>` favicon replacement.
+    - Supported uploading custom image files (`.ico`, `.png`, `.svg`, `.jpg`, `.webp`) with automatic HTML5 canvas downscaling to 64x64 Data-URIs.
+    - Supported pasting external favicon image URLs with live browser tab mockup preview.
+    - Persisted custom favicon in Firestore collection (`site_settings/branding`), Supabase (`site_settings` table), and `localStorage` with real-time listener synchronization across all connected clients.
   - **Instant Manual Rate Refresh & Cache Bypassing**: Enhanced manual rate update button in `CurrencyRatesView.tsx` and `App.tsx` by adding `cache: "no-store"` and cache-busting timestamp parameters (`_t=${timestamp}`) to `/api/exchange-rates/refresh` and `https://www.xe.com/currencyconverter/convert/?Amount=1&From=USD&To=EGP`. Ensured `setRates` state replaces state references to force immediate, high-accuracy recalculation across the calculator and live rates views upon pressing the Update button. Added real-time visual toast confirmation showing the updated USD/EGP rate.
   - **Direct XE Pair Fetching & 15s Cache**: Updated XE scraping endpoint in `server.ts` to query `From=USD&To=EGP` directly instead of a generic `EUR` conversion page. This guarantees exact live mid-market USD to EGP rates (~49.72 EGP) matching XE.com's live converter, and reduced server cache TTL to 15s.
   - **30-Second Auto-Refresh Default**: Updated default exchange rate polling interval from 60 seconds to 30 seconds across `App.tsx` and `CurrencyRatesView.tsx` to keep XE Currency Converter live rates constantly fresh.

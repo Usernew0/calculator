@@ -48,7 +48,17 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 
 ---
 
-### 4. UI & Accessibility Design
+### 4. Admin Control Panel & Website Favicon Settings
+- **Website Favicon & Branding Management**: System administrators can set and publish custom website favicons (`favicon.ico` / `<link rel="icon">`) that display in browser tabs, mobile web shortcuts, and bookmarks for all site visitors.
+- **5 High-Resolution SVG Presets**: Built-in SVG favicon presets (Golden Freight Ship, Global Trade Network, Emerald Logistics Box, Express Lightning Trade, Gold Shield Security).
+- **Custom Image Upload**: Support uploading `.ico`, `.png`, `.svg`, `.jpg`, `.webp` images with auto HTML5 canvas downscaling to 64x64 Data-URIs.
+- **External URL Input & Live Mockup**: Enter custom image URLs and preview the tab icon in a simulated live browser header mockup before publishing.
+- **Firestore & Supabase Real-Time Sync**: Favicon updates publish instantly to Firestore (`site_settings/branding`), Supabase (`site_settings`), and `localStorage`.
+- **User Account Management**: Full management of user accounts, password resets, role permissions, and dual database diagnostics (Firestore & Supabase).
+
+---
+
+### 5. UI & Accessibility Design
 - **Responsive Web & Mobile Layout**:
   - **Desktop**: Multi-column layout with sticky calculation result sidecards and side-by-side analytics.
   - **Mobile**: Touch-friendly inputs (min 44px height), stacked vertical forms, collapsible mobile drawer menu with hamburger toggle, and horizontally scrollable tables/tickers (`no-scrollbar`).

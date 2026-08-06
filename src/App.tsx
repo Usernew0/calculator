@@ -18,7 +18,14 @@ import {
   deleteCalculationFromFirestore,
   clearAllCalculationsFromFirestore,
   seedDefaultDataToFirestore,
+  getSiteFaviconFromFirestore,
+  subscribeToSiteFavicon,
 } from './lib/firebase';
+import {
+  updateWebsiteFavicon,
+  getSavedFavicon,
+  setSavedFaviconLocally,
+} from './utils/favicon';
 
 const LOCAL_STORAGE_KEY = 'cargo_profit_fx_history_v1';
 
@@ -51,9 +58,41 @@ export default function App() {
     return null;
   });
 
-  // Auto-seed Firestore on initial app mount
+  // Auto-seed Firestore on initial app mount and initialize site Favicon
   useEffect(() => {
     seedDefaultDataToFirestore();
+
+    // 1. Apply local saved favicon immediately
+    const initialFavicon = getSavedFavicon();
+    updateWebsiteFavicon(initialFavicon);
+
+    // 2. Fetch global site favicon from Firestore
+    getSiteFaviconFromFirestore().then((remoteFavicon) => {
+      if (remoteFavicon) {
+        setSavedFaviconLocally(remoteFavicon);
+      }
+    });
+
+    // 3. Listen to realtime site favicon changes from Firestore
+    const unsubscribeFavicon = subscribeToSiteFavicon((newFavicon) => {
+      if (newFavicon) {
+        setSavedFaviconLocally(newFavicon);
+      }
+    });
+
+    // 4. Custom window event listener for instant local favicon updates
+    const handleFaviconEvent = (e: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      if (customEvent.detail) {
+        updateWebsiteFavicon(customEvent.detail);
+      }
+    };
+    window.addEventListener('cargo_favicon_changed', handleFaviconEvent);
+
+    return () => {
+      unsubscribeFavicon();
+      window.removeEventListener('cargo_favicon_changed', handleFaviconEvent);
+    };
   }, []);
 
   // Guard admin tab

@@ -505,6 +505,70 @@ export async function syncAllDataWithFirestore(): Promise<{
   };
 }
 
+const SETTINGS_COLLECTION = "site_settings";
+
+/**
+ * Save site favicon URL / Data-URI to Firestore and local cache
+ */
+export async function saveSiteFaviconToFirestore(faviconUrl: string): Promise<void> {
+  if (!faviconUrl) return;
+  try {
+    await ensureAuth();
+    const docRef = doc(db, SETTINGS_COLLECTION, "branding");
+    await setDoc(
+      docRef,
+      {
+        faviconUrl,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+    console.info("Site favicon saved to Firestore site_settings/branding document.");
+  } catch (error: any) {
+    handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/branding`);
+  }
+}
+
+/**
+ * Fetch saved site favicon from Firestore
+ */
+export async function getSiteFaviconFromFirestore(): Promise<string | null> {
+  try {
+    await ensureAuth();
+    const docRef = doc(db, SETTINGS_COLLECTION, "branding");
+    const snap = await getDoc(docRef);
+    if (snap.exists() && snap.data()?.faviconUrl) {
+      return snap.data().faviconUrl as string;
+    }
+  } catch (error: any) {
+    console.info("Firestore site favicon fetch notice:", error?.message || error);
+  }
+  return null;
+}
+
+/**
+ * Real-time subscription to site favicon / branding changes
+ */
+export function subscribeToSiteFavicon(callback: (faviconUrl: string) => void): () => void {
+  try {
+    const docRef = doc(db, SETTINGS_COLLECTION, "branding");
+    return onSnapshot(
+      docRef,
+      (snapshot) => {
+        if (snapshot.exists() && snapshot.data()?.faviconUrl) {
+          callback(snapshot.data().faviconUrl as string);
+        }
+      },
+      (error) => {
+        console.info("Notice: Site favicon subscription status:", error?.message || error);
+      }
+    );
+  } catch (err) {
+    console.info("Realtime site favicon setup notice:", err);
+    return () => {};
+  }
+}
+
 /**
  * Clear calculation records from Supabase and Firestore for a specific user (or all if omitted)
  */
