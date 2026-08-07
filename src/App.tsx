@@ -328,7 +328,7 @@ export default function App() {
         }
       }
     } catch (err) {
-      console.warn('Server rate endpoint failed, attempting direct live client fetch...', err);
+      // Server endpoint temporary offline, attempt client fallback quietly
     }
 
     // Direct client live fallback if server is unreachable
@@ -345,7 +345,7 @@ export default function App() {
           }
         }
       } catch (err) {
-        console.warn('Direct client exchange rate fetch failed', err);
+        // Direct fallback attempt quiet catch
       }
     }
 

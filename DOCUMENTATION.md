@@ -50,6 +50,11 @@ Elegant FX is engineered with a mobile-first, desktop-optimized responsive layou
 
 ## 📝 Modification & Update Log (Auto-Updated)
 
+- **2026-08-07**:
+  - **Exchange Rate Timeout & Fail-Safe Upgrades**: Updated `server.ts` with `fetchWithTimeout` (using AbortController with 3.5s limit) for all external rate sources (XE Currency Converter, Open Exchange Rates, ExchangeRate-API, jsDelivr) to prevent Express route hanging or network timeout errors. Pre-initialized `cachedRates` with baseline fallback rates so `/api/exchange-rates` always returns valid 200 OK JSON responses.
+  - **Quiet Error Handling**: Cleaned up client-side `fetchExchangeRates` in `App.tsx` to handle network fallback quietly without emitting warning stack traces to the browser console.
+  - **Firestore Transport Warning Silencing**: Configured `setLogLevel('error')` in `src/lib/firebase.ts` to suppress non-fatal internal WebChannel RPC Listen transport reconnection warnings in browser logs during temporary network shifts.
+
 - **2026-08-06**:
   - **Admin Panel Favicon & Branding Management**: Added a comprehensive Website Favicon & Branding Settings section in `AdminPanel.tsx` allowing system administrators to customize the website icon (`favicon.ico` / `<link rel="icon">`) displayed across browser tabs, mobile web shortcuts, and bookmarks.
     - Added `src/utils/favicon.ts` with 5 crisp SVG preset icons (Golden Freight Ship, Global Trade Network, Emerald Logistics Box, Express Lightning Trade, Gold Shield Security) and dynamic document `<head>` favicon replacement.

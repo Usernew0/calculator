@@ -10,7 +10,8 @@ import {
   query,
   orderBy,
   getDocs,
-  writeBatch
+  writeBatch,
+  setLogLevel
 } from "firebase/firestore";
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { CalculationResult, UserProfile } from "../types";
@@ -35,6 +36,9 @@ const app = initializeApp(firebaseConfig);
 export const db = firebaseConfig.firestoreDatabaseId
   ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
   : getFirestore(app);
+
+// Suppress non-fatal Firestore WebChannel transport reconnect stream warnings
+setLogLevel('error');
 
 export const auth = getAuth(app);
 
