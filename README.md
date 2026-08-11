@@ -48,6 +48,28 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 
 ---
 
+### 4. Product & Cargo Image Gallery & Edit Controls
+- **Global Product Catalog Info Modal**: The "Edit Info" button on product catalog cards (`EditProductInfoModal.tsx`) updates global product attributes (Product Name/Title, SKU, and Product Photo) across all calculations in that product group.
+- **Transaction Date Control & Editing**: Full date input (`transactionDate`) supported during both initial trade calculation creation (`CalculatorForm.tsx`) and transaction editing (`EditTransactionModal.tsx`).
+- **Selling Price & Profit Strategy Controls in Edit Modal**: `EditTransactionModal.tsx` provides target selling price strategy options (Direct Selling Price, Profit Margin %, Cost Markup %) with real-time recalculation preview cards and clear high-contrast inputs.
+- **Scoped Trade Direction Transaction Filtering**: Filtering by Trade Direction (`import` vs `export`) or Freight Method in `GalleryView.tsx` scopes transaction records directly inside product group modals (`modalFilteredRecords`), updating matching transaction counts and record listings.
+- **Universal Record Deletion**: Dedicated Delete buttons (`Trash2`) with safety confirmation modals available across both the **Dashboard Historical Calculation Table** (`DashboardView.tsx`) and the **Gallery Product Group Records Modal** (`GalleryView.tsx`), complete with batch multi-select delete and clear-all operations.
+- **Clean Card Action Bar**: Main product cards feature a clean 2-button action layout ("View Records" and "Edit Info"). The "Duplicate in Calculator" button is located inside the View Records modal alongside "Edit Transaction", "Delete", and "PDF Export".
+- **Enhanced Multi-Transaction Filtering**: Search, Trade Direction (Import/Export), and Freight Mode filters evaluate across **all historical calculations** in each product catalog group. Portfolio header totals adjust dynamically to sum values specifically for transactions matching active filter criteria.
+- **Real-Time Modal Sync**: The Product Records detail modal dynamically updates in real-time when saving transaction edits, instantly reflecting new numbers, images, and totals without closing the modal.
+- **Card Click Focus & Header Auto-Calculation**: Pressing any product card in the gallery highlights the card and focuses the Gallery Header KPI section to auto-calculate all aggregate metrics (total cargo units, purchase cost FOB, landed value, sales revenue, net profit) specifically for that product card, with a 1-click reset button to view overall catalog totals.
+- **Comprehensive Multi-Record Header Totals**: Gallery header totals aggregate all units and calculations across historical trade records for complete financial portfolio oversight.
+- **Edit Transaction & Image Capability**: Interactive edit modal (`EditTransactionModal.tsx`) available in both the **Gallery View** and the **History Dashboard Table**. Importers/exporters can modify product titles, SKUs, supplier costs, supplier currency, target currency, trade direction (Import/Export), freight mode, and upload/replace product pictures or invoice documents. Automatically recalculates all landed costs and profit margins in real-time.
+- **Catalog Photo View**: Interactive "Gallery" tab (`GalleryView.tsx`) displaying all saved product photos, invoice documentation, and cargo pictures.
+- **Header Portfolio Summary (Column Totals)**: Hero section header featuring real-time KPI aggregate totals across the catalog: Total Catalog Products, Attached Photos Count, Total Cargo Units, Total Purchase Value (FOB in original supplier currencies and target currency), Total Landed Cost Value, Total Projected Sales Revenue, and Total Estimated Net Profit with Margin %.
+- **Product Cost Price View**: Displays Supplier Unit Purchase Price (FOB factory cost in supplier currency and converted target currency) directly on product catalog cards and inside detailed calculation record breakdowns.
+- **Automatic Catalog Grouping**: Groups historical trade calculations by SKU and Title, showing product images, trade direction badges (Import/Export), supplier unit cost, landed cost per unit, suggested selling price, net profit margin %, and calculation records count.
+- **High-Res Lightbox Inspector**: Full-screen modal to inspect product photos with zoom controls and 1-click photo download.
+- **Product Calculation History Drawer**: Modal view displaying all historical calculation entries for a specific product with supplier cost prices, total purchase costs, landed costs, PDF reports, and 1-click duplicate into calculator.
+- **Responsive Filtering & Search**: Instant search by Product Title, SKU, or Supplier, with filters for Trade Direction (Import/Export), Photo Availability, and Freight Mode.
+
+---
+
 ### 4. Admin Control Panel & Website Favicon Settings
 - **Website Favicon & Branding Management**: System administrators can set and publish custom website favicons (`favicon.ico` / `<link rel="icon">`) that display in browser tabs, mobile web shortcuts, and bookmarks for all site visitors.
 - **5 High-Resolution SVG Presets**: Built-in SVG favicon presets (Golden Freight Ship, Global Trade Network, Emerald Logistics Box, Express Lightning Trade, Gold Shield Security).

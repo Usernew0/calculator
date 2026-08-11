@@ -24,6 +24,7 @@ import {
   BookOpen,
   ArrowDownLeft,
   ArrowUpRight,
+  Calendar,
 } from 'lucide-react';
 import { HsCodeLibraryModal } from './HsCodeLibraryModal';
 import { HsCodeItem } from '../data/hsCodes';
@@ -448,6 +449,19 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
                   onChange={(e) => handleChange('quantity', e.target.value === '' ? 0 : Math.max(0, parseInt(e.target.value) || 0))}
                   placeholder={t.quantityPlaceholder}
                   className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 font-semibold focus:outline-hidden focus:ring-2 focus:ring-emerald-500/30"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1 flex items-center gap-1">
+                  <Calendar className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>{t.transactionDateLabel || (lang === 'ar' ? 'تاريخ العملية' : 'Transaction Date')}</span>
+                </label>
+                <input
+                  type="date"
+                  value={formData.transactionDate || new Date().toISOString().split('T')[0]}
+                  onChange={(e) => handleChange('transactionDate', e.target.value)}
+                  className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-mono font-medium focus:outline-hidden focus:ring-2 focus:ring-emerald-500/30"
                 />
               </div>
 

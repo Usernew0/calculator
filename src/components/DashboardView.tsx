@@ -41,8 +41,10 @@ import {
   Calendar,
   ArrowDownLeft,
   ArrowUpRight,
+  Edit3,
 } from 'lucide-react';
 import { ClientQuoteModal } from './ClientQuoteModal';
+import { EditTransactionModal } from './EditTransactionModal';
 
 interface DashboardViewProps {
   history: CalculationResult[];
@@ -50,6 +52,8 @@ interface DashboardViewProps {
   onBatchDeleteRecords?: (ids: string[]) => void;
   onClearAllHistory: () => void;
   onLoadIntoCalculator: (result: CalculationResult) => void;
+  onSaveRecord?: (result: CalculationResult) => void;
+  rates?: Record<string, number>;
   t: typeof translations['en'];
   lang: Language;
   currentUserCompany?: string;
@@ -61,6 +65,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onBatchDeleteRecords,
   onClearAllHistory,
   onLoadIntoCalculator,
+  onSaveRecord,
+  rates = {},
   t,
   lang,
   currentUserCompany = '',
@@ -77,6 +83,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [selectedQuoteItems, setSelectedQuoteItems] = useState<CalculationResult[] | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
+  const [editingRecord, setEditingRecord] = useState<CalculationResult | null>(null);
 
   // Filtered & Sorted list
   const filteredHistory = useMemo(() => {
@@ -542,10 +549,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
             {history.length > 0 && (
               <button
+                type="button"
                 onClick={() => setShowClearAllConfirm(true)}
-                className="text-xs text-rose-600 dark:text-rose-400 hover:text-rose-800 dark:hover:text-rose-300 font-bold px-3 py-2 rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors cursor-pointer min-h-[40px] border border-transparent hover:border-rose-200 dark:hover:border-rose-900/50"
+                className="px-3.5 py-2 text-xs font-black text-rose-600 dark:text-rose-400 hover:text-white bg-rose-500/10 hover:bg-rose-600 border border-rose-500/30 rounded-xl transition-all cursor-pointer min-h-[40px] flex items-center gap-1.5 shrink-0 shadow-xs active:scale-95 group"
+                title={lang === 'ar' ? 'مسح جميع الحسبات المحفوظة' : 'Clear all saved calculations'}
               >
-                {t.clearAll}
+                <Trash2 className="w-4 h-4 text-rose-500 group-hover:text-white shrink-0 transition-colors" />
+                <span>{t.clearAll || t.clearAllBtn || (lang === 'ar' ? 'مسح الكل' : 'Clear All')}</span>
               </button>
             )}
           </div>
@@ -784,6 +794,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     </button>
 
                     <button
+                      onClick={() => setEditingRecord(item)}
+                      className="p-2.5 text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 bg-emerald-500/10 dark:bg-emerald-950/30 border border-emerald-500/30 rounded-xl min-h-[44px] min-w-[44px] flex items-center justify-center transition-all active:scale-95"
+                      title={t.editTransactionBtn || (lang === 'ar' ? 'تعديل المعاملة والصورة' : 'Edit Transaction')}
+                    >
+                      <Edit3 className="w-4 h-4 shrink-0 text-emerald-500" />
+                    </button>
+
+                    <button
                       onClick={() => setSelectedDetailModal(item)}
                       className="p-2.5 text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 bg-indigo-500/10 dark:bg-indigo-950/30 border border-indigo-500/30 rounded-xl min-h-[44px] min-w-[44px] flex items-center justify-center transition-all active:scale-95"
                       title={t.inspectDetails}
@@ -884,7 +902,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
                 <th className="py-3.5 px-4 text-right rtl:text-left text-slate-300">{t.thMargin}</th>
 
-                <th className="py-3.5 px-4 text-center text-slate-300">{t.thActions}</th>
+                <th className="py-3.5 px-4 text-center text-slate-300 min-w-[280px] whitespace-nowrap">{t.thActions}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-medium">
@@ -974,7 +992,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       <td className="py-3 px-4 text-right rtl:text-left font-bold text-blue-600 dark:text-blue-400">
                         {item.actualMarginPercentage.toFixed(1)}%
                       </td>
-                      <td className="py-3 px-4">
+                      <td className="py-3 px-4 min-w-[280px] whitespace-nowrap">
                         <div className="flex items-center justify-center gap-1">
                           <button
                             type="button"
@@ -984,6 +1002,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                           >
                             <FileText className="w-3.5 h-3.5 text-blue-500 shrink-0" />
                             <span>{lang === 'ar' ? 'عرض سعر' : 'Offer'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setEditingRecord(item)}
+                            title={t.editTransactionBtn || (lang === 'ar' ? 'تعديل المعاملة والصورة' : 'Edit Transaction & Image')}
+                            className="p-1.5 bg-emerald-500/10 hover:bg-emerald-500/25 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 rounded-lg font-bold cursor-pointer text-xs flex items-center justify-center transition-all shadow-2xs hover:scale-105 active:scale-95"
+                          >
+                            <Edit3 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                           </button>
 
                           <button
@@ -1517,6 +1544,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Edit Transaction Modal */}
+      <EditTransactionModal
+        item={editingRecord}
+        isOpen={!!editingRecord}
+        onClose={() => setEditingRecord(null)}
+        onSave={(updatedResult) => {
+          if (onSaveRecord) {
+            onSaveRecord(updatedResult);
+          }
+          setEditingRecord(null);
+        }}
+        rates={rates}
+        t={t}
+        lang={lang}
+      />
     </div>
   );
 };

@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import { Ship, RefreshCw, BarChart2, Calculator, DollarSign, Clock, ArrowUpRight, ArrowDownRight, Sun, Moon, Globe, FileText, UserCheck, User, LogOut, ShieldCheck, Menu, X } from 'lucide-react';
+import { Ship, RefreshCw, BarChart2, Calculator, DollarSign, Clock, ArrowUpRight, ArrowDownRight, Sun, Moon, Globe, FileText, UserCheck, User, LogOut, ShieldCheck, Menu, X, Image as ImageIcon } from 'lucide-react';
 import { POPULAR_CURRENCIES } from '../data/currencies';
 import { translations, Language } from '../data/translations';
 import { UserProfile } from '../types';
 
 interface HeaderProps {
-  activeTab: 'calculator' | 'rates' | 'dashboard' | 'admin';
-  setActiveTab: (tab: 'calculator' | 'rates' | 'dashboard' | 'admin') => void;
+  activeTab: 'calculator' | 'rates' | 'dashboard' | 'gallery' | 'admin';
+  setActiveTab: (tab: 'calculator' | 'rates' | 'dashboard' | 'gallery' | 'admin') => void;
   rates: Record<string, number>;
   lastUpdated: string | null;
   isLoadingRates: boolean;
@@ -233,6 +233,18 @@ export const Header: React.FC<HeaderProps> = ({
               )}
             </button>
 
+            <button
+              onClick={() => setActiveTab('gallery')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all cursor-pointer ${
+                activeTab === 'gallery'
+                  ? 'bg-emerald-500 text-slate-950 shadow-md font-semibold'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+              }`}
+            >
+              <ImageIcon className="w-4 h-4" />
+              <span>{t.galleryTab}</span>
+            </button>
+
             {userProfile?.role === 'admin' && (
               <button
                 onClick={() => setActiveTab('admin')}
@@ -328,6 +340,18 @@ export const Header: React.FC<HeaderProps> = ({
                   {historyCount}
                 </span>
               )}
+            </button>
+
+            <button
+              onClick={() => { setActiveTab('gallery'); setIsMobileMenuOpen(false); }}
+              className={`flex items-center justify-center gap-2 p-3 rounded-xl text-sm font-bold cursor-pointer ${
+                activeTab === 'gallery'
+                  ? 'bg-emerald-500 text-slate-950 shadow-md'
+                  : 'bg-slate-800/90 text-slate-200 hover:bg-slate-700'
+              }`}
+            >
+              <ImageIcon className="w-4 h-4" />
+              <span>{t.galleryTab}</span>
             </button>
 
             {userProfile?.role === 'admin' && (

@@ -203,7 +203,7 @@ export function calculateTradeAndFreight(
 
   return {
     id: `calc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-    createdAt: new Date().toISOString(),
+    createdAt: input.transactionDate ? new Date(input.transactionDate).toISOString() : new Date().toISOString(),
     input,
     exchangeRate,
     rateTimestamp: new Date().toISOString(),

@@ -29,6 +29,7 @@ export interface CalculationInput {
   skuSupplier: string;
   category: string;
   tradeDirection?: TradeDirection; // 'import' | 'export'
+  transactionDate?: string; // Optional user-set transaction date (ISO or YYYY-MM-DD)
   quantity: number;
   invoiceImage?: string; // Captured camera photo or uploaded document (Base64 / Data URL)
   

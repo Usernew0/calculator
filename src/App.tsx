@@ -4,6 +4,7 @@ import { Header } from './components/Header';
 import { CalculatorForm } from './components/CalculatorForm';
 import { CurrencyRatesView } from './components/CurrencyRatesView';
 import { DashboardView } from './components/DashboardView';
+import { GalleryView } from './components/GalleryView';
 import { CalculationResult, CalculationInput, RatesResponse, UserProfile } from './types';
 import { POPULAR_CURRENCIES } from './data/currencies';
 import { translations, Language } from './data/translations';
@@ -30,7 +31,7 @@ import {
 const LOCAL_STORAGE_KEY = 'cargo_profit_fx_history_v1';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'calculator' | 'rates' | 'dashboard' | 'admin'>('calculator');
+  const [activeTab, setActiveTab] = useState<'calculator' | 'rates' | 'dashboard' | 'gallery' | 'admin'>('calculator');
   const [calculatorInitialInput, setCalculatorInitialInput] = useState<CalculationInput | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(() => {
     try {
@@ -582,9 +583,24 @@ export default function App() {
               onBatchDeleteRecords={handleBatchDeleteRecords}
               onClearAllHistory={handleClearAllHistory}
               onLoadIntoCalculator={handleLoadIntoCalculator}
+              onSaveRecord={handleSaveToHistory}
+              rates={rates}
               t={t}
               lang={lang}
               currentUserCompany={userProfile?.companyName || userProfile?.fullName || ''}
+            />
+          )}
+
+          {activeTab === 'gallery' && (
+            <GalleryView
+              history={history}
+              onLoadIntoCalculator={handleLoadIntoCalculator}
+              onNavigateToCalculator={() => setActiveTab('calculator')}
+              onSaveRecord={handleSaveToHistory}
+              onDeleteRecord={handleDeleteRecord}
+              rates={rates}
+              t={t}
+              lang={lang}
             />
           )}
         </main>

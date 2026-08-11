@@ -124,3 +124,11 @@ export function detectUserDefaultCurrency(): string {
 
   return 'EGP';
 }
+
+export const FREIGHT_METHODS = [
+  { id: 'air_express', nameEn: 'Air Express Freight', nameAr: 'شحن جوي سريع' },
+  { id: 'air_standard', nameEn: 'Air Cargo Standard', nameAr: 'شحن جوي عادي' },
+  { id: 'sea_lcl', nameEn: 'Sea Freight LCL (Groupage)', nameAr: 'شحن بحري جزئي (LCL)' },
+  { id: 'sea_fcl', nameEn: 'Sea Freight FCL (Container)', nameAr: 'شحن بحري حاوية (FCL)' },
+  { id: 'road_freight', nameEn: 'Road Land Freight', nameAr: 'شحن بري' },
+];
