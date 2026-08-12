@@ -12,6 +12,14 @@ import {
   getSiteFaviconFromFirestore,
 } from '../lib/firebase';
 import {
+  getAllUsersApi,
+  saveUserApi,
+  deleteUserApi,
+  saveSiteFaviconApi,
+  getSiteFaviconApi,
+  checkSupabaseHealthApi,
+} from '../lib/api';
+import {
   FAVICON_PRESETS,
   DEFAULT_FAVICON,
   getSavedFavicon,
@@ -794,12 +802,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
     try {
       const oldUsername = editingUser?.username?.trim().toLowerCase();
+      await saveUserApi(updatedProfile, oldUsername);
       await saveUserProfileToFirestore(updatedProfile, oldUsername);
-      showNotification('success', lang === 'ar' ? 'تم حفظ بيانات المستخدم بنجاح في قاعدة البيانات' : 'User account updated in Firestore database successfully');
+      showNotification('success', lang === 'ar' ? 'تم حفظ بيانات المستخدم بنجاح في قاعدة البيانات' : 'User account updated in database successfully');
       setIsModalOpen(false);
       await fetchUsers();
-    } catch (err) {
-      showNotification('error', lang === 'ar' ? 'حدث خطأ أثناء حفظ البيانات' : 'Failed to save user account to database');
+    } catch (err: any) {
+      showNotification('error', err?.message || (lang === 'ar' ? 'حدث خطأ أثناء حفظ البيانات' : 'Failed to save user account to database'));
     } finally {
       setIsSaving(false);
     }
@@ -816,17 +825,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     if (!userToDelete) return;
     setIsDeletingUser(true);
     try {
+      await deleteUserApi(userToDelete.username);
       await deleteUserFromFirestore(userToDelete.username);
       showNotification(
         'success',
         lang === 'ar'
           ? `تم حذف حساب المستخدم "${userToDelete.username}" بنجاح من قاعدة البيانات`
-          : `User account "${userToDelete.username}" deleted from Firestore successfully`
+          : `User account "${userToDelete.username}" deleted from database successfully`
       );
       setUserToDelete(null);
       await fetchUsers();
-    } catch (err) {
-      showNotification('error', lang === 'ar' ? 'حدث خطأ أثناء حذف الحساب' : 'Failed to delete user account');
+    } catch (err: any) {
+      showNotification('error', err?.message || (lang === 'ar' ? 'حدث خطأ أثناء حذف الحساب' : 'Failed to delete user account'));
     } finally {
       setIsDeletingUser(false);
     }
@@ -836,6 +846,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const newStatus = user.status === 'suspended' ? 'active' : 'suspended';
     const updated: UserProfile = { ...user, status: newStatus };
     try {
+      await saveUserApi(updated);
       await saveUserProfileToFirestore(updated);
       showNotification(
         'success',

@@ -23,6 +23,13 @@ import {
   subscribeToSiteFavicon,
 } from './lib/firebase';
 import {
+  getCalculationsApi,
+  saveCalculationApi,
+  deleteCalculationApi,
+  clearCalculationsApi,
+  getSiteFaviconApi,
+} from './lib/api';
+import {
   updateWebsiteFavicon,
   getSavedFavicon,
   setSavedFaviconLocally,
@@ -372,9 +379,10 @@ export default function App() {
     };
 
     try {
+      await saveCalculationApi(resultWithUser);
       await saveCalculationToFirestore(resultWithUser);
     } catch (err: any) {
-      console.info('Firestore notice (local storage active):', err?.message || err);
+      console.info('API save calculation notice:', err?.message || err);
     }
 
     setHistory((prev) => {
@@ -390,9 +398,10 @@ export default function App() {
 
   const handleDeleteRecord = async (id: string) => {
     try {
+      await deleteCalculationApi(id);
       await deleteCalculationFromFirestore(id);
     } catch (err: any) {
-      console.info('Firestore notice (local storage active):', err?.message || err);
+      console.info('API delete calculation notice:', err?.message || err);
     }
     setHistory((prev) => prev.filter((item) => item.id !== id));
   };
@@ -400,9 +409,10 @@ export default function App() {
   const handleBatchDeleteRecords = async (ids: string[]) => {
     for (const id of ids) {
       try {
+        await deleteCalculationApi(id);
         await deleteCalculationFromFirestore(id);
       } catch (err: any) {
-        console.info('Firestore notice (local storage active):', err?.message || err);
+        console.info('API batch delete notice:', err?.message || err);
       }
     }
     setHistory((prev) => prev.filter((item) => !ids.includes(item.id)));
@@ -412,11 +422,12 @@ export default function App() {
     if (window.confirm(lang === 'ar' ? 'هل أنت تأكد من رغبتك في مسح كافة السجلات التاريخية؟' : 'Are you sure you want to clear all historical calculation records?')) {
       try {
         const filterUserId = (userProfile?.role === 'admin' || userProfile?.username?.toLowerCase() === 'admin')
-          ? null
+          ? undefined
           : userProfile?.userId;
+        await clearCalculationsApi(filterUserId);
         await clearAllCalculationsFromFirestore(filterUserId);
       } catch (err: any) {
-        console.info('Firestore notice (local storage active):', err?.message || err);
+        console.info('API clear all calculations notice:', err?.message || err);
       }
       setHistory([]);
     }

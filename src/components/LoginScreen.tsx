@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { UserProfile } from '../types';
-import { saveUserProfileToFirestore, getUserProfileFromFirestore } from '../lib/firebase';
+import { loginUserApi } from '../lib/api';
 import { translations, Language } from '../data/translations';
 import {
   Ship,
@@ -73,10 +73,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     setErrorMsg(null);
 
     try {
-      // Check if user profile exists in Firestore database / seed records
-      const existingUser = await getUserProfileFromFirestore(cleanUsername);
+      // Authenticate via secure backend API endpoint
+      const { user } = await loginUserApi(cleanUsername, cleanPassword);
 
-      if (!existingUser) {
+      if (!user) {
         setErrorMsg(
           lang === 'ar'
             ? 'حساب المستخدم غير مسجل لدينا. يرجى التواصل مع مسؤول النظام لإضافة حسابك.'
@@ -86,32 +86,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         return;
       }
 
-      if (existingUser.status === 'suspended') {
-        setErrorMsg(
-          lang === 'ar'
-            ? 'هذا الحساب معطل من قبل مدير النظام'
-            : 'This account has been suspended by the system administrator.'
-        );
-        setIsSubmitting(false);
-        return;
-      }
-
-      // Validate password for existing user
-      if (existingUser.password && existingUser.password !== cleanPassword) {
-        setErrorMsg(t.invalidPasswordMsg);
-        setIsSubmitting(false);
-        return;
-      }
-
       const profileSchema: UserProfile = {
-        ...existingUser,
+        ...user,
         lastLoginAt: new Date().toISOString(),
       };
 
-      // Update user last login timestamp in Firestore database
-      await saveUserProfileToFirestore(profileSchema);
-
-      // Persist in localStorage according to rememberMe preference
+      // Persist in localStorage/sessionStorage according to rememberMe preference
       if (rememberMe) {
         localStorage.setItem('cargo_remember_username', cleanUsername);
         localStorage.setItem('cargo_remember_me', 'true');
@@ -131,9 +111,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     } catch (err: any) {
       console.error('Error during authentication:', err);
       setErrorMsg(
-        lang === 'ar'
-          ? 'حدث خطأ يرجى المحاولة مرة أخرى.'
-          : 'connection error. Please try again.'
+        err?.message ||
+        (lang === 'ar'
+          ? 'اسم المستخدم أو كلمة المرور غير صحيحة.'
+          : 'Invalid username or password.')
       );
       setIsSubmitting(false);
     }

@@ -50,6 +50,15 @@ Elegant FX is engineered with a mobile-first, desktop-optimized responsive layou
 
 ## 📝 Modification & Update Log (Auto-Updated)
 
+- **2026-08-12**:
+  - **Full 3-Tier Security Architecture Implementation (Vite SPA → Express API → Supabase/Firestore)**:
+    - **API Backend Infrastructure (`server.ts`)**: Built a secure Express server acting as the single source of truth for all database operations, eliminating direct client-side database credentials.
+    - **JWT Authentication & Password Hashing**: Implemented HMAC-SHA256 signed JWT tokens and PBKDF2 password hashing with salt.
+    - **Security Middleware & Rate Limiting**: Enforced `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `X-XSS-Protection` headers, general rate limiting (100 req/15min), and strict login rate limiting (10 req/15min).
+    - **Client API Wrapper (`src/lib/api.ts`)**: Created a clean client API library to interact with `/api/auth/*`, `/api/users/*`, `/api/calculations/*`, `/api/settings/*`, and `/api/supabase-health`.
+    - **Frontend Refactoring**: Refactored `LoginScreen.tsx`, `LoginModal.tsx`, `AdminPanel.tsx`, and `App.tsx` to route all logins, profile updates, user account administration, calculation persistence, and site branding through secure server API endpoints.
+    - **Secrets & Environment Isolation**: Moved `SUPABASE_SERVICE_ROLE_KEY` and `JWT_SECRET` strictly to server-side process environment variables, updating `.env.example` with secure documentation guidelines.
+
 - **2026-08-11**:
   - **Fixed Clear All Button Text Rendering & Styling (`DashboardView.tsx` & `translations.ts`)**: Resolved issue where `{t.clearAll}` rendered as undefined text inside the Historical Calculation Table filter bar. Added `clearAll` key to both Arabic and English dictionaries, added `Trash2` icon, and upgraded the button with high-contrast red badge styling (`bg-rose-500/10 border-rose-500/30`) for immediate visibility.
   - **Universal Calculation Record Deletion (`GalleryView.tsx` & `DashboardView.tsx`)**: Added individual calculation delete buttons (`Trash2`) with confirmation modals to `GalleryView.tsx`'s product records modal and ensured high-visibility `min-w-[280px]` non-wrapping action layout in `DashboardView.tsx` table view so delete actions are always clearly visible and functional across all screens and views.

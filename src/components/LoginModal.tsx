@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { UserProfile } from '../types';
-import { saveUserProfileToFirestore } from '../lib/firebase';
+import { updateSelfProfileApi } from '../lib/api';
 import { Language } from '../data/translations';
 import {
   UserCheck,
@@ -157,25 +157,18 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
     setIsSubmitting(true);
 
-    const profile: UserProfile = {
-      userId: currentUser?.userId || ('USR-' + Math.floor(100000 + Math.random() * 900000)),
-      username: cleanUsername,
-      password: finalPassword || currentUser?.password || '',
-      role: currentUser?.role || 'user',
-      status: currentUser?.status || 'active',
-      name: name.trim() || cleanUsername,
-      email: email.trim(),
-      company: company.trim(),
-      createdAt: currentUser?.createdAt || new Date().toISOString(),
-      lastLoginAt: new Date().toISOString(),
-    };
-
     try {
-      // Save ID and Profile record directly to Firestore database
-      await saveUserProfileToFirestore(profile);
+      // Update profile securely via backend API
+      const updatedUser = await updateSelfProfileApi({
+        oldPassword: oldPassword.trim() || undefined,
+        newPassword: newPassword.trim() || undefined,
+        name: name.trim(),
+        email: email.trim(),
+        company: company.trim(),
+      });
 
       // Persist in localStorage
-      localStorage.setItem('cargo_user_profile', JSON.stringify(profile));
+      localStorage.setItem('cargo_user_profile', JSON.stringify(updatedUser));
 
       const successTxt = lang === 'ar'
         ? 'تم حفظ التغييرات والبيانات بنجاح !'
@@ -184,17 +177,18 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       setSuccessMsg(successTxt);
 
       setTimeout(() => {
-        onLoginSuccess(profile);
+        onLoginSuccess(updatedUser);
         setIsSubmitting(false);
         setSuccessMsg(null);
         onClose();
       }, 1000);
     } catch (err: any) {
-      console.error('Error saving user profile to database:', err);
-      localStorage.setItem('cargo_user_profile', JSON.stringify(profile));
-      onLoginSuccess(profile);
+      console.error('Error saving user profile:', err);
+      setErrorMsg(
+        err?.message ||
+        (lang === 'ar' ? 'فشل حفظ التغييرات.' : 'Failed to save changes.')
+      );
       setIsSubmitting(false);
-      onClose();
     }
   };
 

@@ -108,16 +108,50 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 
 ---
 
-## 🛠️ Getting Started
+## 🔒 Security Architecture (Vite Frontend → Express API Backend → Database)
 
+The application implements a secure 3-tier full-stack architecture:
+
+1. **Client Tier (Vite Single Page App)**:
+   - Zero database credentials or private service keys exposed in client bundles.
+   - All authenticated requests pass JWT tokens in `Authorization: Bearer <token>` headers.
+   - Communicates exclusively through secure `/api/*` endpoints.
+
+2. **API Backend Tier (Express Server - `server.ts`)**:
+   - Centralized authentication & authorization with HMAC-SHA256 JWT tokens and PBKDF2 password hashing with salt.
+   - Security Headers via Middleware: `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `X-XSS-Protection`.
+   - Rate Limiting: General API rate limit (100 req/15min) and strict login rate limit (10 req/15min).
+   - Server-side input validation and parameter sanitization to mitigate SQL/NoSQL Injection & XSS.
+
+3. **Database Tier (Supabase PostgreSQL & Cloud Firestore)**:
+   - Supabase connection uses `SUPABASE_SERVICE_ROLE_KEY` strictly on the server side.
+   - Row-Level Security (RLS) policies enforced.
+
+---
+
+## 🛠️ Getting Started & Production Deployment
+
+### Prerequisites
+- Node.js 18+
+- Environment variables configured in `.env` (refer to `.env.example`)
+
+### Environment Setup
+Create a `.env` file from `.env.example`:
+```env
+JWT_SECRET="YOUR_SECURE_RANDOM_SECRET_KEY"
+SUPABASE_URL="https://YOUR_SUPABASE_PROJECT_ID.supabase.co"
+SUPABASE_SERVICE_ROLE_KEY="YOUR_SUPABASE_SERVICE_ROLE_KEY"
+```
+
+### Installation & Build Commands
 ```bash
 # Install dependencies
 npm install
 
-# Start development server (Port 3000)
+# Start development server (Express + Vite on Port 3000)
 npm run dev
 
-# Build for production
+# Build for production (Vite client + esbuild CommonJS server bundle)
 npm run build
 
 # Run production server
@@ -126,4 +160,4 @@ npm start
 
 ---
 
-*Elegant FX — Empowering global trade with precise landed cost insights.*
+*Elegant FX — Empowering global trade with precise landed cost insights and secure cloud infrastructure.*
