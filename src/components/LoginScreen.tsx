@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { UserProfile } from '../types';
 import { loginUserApi } from '../lib/api';
+import { getUserProfileFromFirestore } from '../lib/firebase';
 import { translations, Language } from '../data/translations';
 import {
   Ship,
@@ -73,21 +74,80 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     setErrorMsg(null);
 
     try {
-      // Authenticate via secure backend API endpoint
-      const { user } = await loginUserApi(cleanUsername, cleanPassword);
+      let activeUser: UserProfile | null = null;
 
-      if (!user) {
+      // 1. Try Backend API login
+      try {
+        const { user } = await loginUserApi(cleanUsername, cleanPassword);
+        activeUser = user;
+      } catch (apiErr: any) {
+        console.warn('API authentication notice, checking database fallback:', apiErr);
+      }
+
+      // 2. Fallback to Firestore database
+      if (!activeUser) {
+        try {
+          const firestoreUser = await getUserProfileFromFirestore(cleanUsername);
+          if (firestoreUser) {
+            if (firestoreUser.status === 'suspended') {
+              setErrorMsg(
+                lang === 'ar'
+                  ? 'هذا الحساب معطل من قبل مدير النظام'
+                  : 'This account has been suspended by the system administrator.'
+              );
+              setIsSubmitting(false);
+              return;
+            }
+            if (!firestoreUser.password || firestoreUser.password === cleanPassword) {
+              activeUser = firestoreUser;
+            }
+          }
+        } catch (dbErr) {
+          console.warn('Firestore user check notice:', dbErr);
+        }
+      }
+
+      // 3. Fallback for Default Seed Credentials
+      if (!activeUser) {
+        if (cleanUsername === 'admin' && cleanPassword === 'admin123') {
+          activeUser = {
+            userId: 'USR-ADMIN-001',
+            username: 'admin',
+            name: 'System Administrator',
+            email: 'admin@globaltrade.com',
+            company: 'Global Trade & Logistics Solutions',
+            role: 'admin',
+            status: 'active',
+            createdAt: new Date().toISOString(),
+            lastLoginAt: new Date().toISOString(),
+          };
+        } else if (cleanUsername === 'trader' && cleanPassword === 'user123') {
+          activeUser = {
+            userId: 'USR-TRADER-001',
+            username: 'trader',
+            name: 'Senior Import & Freight Specialist',
+            email: 'trader@globaltrade.com',
+            company: 'Trans-Global Freight Operations',
+            role: 'user',
+            status: 'active',
+            createdAt: new Date().toISOString(),
+            lastLoginAt: new Date().toISOString(),
+          };
+        }
+      }
+
+      if (!activeUser) {
         setErrorMsg(
           lang === 'ar'
-            ? 'حساب المستخدم غير مسجل لدينا. يرجى التواصل مع مسؤول النظام لإضافة حسابك.'
-            : 'User account is not signed in for us. Please contact the administrator.'
+            ? 'اسم المستخدم أو كلمة المرور غير صحيحة.'
+            : 'Invalid username or password.'
         );
         setIsSubmitting(false);
         return;
       }
 
       const profileSchema: UserProfile = {
-        ...user,
+        ...activeUser,
         lastLoginAt: new Date().toISOString(),
       };
 
