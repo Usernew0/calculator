@@ -114,11 +114,11 @@ async function validateActiveUserSession(authUser: { userId: string; username: s
   if (!authUser || !authUser.username) return false;
   const key = authUser.username.toLowerCase();
 
-  let currentPassword = "";
-  let status = "active";
-  let dbRecordFound = false;
+  let memUser = serverUsersStore[key];
+  let currentPassword = memUser?.password || "";
+  let status = memUser?.status || "active";
 
-  // 1. ALWAYS query Supabase Database first for real-time status and password hash
+  // Query Supabase database to check real-time account status and password hash
   try {
     const { data } = await supabase
       .from("users")
@@ -127,43 +127,52 @@ async function validateActiveUserSession(authUser: { userId: string; username: s
       .maybeSingle();
 
     if (data) {
-      dbRecordFound = true;
-      if (data.profile_data && typeof data.profile_data === "object") {
-        currentPassword = data.password || data.password_hash || data.profile_data?.password || "";
-        status = data.status || data.profile_data?.status || "active";
-      } else {
-        currentPassword = data.password || data.password_hash || "";
-        status = data.status || "active";
+      const dbPass = data.password || data.password_hash || (typeof data.profile_data === "object" ? data.profile_data?.password : "");
+      const dbStatus = (data.status === "suspended" || data.profile_data?.status === "suspended")
+        ? "suspended"
+        : (data.status || data.profile_data?.status || "active");
+
+      if (dbStatus === "suspended" || status === "suspended") {
+        status = "suspended";
       }
 
-      // Sync memory cache strictly with database source of truth
+      if (dbPass) {
+        currentPassword = dbPass;
+      }
+
+      // Keep server memory store in sync
       if (serverUsersStore[key]) {
         serverUsersStore[key].password = currentPassword || serverUsersStore[key].password;
         serverUsersStore[key].status = status;
+      } else {
+        serverUsersStore[key] = {
+          userId: data.user_id || data.id || `USR-${key}`,
+          username: key,
+          name: data.full_name || "",
+          email: data.email || "",
+          company: data.company_name || "",
+          role: data.role || "user",
+          status: status,
+          password: currentPassword,
+          createdAt: data.created_at || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
       }
     }
   } catch (dbErr) {
     console.warn("[Session Audit Database Notice]:", dbErr);
   }
 
-  // 2. Fallback to memory store if database record was not found or unreachable
-  if (!dbRecordFound && serverUsersStore[key]) {
-    currentPassword = serverUsersStore[key].password || "";
-    status = serverUsersStore[key].status || "active";
-  } else if (!dbRecordFound) {
-    return false; // User record completely removed
-  }
-
-  // 3. Reject suspended or non-active accounts immediately
-  if (status === "suspended") {
+  // 1. Instantly reject suspended or non-active accounts
+  if (status === "suspended" || status !== "active") {
     return false;
   }
 
-  // 4. Reject if password hash/signature changed since token was issued
-  if (authUser.pwdSig && currentPassword) {
+  // 2. Reject if token lacks password signature or if signature does not match current password
+  if (currentPassword) {
     const currentSig = createPwdSig(currentPassword);
-    if (authUser.pwdSig !== currentSig) {
-      return false; // Password has been updated
+    if (!authUser.pwdSig || authUser.pwdSig !== currentSig) {
+      return false; // Password updated or invalid signature
     }
   }
 

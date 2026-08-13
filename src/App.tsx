@@ -264,11 +264,12 @@ export default function App() {
     const checkSessionValidity = async () => {
       try {
         const freshUser = await fetchCurrentAuthUserApi();
-        if (freshUser && freshUser.status === 'suspended') {
+        if (!freshUser || freshUser.status === 'suspended') {
+          console.warn('[Session Invalidation]: User account suspended, password changed, or session expired.');
           handleLogout();
         }
       } catch {
-        // Handled via cargo_session_invalidated event in apiFetch
+        handleLogout();
       }
     };
 
