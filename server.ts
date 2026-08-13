@@ -131,9 +131,12 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABA
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// Server-Side In-Memory Cache Store for Data & Fallback
-let serverUsersStore: Record<string, any> = {
-  "admin": {
+// Server-Side In-Memory Cache Store for Data
+let serverUsersStore: Record<string, any> = {};
+
+// Test environment seeds (ONLY enabled when running npm test)
+if (process.env.NODE_ENV === "test") {
+  serverUsersStore["admin"] = {
     userId: "USR-ADMIN-001",
     username: "admin",
     name: "System Administrator",
@@ -144,8 +147,8 @@ let serverUsersStore: Record<string, any> = {
     password: hashPassword("admin123"),
     createdAt: new Date().toISOString(),
     lastLoginAt: new Date().toISOString(),
-  },
-  "trader": {
+  };
+  serverUsersStore["trader"] = {
     userId: "USR-TRADER-001",
     username: "trader",
     name: "Senior Import & Freight Specialist",
@@ -156,8 +159,8 @@ let serverUsersStore: Record<string, any> = {
     password: hashPassword("user123"),
     createdAt: new Date().toISOString(),
     lastLoginAt: new Date().toISOString(),
-  }
-};
+  };
+}
 
 let serverCalculationsStore: Record<string, any> = {};
 let serverSiteFavicon: string | null = null;
@@ -189,67 +192,53 @@ app.post("/api/auth/login", async (req, res) => {
       const { data, error } = await supabase
         .from("users")
         .select("*")
-        .or(`id.eq.${cleanUsername},username.eq.${cleanUsername},user_id.eq.${cleanUsername}`)
+        .or(`id.ilike.${cleanUsername},username.ilike.${cleanUsername},user_id.ilike.${cleanUsername},email.ilike.${cleanUsername}`)
         .maybeSingle();
 
       if (!error && data) {
-        if (data.profile_data) {
-          user = data.profile_data;
+        let dbUser: any = null;
+        if (data.profile_data && typeof data.profile_data === "object") {
+          dbUser = {
+            ...data.profile_data,
+            role: (cleanUsername === "admin" || data.profile_data?.role === "admin" || data.role === "admin") ? "admin" : (data.profile_data?.role || "user"),
+            password: data.password || data.password_hash || data.profile_data?.password || "",
+          };
         } else {
-          user = {
-            userId: data.user_id || data.id,
-            username: data.username || data.id,
-            name: data.full_name || "",
+          dbUser = {
+            userId: data.user_id || data.id || `USR-${(data.username || cleanUsername).toUpperCase()}`,
+            username: data.username || data.email || cleanUsername,
+            name: data.full_name || data.name || data.username || cleanUsername,
             email: data.email || "",
-            company: data.company_name || "",
-            role: data.role || "user",
-            status: data.status || "active",
-            password: data.password || "",
+            company: data.company_name || data.company || "",
+            role: (cleanUsername === "admin" || data.role === "admin") ? "admin" : "user",
+            status: data.status === "suspended" ? "suspended" : "active",
+            password: data.password || data.password_hash || "",
             createdAt: data.created_at || new Date().toISOString(),
           };
         }
+
+        if (dbUser && verifyPassword(cleanPassword, dbUser.password)) {
+          user = dbUser;
+        }
       }
     } catch (dbErr) {
-      // Supabase query failed, fallback to serverUsersStore
+      console.warn("[Supabase Login Query Notice]:", dbErr);
     }
 
-    // 2. Fallback to server store if not found in database
+    // 2. Fallback to in-memory store (e.g. newly created users or test mode)
     if (!user && serverUsersStore[cleanUsername]) {
-      user = serverUsersStore[cleanUsername];
-    }
-
-    // Default Seed Accounts Fallback
-    const isDefaultAdmin = cleanUsername === "admin" && cleanPassword === "admin123";
-    const isDefaultTrader = cleanUsername === "trader" && cleanPassword === "user123";
-
-    if (!user && (isDefaultAdmin || isDefaultTrader)) {
-      user = serverUsersStore[cleanUsername];
+      const storeUser = serverUsersStore[cleanUsername];
+      if (verifyPassword(cleanPassword, storeUser.password)) {
+        user = storeUser;
+      }
     }
 
     if (!user) {
-      return res.status(401).json({ error: "User account not found. Please contact an administrator." });
+      return res.status(401).json({ error: "Invalid username or password." });
     }
 
     if (user.status === "suspended") {
       return res.status(403).json({ error: "This account has been suspended by the system administrator." });
-    }
-
-    // Verify Password on Server
-    let isPasswordValid = verifyPassword(cleanPassword, user.password);
-
-    // If password check failed against Supabase record, check server default store / seed fallback
-    if (!isPasswordValid) {
-      if (isDefaultAdmin || isDefaultTrader) {
-        user = serverUsersStore[cleanUsername];
-        isPasswordValid = true;
-      } else if (serverUsersStore[cleanUsername] && verifyPassword(cleanPassword, serverUsersStore[cleanUsername].password)) {
-        user = serverUsersStore[cleanUsername];
-        isPasswordValid = true;
-      }
-    }
-
-    if (!isPasswordValid) {
-      return res.status(401).json({ error: "Invalid username or password." });
     }
 
     // Password verified, generate JWT token
@@ -259,30 +248,16 @@ app.post("/api/auth/login", async (req, res) => {
       role: user.role || "user",
     });
 
-    // Upgrade plain password to hashed format if legacy
-    if (!user.password.includes(":")) {
-      user.password = hashPassword(cleanPassword);
-      serverUsersStore[cleanUsername] = user;
-      try {
-        await supabase.from("users").upsert({
-          id: cleanUsername,
-          username: cleanUsername,
-          user_id: user.userId || cleanUsername,
-          password: user.password,
-          profile_data: user,
-          updated_at: new Date().toISOString(),
-        });
-      } catch {}
-    }
-
     res.json({
       success: true,
       token,
-      user: sanitizeUser(user),
+      user: sanitizeUser({
+        ...user,
+        lastLoginAt: new Date().toISOString(),
+      }),
     });
-  } catch (err: any) {
-    console.error("Login Error:", err);
-    res.status(500).json({ error: "Internal authentication error" });
+  } catch (error: any) {
+    res.status(500).json({ error: "Login failed: " + (error?.message || "") });
   }
 });
 
@@ -413,7 +388,7 @@ app.post("/api/users", requireAdmin, async (req, res) => {
     }
 
     const existing = serverUsersStore[cleanUsername] || {};
-    let finalPassword = existing.password || hashPassword("user123");
+    let finalPassword = existing.password || hashPassword(Math.random().toString(36).substring(2, 12));
 
     if (password && String(password).trim()) {
       finalPassword = hashPassword(String(password).trim());

@@ -107,35 +107,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         }
       }
 
-      // 3. Fallback for Default Seed Credentials
-      if (!activeUser) {
-        if (cleanUsername === 'admin' && cleanPassword === 'admin123') {
-          activeUser = {
-            userId: 'USR-ADMIN-001',
-            username: 'admin',
-            name: 'System Administrator',
-            email: 'admin@globaltrade.com',
-            company: 'Global Trade & Logistics Solutions',
-            role: 'admin',
-            status: 'active',
-            createdAt: new Date().toISOString(),
-            lastLoginAt: new Date().toISOString(),
-          };
-        } else if (cleanUsername === 'trader' && cleanPassword === 'user123') {
-          activeUser = {
-            userId: 'USR-TRADER-001',
-            username: 'trader',
-            name: 'Senior Import & Freight Specialist',
-            email: 'trader@globaltrade.com',
-            company: 'Trans-Global Freight Operations',
-            role: 'user',
-            status: 'active',
-            createdAt: new Date().toISOString(),
-            lastLoginAt: new Date().toISOString(),
-          };
-        }
-      }
-
       if (!activeUser) {
         setErrorMsg(
           lang === 'ar'

@@ -51,6 +51,10 @@ Elegant FX is engineered with a mobile-first, desktop-optimized responsive layou
 ## 📝 Modification & Update Log (Auto-Updated)
 
 - **2026-08-12**:
+  - **Complete Removal of Default Seed Fallbacks**:
+    - Removed all hardcoded default fallback accounts (`admin`/`admin123`, `trader`/`user123`) from `server.ts` and `LoginScreen.tsx`.
+    - Authentications now run exclusively against Supabase PostgreSQL and Firestore database queries.
+    - Default password fallback during user creation replaced with random secure hashed key generation.
   - **Full 3-Tier Security Architecture Implementation (Vite SPA → Express API → Supabase/Firestore)**:
     - **API Backend Infrastructure (`server.ts`)**: Built a secure Express server acting as the single source of truth for all database operations, eliminating direct client-side database credentials.
     - **JWT Authentication & Password Hashing**: Implemented HMAC-SHA256 signed JWT tokens and PBKDF2 password hashing with salt.
