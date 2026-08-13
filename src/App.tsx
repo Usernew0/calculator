@@ -58,7 +58,6 @@ export default function App() {
           parsed.role !== 'admin'
         ) {
           parsed.role = 'admin';
-          parsed.status = 'active';
           localStorage.setItem('cargo_user_profile', JSON.stringify(parsed));
         }
         return parsed;
@@ -258,21 +257,28 @@ export default function App() {
     return () => window.removeEventListener('cargo_session_invalidated', handleSessionInvalidated);
   }, [handleLogout]);
 
-  // Periodic active session verification against backend API (checks for password changes or status updates)
+  // Real-time active session verification against backend API (checks for password changes or status updates)
   useEffect(() => {
     if (!userProfile) return;
 
     const checkSessionValidity = async () => {
       try {
-        await fetchCurrentAuthUserApi();
+        const freshUser = await fetchCurrentAuthUserApi();
+        if (freshUser && freshUser.status === 'suspended') {
+          handleLogout();
+        }
       } catch {
         // Handled via cargo_session_invalidated event in apiFetch
       }
     };
 
-    const interval = setInterval(checkSessionValidity, 10000);
+    // Run check immediately on mount
+    checkSessionValidity();
+
+    // Fast polling interval (every 3 seconds) for instant response to password or status changes
+    const interval = setInterval(checkSessionValidity, 3000);
     return () => clearInterval(interval);
-  }, [userProfile]);
+  }, [userProfile, handleLogout]);
 
   // Inactivity Timeout Management
   const [inactivityTimeoutMinutes, setInactivityTimeoutMinutes] = useState<number>(() => {

@@ -51,10 +51,11 @@ Elegant FX is engineered with a mobile-first, desktop-optimized responsive layou
 ## 📝 Modification & Update Log (Auto-Updated)
 
 - **2026-08-12**:
-  - **Automatic Session Revocation & Password Change Invalidation**:
+  - **Automatic Real-Time Session Revocation & Password Invalidation**:
     - Embedded 12-character cryptographic password signature (`pwdSig`) into JWT token payloads.
-    - Added `validateActiveUserSession` middleware in `server.ts`: when an admin or user modifies an account password, any active JWT tokens issued prior to the password change immediately become invalid on their next API request.
-    - Implemented a 10-second client session verification pulse in `App.tsx` and custom `cargo_session_invalidated` event handler that instantly clears session storage and forces a redirect to the login screen upon password modification or account suspension.
+    - Updated `validateActiveUserSession` in `server.ts` to query Supabase database **first** on every session check to audit real-time user status and password signature.
+    - Suspended accounts and modified passwords immediately fail validation (`HTTP 401 Unauthorized`).
+    - Enhanced client session polling in `App.tsx` (runs on mount and every 3 seconds) with `cargo_session_invalidated` event dispatch, forcing immediate logout and session purge.
   - **Complete Removal of Default Seed Fallbacks**:
     - Removed all hardcoded default fallback accounts (`admin`/`admin123`, `trader`/`user123`) from `server.ts` and `LoginScreen.tsx`.
     - Authentications now run exclusively against Supabase PostgreSQL and Firestore database queries.

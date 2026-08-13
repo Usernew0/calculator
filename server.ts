@@ -116,41 +116,54 @@ async function validateActiveUserSession(authUser: { userId: string; username: s
 
   let currentPassword = "";
   let status = "active";
+  let dbRecordFound = false;
 
-  if (serverUsersStore[key]) {
-    currentPassword = serverUsersStore[key].password || "";
-    status = serverUsersStore[key].status || "active";
-  } else {
-    try {
-      const { data } = await supabase
-        .from("users")
-        .select("*")
-        .or(`id.ilike.${key},username.ilike.${key},user_id.ilike.${key}`)
-        .maybeSingle();
+  // 1. ALWAYS query Supabase Database first for real-time status and password hash
+  try {
+    const { data } = await supabase
+      .from("users")
+      .select("*")
+      .or(`id.ilike.${key},username.ilike.${key},user_id.ilike.${key}`)
+      .maybeSingle();
 
-      if (data) {
-        if (data.profile_data && typeof data.profile_data === "object") {
-          currentPassword = data.password || data.password_hash || data.profile_data?.password || "";
-          status = data.status || data.profile_data?.status || "active";
-        } else {
-          currentPassword = data.password || data.password_hash || "";
-          status = data.status || "active";
-        }
+    if (data) {
+      dbRecordFound = true;
+      if (data.profile_data && typeof data.profile_data === "object") {
+        currentPassword = data.password || data.password_hash || data.profile_data?.password || "";
+        status = data.status || data.profile_data?.status || "active";
       } else {
-        // User account deleted or not found in database
-        return false;
+        currentPassword = data.password || data.password_hash || "";
+        status = data.status || "active";
       }
-    } catch {
-      return true;
+
+      // Sync memory cache strictly with database source of truth
+      if (serverUsersStore[key]) {
+        serverUsersStore[key].password = currentPassword || serverUsersStore[key].password;
+        serverUsersStore[key].status = status;
+      }
     }
+  } catch (dbErr) {
+    console.warn("[Session Audit Database Notice]:", dbErr);
   }
 
-  if (status === "suspended") return false;
+  // 2. Fallback to memory store if database record was not found or unreachable
+  if (!dbRecordFound && serverUsersStore[key]) {
+    currentPassword = serverUsersStore[key].password || "";
+    status = serverUsersStore[key].status || "active";
+  } else if (!dbRecordFound) {
+    return false; // User record completely removed
+  }
 
+  // 3. Reject suspended or non-active accounts immediately
+  if (status === "suspended") {
+    return false;
+  }
+
+  // 4. Reject if password hash/signature changed since token was issued
   if (authUser.pwdSig && currentPassword) {
     const currentSig = createPwdSig(currentPassword);
     if (authUser.pwdSig !== currentSig) {
-      return false; // Password has been changed since token issuance
+      return false; // Password has been updated
     }
   }
 
@@ -460,11 +473,32 @@ app.post("/api/users", requireAdmin, async (req, res) => {
       } catch {}
     }
 
-    const existing = serverUsersStore[cleanUsername] || {};
-    let finalPassword = existing.password || hashPassword(Math.random().toString(36).substring(2, 12));
+    let existing = serverUsersStore[cleanUsername];
+    if (!existing || !existing.password) {
+      try {
+        const { data } = await supabase
+          .from("users")
+          .select("*")
+          .or(`id.ilike.${cleanUsername},username.ilike.${cleanUsername}`)
+          .maybeSingle();
+        if (data) {
+          const dbPass = data.password || data.password_hash || data.profile_data?.password;
+          existing = {
+            ...(existing || {}),
+            userId: data.user_id || data.id || existing?.userId,
+            password: dbPass || existing?.password,
+            createdAt: data.created_at || existing?.createdAt,
+          };
+        }
+      } catch {}
+    }
+    existing = existing || {};
 
+    let finalPassword = existing.password;
     if (password && String(password).trim()) {
       finalPassword = hashPassword(String(password).trim());
+    } else if (!finalPassword) {
+      finalPassword = hashPassword(Math.random().toString(36).substring(2, 12));
     }
 
     const newUser = {
