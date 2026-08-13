@@ -42,6 +42,9 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
+    if ((res.status === 401 || res.status === 403) && !endpoint.includes('/api/auth/login')) {
+      window.dispatchEvent(new CustomEvent('cargo_session_invalidated', { detail: data?.error }));
+    }
     throw new Error(data?.error || `API request failed with status ${res.status}`);
   }
 
@@ -80,6 +83,9 @@ export async function updateSelfProfileApi(payload: {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+  if (data.token) {
+    setAuthToken(data.token);
+  }
   return data.user;
 }
 

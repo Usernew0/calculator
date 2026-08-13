@@ -28,6 +28,7 @@ import {
   deleteCalculationApi,
   clearCalculationsApi,
   getSiteFaviconApi,
+  fetchCurrentAuthUserApi,
 } from './lib/api';
 import {
   updateWebsiteFavicon,
@@ -237,11 +238,40 @@ export default function App() {
     }
     localStorage.removeItem(LOCAL_STORAGE_KEY);
     localStorage.removeItem('cargo_user_profile');
+    localStorage.removeItem('cargo_auth_token');
+    sessionStorage.removeItem('cargo_auth_token');
     sessionStorage.removeItem('cargo_session_active');
     setUserProfile(null);
     setHistory([]);
     setCalculatorInitialInput(null);
     setActiveTab('calculator');
+  }, [userProfile]);
+
+  // Listen for session invalidation events (e.g. password changed or account suspended/deleted)
+  useEffect(() => {
+    const handleSessionInvalidated = (e: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      console.warn('[Session Revoked]:', customEvent.detail || 'Password changed or account updated');
+      handleLogout();
+    };
+    window.addEventListener('cargo_session_invalidated', handleSessionInvalidated);
+    return () => window.removeEventListener('cargo_session_invalidated', handleSessionInvalidated);
+  }, [handleLogout]);
+
+  // Periodic active session verification against backend API (checks for password changes or status updates)
+  useEffect(() => {
+    if (!userProfile) return;
+
+    const checkSessionValidity = async () => {
+      try {
+        await fetchCurrentAuthUserApi();
+      } catch {
+        // Handled via cargo_session_invalidated event in apiFetch
+      }
+    };
+
+    const interval = setInterval(checkSessionValidity, 10000);
+    return () => clearInterval(interval);
   }, [userProfile]);
 
   // Inactivity Timeout Management

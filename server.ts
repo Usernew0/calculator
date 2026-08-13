@@ -76,11 +76,17 @@ function verifyPassword(password: string, storedHash: string): boolean {
 // Secure HMAC JWT Token Generation & Verification
 const JWT_SECRET = process.env.JWT_SECRET || process.env.GEMINI_API_KEY || "cargo_profit_secure_jwt_secret_key_2026_prod";
 
-function generateToken(user: { userId: string; username: string; role: string }): string {
+function createPwdSig(password?: string): string {
+  if (!password) return "";
+  return crypto.createHash("sha256").update(password).digest("hex").substring(0, 12);
+}
+
+function generateToken(user: { userId: string; username: string; role: string; password?: string }): string {
   const payload = JSON.stringify({
     userId: user.userId,
     username: user.username,
     role: user.role,
+    pwdSig: createPwdSig(user.password),
     exp: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 Days validity
   });
   const base64Payload = Buffer.from(payload).toString("base64url");
@@ -88,7 +94,7 @@ function generateToken(user: { userId: string; username: string; role: string })
   return `${base64Payload}.${signature}`;
 }
 
-function verifyToken(token?: string | null): { userId: string; username: string; role: string } | null {
+function verifyToken(token?: string | null): { userId: string; username: string; role: string; pwdSig?: string } | null {
   if (!token) return null;
   const parts = token.replace(/^Bearer\s+/i, "").split(".");
   if (parts.length !== 2) return null;
@@ -104,23 +110,82 @@ function verifyToken(token?: string | null): { userId: string; username: string;
   }
 }
 
+async function validateActiveUserSession(authUser: { userId: string; username: string; role: string; pwdSig?: string }): Promise<boolean> {
+  if (!authUser || !authUser.username) return false;
+  const key = authUser.username.toLowerCase();
+
+  let currentPassword = "";
+  let status = "active";
+
+  if (serverUsersStore[key]) {
+    currentPassword = serverUsersStore[key].password || "";
+    status = serverUsersStore[key].status || "active";
+  } else {
+    try {
+      const { data } = await supabase
+        .from("users")
+        .select("*")
+        .or(`id.ilike.${key},username.ilike.${key},user_id.ilike.${key}`)
+        .maybeSingle();
+
+      if (data) {
+        if (data.profile_data && typeof data.profile_data === "object") {
+          currentPassword = data.password || data.password_hash || data.profile_data?.password || "";
+          status = data.status || data.profile_data?.status || "active";
+        } else {
+          currentPassword = data.password || data.password_hash || "";
+          status = data.status || "active";
+        }
+      } else {
+        // User account deleted or not found in database
+        return false;
+      }
+    } catch {
+      return true;
+    }
+  }
+
+  if (status === "suspended") return false;
+
+  if (authUser.pwdSig && currentPassword) {
+    const currentSig = createPwdSig(currentPassword);
+    if (authUser.pwdSig !== currentSig) {
+      return false; // Password has been changed since token issuance
+    }
+  }
+
+  return true;
+}
+
 // Backend Authorization Middleware
-function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+async function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
   const authHeader = req.headers.authorization;
   const authUser = verifyToken(authHeader);
   if (!authUser) {
     return res.status(401).json({ error: "Unauthorized access. Valid token required." });
   }
+
+  const isValidSession = await validateActiveUserSession(authUser);
+  if (!isValidSession) {
+    return res.status(401).json({ error: "Password changed or session invalidated. Please log in again for safety." });
+  }
+
   (req as any).authUser = authUser;
   next();
 }
 
-function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+async function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
   const authHeader = req.headers.authorization;
   const authUser = verifyToken(authHeader);
   if (!authUser || authUser.role !== "admin") {
     return res.status(403).json({ error: "Forbidden. Administrative permissions required." });
   }
+
+  const isValidSession = await validateActiveUserSession(authUser);
+  if (!isValidSession) {
+    return res.status(401).json({ error: "Password changed or session invalidated. Please log in again for safety." });
+  }
+
   (req as any).authUser = authUser;
   next();
 }
@@ -246,6 +311,7 @@ app.post("/api/auth/login", async (req, res) => {
       userId: user.userId || cleanUsername,
       username: user.username || cleanUsername,
       role: user.role || "user",
+      password: user.password,
     });
 
     res.json({
@@ -326,7 +392,14 @@ app.post("/api/auth/profile", requireAuth, async (req, res) => {
       console.warn("Supabase profile sync warning:", err);
     }
 
-    res.json({ success: true, user: sanitizeUser(updatedUser) });
+    const newToken = generateToken({
+      userId: updatedUser.userId || key,
+      username: updatedUser.username || key,
+      role: updatedUser.role || "user",
+      password: updatedUser.password,
+    });
+
+    res.json({ success: true, user: sanitizeUser(updatedUser), token: newToken });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to update profile" });
   }

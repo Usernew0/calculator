@@ -2371,13 +2371,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               {/* Modal Actions */}
               <div className="flex items-center justify-between pt-2">
                 <a
-                  href="https://supabase.com/dashboard"
+                  href="https://supabase.com/dashboard/project/vpopmufbiennknognoth/sql/new"
                   target="_blank"
                   rel="noreferrer"
                   className="text-xs text-amber-400 hover:underline font-bold flex items-center gap-1"
                 >
                   <Globe className="w-3.5 h-3.5" />
-                  <span>{lang === 'ar' ? 'الانتقال إلى لوحة تحكم Supabase SQL Editor' : 'Open Supabase Dashboard'}</span>
+                  <span>{lang === 'ar' ? 'الانتقال إلى لوحة تحكم Supabase SQL Editor' : 'Open Supabase Editor'}</span>
                 </a>
 
                 <button
