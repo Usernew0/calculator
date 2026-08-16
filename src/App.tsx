@@ -15,8 +15,12 @@ import { exportSingleCalculationPDF, exportHistoricalSummaryPDF } from './utils/
 import { calculateTradeAndFreight } from './utils/calculator';
 import {
   getStoredUserProfile,
+  setStoredUserProfile,
   clearFullSession,
   saveFullSession,
+  onSessionInvalidated,
+  triggerSessionInvalidation,
+  clearSessionInvalidationNotice,
   STORAGE_KEYS,
 } from './lib/session';
 import {
@@ -27,6 +31,7 @@ import {
   seedDefaultDataToFirestore,
   getSiteFaviconFromFirestore,
   subscribeToSiteFavicon,
+  subscribeToUserSessionStatus,
 } from './lib/firebase';
 import {
   getCalculationsApi,
@@ -34,6 +39,7 @@ import {
   deleteCalculationApi,
   clearCalculationsApi,
   getSiteFaviconApi,
+  fetchCurrentAuthUserApi,
 } from './lib/api';
 import {
   updateWebsiteFavicon,
@@ -226,6 +232,93 @@ export default function App() {
     setCalculatorInitialInput(null);
     setActiveTab('calculator');
   }, [userProfile]);
+
+  // Real-Time Session Credential Auto-Refresh & Database Sync Guard
+  useEffect(() => {
+    if (!userProfile) return;
+
+    // 1. Listen for global session invalidation events (e.g. 401/403 intercepted from any API call)
+    const unsubInvalidated = onSessionInvalidated(() => {
+      handleLogout();
+    });
+
+    // 2. Periodic Auto-Refresh Heartbeat: check credentials against database every 10 seconds
+    const interval = setInterval(async () => {
+      try {
+        const user = await fetchCurrentAuthUserApi();
+        if (!user) return;
+
+        if (user.status === 'suspended') {
+          triggerSessionInvalidation({
+            code: 'ACCOUNT_SUSPENDED',
+            messageEn: 'Your account has been suspended by the administrator.',
+            messageAr: 'تم تعليق هذا الحساب من قبل مدير النظام.',
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+
+        // Live role elevation / demotion sync
+        if (user.role && user.role !== userProfile.role) {
+          const updated = { ...userProfile, role: user.role };
+          setUserProfile(updated);
+          setStoredUserProfile(updated);
+        }
+      } catch (err) {
+        // Handled in apiFetch interceptor
+      }
+    }, 10000);
+
+    // 3. Tab focus & visibility change immediate credential refresh
+    const handleFocusRefresh = async () => {
+      if (document.visibilityState === 'visible') {
+        try {
+          const user = await fetchCurrentAuthUserApi();
+          if (user && user.role && user.role !== userProfile.role) {
+            const updated = { ...userProfile, role: user.role };
+            setUserProfile(updated);
+            setStoredUserProfile(updated);
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('focus', handleFocusRefresh);
+    document.addEventListener('visibilitychange', handleFocusRefresh);
+
+    // 4. Real-time Firestore account listener: catches instant admin deletions, suspensions, or edits (< 1s)
+    const unsubFirestore = subscribeToUserSessionStatus(
+      userProfile.username,
+      ({ status, user }) => {
+        if (status === 'deleted') {
+          triggerSessionInvalidation({
+            code: 'ACCOUNT_DELETED',
+            messageEn: 'Your account has been removed by the administrator.',
+            messageAr: 'تم حذف حسابك من قبل مدير النظام.',
+            timestamp: new Date().toISOString(),
+          });
+        } else if (status === 'suspended' || user?.status === 'suspended') {
+          triggerSessionInvalidation({
+            code: 'ACCOUNT_SUSPENDED',
+            messageEn: 'Your account has been suspended by the administrator.',
+            messageAr: 'تم تعليق هذا الحساب من قبل مدير النظام.',
+            timestamp: new Date().toISOString(),
+          });
+        } else if (user && user.role && user.role !== userProfile.role) {
+          const updated = { ...userProfile, role: user.role };
+          setUserProfile(updated);
+          setStoredUserProfile(updated);
+        }
+      }
+    );
+
+    return () => {
+      clearInterval(interval);
+      unsubInvalidated();
+      unsubFirestore();
+      window.removeEventListener('focus', handleFocusRefresh);
+      document.removeEventListener('visibilitychange', handleFocusRefresh);
+    };
+  }, [userProfile, handleLogout]);
 
   // Inactivity Timeout Management
   const [inactivityTimeoutMinutes, setInactivityTimeoutMinutes] = useState<number>(() => {

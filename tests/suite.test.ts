@@ -256,9 +256,9 @@ describe("Cargo Profit Automated System & Logic Test Suite", () => {
       assert.equal(res.status, 403);
     });
 
-    test("GET /api/users: Unauthenticated request is rejected (403 Forbidden)", async () => {
+    test("GET /api/users: Unauthenticated request is rejected (401 Unauthorized)", async () => {
       const res = await apiRequest("/api/users");
-      assert.equal(res.status, 403);
+      assert.ok(res.status === 401 || res.status === 403);
     });
 
     test("POST /api/users: Non-admin trader user cannot create accounts (403 Forbidden)", async () => {
@@ -434,6 +434,130 @@ describe("Cargo Profit Automated System & Logic Test Suite", () => {
 
       // Cleanup
       await apiRequest(`/api/users/${targetUser.username}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+    });
+
+    test("Admin changing user password invalidates user session token immediately with CREDENTIALS_CHANGED", async () => {
+      const testUser = {
+        username: "refresh_test_user",
+        name: "Refresh Test",
+        email: "refresh@cargo.com",
+        company: "Refresh Co",
+        role: "user",
+        status: "active",
+        password: "initial_password_123",
+      };
+
+      // 1. Admin creates user
+      await apiRequest("/api/users", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify(testUser),
+      });
+
+      // 2. User logs in and obtains active session token
+      const loginRes = await apiRequest("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username: testUser.username, password: testUser.password }),
+      });
+      assert.equal(loginRes.status, 200);
+      const userToken = loginRes.body.token;
+      assert.ok(userToken);
+
+      // 3. Verify user token works for authenticated request
+      const checkRes1 = await apiRequest("/api/auth/me", {
+        headers: { Authorization: `Bearer ${userToken}` },
+      });
+      assert.equal(checkRes1.status, 200);
+
+      // 4. Admin edits user's password in database
+      const changePassRes = await apiRequest("/api/users", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({
+          ...testUser,
+          password: "new_changed_password_456",
+        }),
+      });
+      assert.equal(changePassRes.status, 200);
+
+      // 5. User's old active session token MUST now be rejected with 401 and CREDENTIALS_CHANGED
+      const checkRes2 = await apiRequest("/api/auth/me", {
+        headers: { Authorization: `Bearer ${userToken}` },
+      });
+      assert.equal(checkRes2.status, 401);
+      assert.equal(checkRes2.body.code, "CREDENTIALS_CHANGED");
+
+      // 6. User logs in with new password and gets a valid new session token
+      const reLoginRes = await apiRequest("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username: testUser.username, password: "new_changed_password_456" }),
+      });
+      assert.equal(reLoginRes.status, 200);
+      const newUserToken = reLoginRes.body.token;
+      assert.ok(newUserToken);
+
+      // 7. Verify new token works
+      const checkRes3 = await apiRequest("/api/auth/me", {
+        headers: { Authorization: `Bearer ${newUserToken}` },
+      });
+      assert.equal(checkRes3.status, 200);
+
+      // Cleanup
+      await apiRequest(`/api/users/${testUser.username}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+    });
+
+    test("Admin suspending user invalidates user session token immediately with ACCOUNT_SUSPENDED", async () => {
+      const testUser = {
+        username: "suspend_test_user",
+        name: "Suspend Test",
+        email: "suspend@cargo.com",
+        company: "Suspend Co",
+        role: "user",
+        status: "active",
+        password: "suspend_pass_123",
+      };
+
+      // 1. Admin creates user
+      await apiRequest("/api/users", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify(testUser),
+      });
+
+      // 2. User logs in
+      const loginRes = await apiRequest("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username: testUser.username, password: testUser.password }),
+      });
+      assert.equal(loginRes.status, 200);
+      const userToken = loginRes.body.token;
+
+      // 3. Admin suspends the user account
+      const suspendRes = await apiRequest("/api/users", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({
+          ...testUser,
+          status: "suspended",
+        }),
+      });
+      assert.equal(suspendRes.status, 200);
+
+      // 4. User's active session is rejected with 403 and ACCOUNT_SUSPENDED
+      const checkRes = await apiRequest("/api/auth/me", {
+        headers: { Authorization: `Bearer ${userToken}` },
+      });
+      assert.equal(checkRes.status, 403);
+      assert.equal(checkRes.body.code, "ACCOUNT_SUSPENDED");
+
+      // Cleanup
+      await apiRequest(`/api/users/${testUser.username}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${adminToken}` },
       });

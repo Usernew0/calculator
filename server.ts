@@ -79,19 +79,26 @@ function verifyPassword(password: string, storedHash: string): boolean {
 // Secure HMAC JWT Token Generation & Verification
 const JWT_SECRET = process.env.JWT_SECRET || process.env.GEMINI_API_KEY || "cargo_profit_secure_jwt_secret_key_2026_prod";
 
-function generateToken(user: { userId: string; username: string; role: string }): string {
+function getPasswordSignature(password?: string): string {
+  if (!password) return "";
+  return crypto.createHash("sha256").update(password).digest("hex").slice(0, 16);
+}
+
+function generateToken(user: { userId: string; username: string; role: string; password?: string }): string {
   const payload = JSON.stringify({
     userId: user.userId,
     username: user.username,
     role: user.role,
-    exp: Date.now() + 1 * 24 * 60 * 60 * 1000, // 7 Days validity
+    pv: getPasswordSignature(user.password),
+    iat: Date.now(),
+    exp: Date.now() + 1 * 24 * 60 * 60 * 1000, // 1 Day validity
   });
   const base64Payload = Buffer.from(payload).toString("base64url");
   const signature = crypto.createHmac("sha256", JWT_SECRET).update(base64Payload).digest("base64url");
   return `${base64Payload}.${signature}`;
 }
 
-function verifyToken(token?: string | null): { userId: string; username: string; role: string } | null {
+function verifyToken(token?: string | null): { userId: string; username: string; role: string; pv?: string; iat?: number } | null {
   if (!token) return null;
   const parts = token.replace(/^Bearer\s+/i, "").split(".");
   if (parts.length !== 2) return null;
@@ -107,25 +114,67 @@ function verifyToken(token?: string | null): { userId: string; username: string;
   }
 }
 
-// Backend Authorization Middleware
-function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+// Backend Authorization Middleware with Real-Time Database Status & Credential Verification
+async function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
   const authHeader = req.headers.authorization;
   const authUser = verifyToken(authHeader);
   if (!authUser) {
-    return res.status(401).json({ error: "Unauthorized access. Valid token required." });
+    return res.status(401).json({ error: "Unauthorized access. Valid token required.", code: "INVALID_TOKEN" });
   }
+
+  const usernameKey = (authUser.username || "").toLowerCase().trim();
+  let user = serverUsersStore[usernameKey];
+
+  if (!user) {
+    try {
+      const { data } = await supabase
+        .from("users")
+        .select("*")
+        .or(`id.ilike.${usernameKey},username.ilike.${usernameKey}`)
+        .maybeSingle();
+      if (data) {
+        user = data.profile_data || {
+          userId: data.user_id || data.id,
+          username: data.username || usernameKey,
+          role: data.role || "user",
+          status: data.status || "active",
+          password: data.password || data.password_hash || "",
+        };
+        serverUsersStore[usernameKey] = user;
+      }
+    } catch {}
+  }
+
+  if (user) {
+    if (user.status === "suspended") {
+      return res.status(403).json({
+        error: "This account has been suspended by the system administrator.",
+        code: "ACCOUNT_SUSPENDED",
+      });
+    }
+
+    if (authUser.pv && user.password && getPasswordSignature(user.password) !== authUser.pv) {
+      return res.status(401).json({
+        error: "Your credentials have been updated by the administrator. Please log in again.",
+        code: "CREDENTIALS_CHANGED",
+      });
+    }
+
+    authUser.role = user.role || authUser.role;
+  }
+
   (req as any).authUser = authUser;
   next();
 }
 
-function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const authHeader = req.headers.authorization;
-  const authUser = verifyToken(authHeader);
-  if (!authUser || authUser.role !== "admin") {
-    return res.status(403).json({ error: "Forbidden. Administrative permissions required." });
-  }
-  (req as any).authUser = authUser;
-  next();
+async function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  await requireAuth(req, res, () => {
+    const authUser = (req as any).authUser;
+    if (!authUser || authUser.role !== "admin") {
+      return res.status(403).json({ error: "Forbidden. Administrative permissions required.", code: "FORBIDDEN" });
+    }
+    next();
+  });
 }
 
 // Server-Side Supabase Client (Protected Secrets from Environment)
@@ -248,11 +297,12 @@ app.post("/api/auth/login", async (req, res) => {
       return res.status(403).json({ error: "This account has been suspended by the system administrator." });
     }
 
-    // Password verified, generate JWT token
+    // Password verified, generate JWT token with password signature
     const token = generateToken({
       userId: user.userId || cleanUsername,
       username: user.username || cleanUsername,
       role: user.role || "user",
+      password: user.password,
     });
 
     res.json({
@@ -271,8 +321,21 @@ app.post("/api/auth/login", async (req, res) => {
 // GET /api/auth/me
 app.get("/api/auth/me", requireAuth, async (req, res) => {
   const authUser = (req as any).authUser;
-  let user = serverUsersStore[authUser.username.toLowerCase()];
-  res.json({ user: sanitizeUser(user) || authUser });
+  const usernameKey = authUser.username.toLowerCase().trim();
+  let user = serverUsersStore[usernameKey];
+  if (!user) {
+    try {
+      const { data } = await supabase
+        .from("users")
+        .select("*")
+        .or(`id.ilike.${usernameKey},username.ilike.${usernameKey}`)
+        .maybeSingle();
+      if (data) {
+        user = data.profile_data || data;
+      }
+    } catch {}
+  }
+  res.json({ success: true, user: sanitizeUser(user) || authUser });
 });
 
 // POST /api/auth/profile (Update self profile)

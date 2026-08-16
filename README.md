@@ -70,7 +70,16 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 
 ---
 
-### 4. Admin Control Panel & Website Favicon Settings
+### 5. Session Security & Real-Time Credential Synchronization
+- **Real-Time Active Session Credential Auto-Refresh**: User sessions continuously synchronize with the database. If an administrator edits a user's status (`active` vs `suspended`) or updates their password, the user's active session is invalidated immediately in real-time, prompting them to re-authenticate with their new credentials.
+- **Cryptographic Password Signatures (`pv`) in JWT**: Every JWT token embeds a SHA-256 password signature. Password changes instantly cause the signature to mismatch on the backend gatekeeper (`requireAuth`), rejecting previous tokens with `CREDENTIALS_CHANGED`.
+- **Sub-Second Push Invalidation**: Firestore real-time snapshots (`subscribeToUserSessionStatus`) and periodic auto-refresh heartbeats guarantee immediate session termination across all tabs and devices when an administrator updates or deletes an account.
+- **Session Token & User Profile Isolation**: Full architectural separation between session token persistence (`cargo_session_token`) and user metadata (`cargo_user_profile`), guaranteeing admin credentials are never overwritten when editing user accounts.
+- **Bilingual Security Notice Banners**: Informative Arabic and English security alerts on the login screen explaining precisely why a session ended and guiding the user to sign in with updated credentials.
+
+---
+
+### 6. Admin Control Panel & Website Favicon Settings
 - **Website Favicon & Branding Management**: System administrators can set and publish custom website favicons (`favicon.ico` / `<link rel="icon">`) that display in browser tabs, mobile web shortcuts, and bookmarks for all site visitors.
 - **5 High-Resolution SVG Presets**: Built-in SVG favicon presets (Golden Freight Ship, Global Trade Network, Emerald Logistics Box, Express Lightning Trade, Gold Shield Security).
 - **Custom Image Upload**: Support uploading `.ico`, `.png`, `.svg`, `.jpg`, `.webp` images with auto HTML5 canvas downscaling to 64x64 Data-URIs.

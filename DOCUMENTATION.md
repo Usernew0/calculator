@@ -51,6 +51,12 @@ Elegant FX is engineered with a mobile-first, desktop-optimized responsive layou
 ## 📝 Modification & Update Log (Auto-Updated)
 
 - **2026-08-16**:
+  - **Real-Time Active Session Credential & Account Status Synchronization**:
+    - **Password Signature Hashing (`pv`) in JWT Payload**: Added SHA-256 password hash signatures into issued JWT tokens. If an administrator modifies a user's password in the database or Admin Panel, the stored signature diverges from the token payload, rendering existing tokens invalid immediately.
+    - **Active Session Gatekeeping (`requireAuth` Middleware in `server.ts`)**: Every authenticated API request validates the user's status (`active` vs `suspended`), existence in the database, and cryptographic password signature. Returns `401 Unauthorized` with `code: 'CREDENTIALS_CHANGED'` or `403 Forbidden` with `code: 'ACCOUNT_SUSPENDED'`.
+    - **Client-Side Invalidation Interceptor (`src/lib/api.ts` & `src/lib/session.ts`)**: Built an API interceptor and pub/sub event broadcaster (`onSessionInvalidated` / `triggerSessionInvalidation`) that automatically logs out users, clears stored tokens, and stores bilingual security notices whenever credential invalidation is detected.
+    - **Real-Time Firestore Listener & Auto-Refresh Heartbeat (`src/App.tsx` & `src/lib/firebase.ts`)**: Added `subscribeToUserSessionStatus` for sub-second push notifications of account suspension/deletion, a 10-second periodic heartbeat (`fetchCurrentAuthUserApi()`), and window focus/visibility listeners to immediately detect and enforce administrator edits.
+    - **User-Facing Security Banners (`src/components/LoginScreen.tsx`)**: Displays contextual security notices explaining to the user in Arabic and English why their previous session ended (e.g. password changed by admin or account suspended), prompting them to log in with their updated credentials.
   - **Session Token & User Profile Persistence Separation (`src/lib/session.ts`)**:
     - **Isolated Storage Keys**: Separated the authentication session token (`cargo_session_token`) from user profile metadata (`cargo_user_profile`) in `localStorage` and `sessionStorage`.
     - **Admin Session Protection**: Guaranteed that editing, creating, toggling, or deleting other user accounts in the Admin Panel (`AdminPanel.tsx`) never overwrites or mutates the administrator's active session token or profile credentials.

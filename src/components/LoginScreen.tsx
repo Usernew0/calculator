@@ -1,8 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserProfile } from '../types';
 import { loginUserApi } from '../lib/api';
 import { getUserProfileFromFirestore } from '../lib/firebase';
-import { saveFullSession, STORAGE_KEYS } from '../lib/session';
+import {
+  saveFullSession,
+  STORAGE_KEYS,
+  getSessionInvalidationNotice,
+  clearSessionInvalidationNotice,
+  SessionInvalidationNotice,
+} from '../lib/session';
 import { translations, Language } from '../data/translations';
 import {
   Ship,
@@ -25,6 +31,7 @@ import {
   IdCard,
   Eye,
   EyeOff,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface LoginScreenProps {
@@ -56,6 +63,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [invalidationNotice, setInvalidationNotice] = useState<SessionInvalidationNotice | null>(() => {
+    return getSessionInvalidationNotice();
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -73,6 +83,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
     setIsSubmitting(true);
     setErrorMsg(null);
+    clearSessionInvalidationNotice();
+    setInvalidationNotice(null);
 
     try {
       let activeUser: UserProfile | null = null;
@@ -343,6 +355,21 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   </label>
                 </div>
 
+
+                {/* Invalidation & Security Notice */}
+                {invalidationNotice && (
+                  <div className="p-3.5 text-xs font-medium text-amber-200 bg-amber-950/70 rounded-xl border border-amber-600/80 flex items-start gap-2.5 shadow-md">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    <div className="flex-1 space-y-0.5">
+                      <div className="font-bold text-amber-300">
+                        {lang === 'ar' ? 'تنبيه أمان الجلسة' : 'Security & Session Notice'}
+                      </div>
+                      <div className="text-amber-200/90 leading-relaxed">
+                        {lang === 'ar' ? invalidationNotice.messageAr : invalidationNotice.messageEn}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Error & Success Messages */}
                 {errorMsg && (

@@ -1,5 +1,5 @@
 import { UserProfile, CalculationResult } from '../types';
-import { getSessionToken, setSessionToken } from './session';
+import { getSessionToken, setSessionToken, triggerSessionInvalidation } from './session';
 
 /**
  * Client-Side API Helper for Secure Backend Operations
@@ -26,6 +26,40 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
+    // Check if session invalidation or authorization failure occurred
+    if ((res.status === 401 || res.status === 403) && endpoint !== '/api/auth/login' && token) {
+      const code = data?.code;
+      if (code === 'CREDENTIALS_CHANGED') {
+        triggerSessionInvalidation({
+          code: 'CREDENTIALS_CHANGED',
+          messageEn: 'Your password was updated by the administrator. Please log in with your new password.',
+          messageAr: 'تم تحديث كلمة المرور من قبل مدير النظام. يرجى تسجيل الدخول بكلمة المرور الجديدة.',
+          timestamp: new Date().toISOString(),
+        });
+      } else if (code === 'ACCOUNT_SUSPENDED') {
+        triggerSessionInvalidation({
+          code: 'ACCOUNT_SUSPENDED',
+          messageEn: 'Your account has been suspended by the administrator.',
+          messageAr: 'تم تعليق هذا الحساب من قبل مدير النظام.',
+          timestamp: new Date().toISOString(),
+        });
+      } else if (code === 'ACCOUNT_DELETED') {
+        triggerSessionInvalidation({
+          code: 'ACCOUNT_DELETED',
+          messageEn: 'Your account has been deleted by the administrator.',
+          messageAr: 'تم حذف حسابك من قبل مدير النظام.',
+          timestamp: new Date().toISOString(),
+        });
+      } else if (res.status === 401 && endpoint === '/api/auth/me') {
+        triggerSessionInvalidation({
+          code: 'SESSION_EXPIRED',
+          messageEn: 'Your session has expired or credentials have changed. Please log in again.',
+          messageAr: 'انتهت صلاحية الجلسة أو تم تحديث البيانات. يرجى تسجيل الدخول مرة أخرى.',
+          timestamp: new Date().toISOString(),
+        });
+      }
+    }
+
     throw new Error(data?.error || `API request failed with status ${res.status}`);
   }
 

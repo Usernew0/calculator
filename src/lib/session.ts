@@ -19,7 +19,84 @@ export const STORAGE_KEYS = {
   REMEMBER_USERNAME: 'cargo_remember_username',
   SESSION_ACTIVE: 'cargo_session_active',
   INACTIVITY_TIMEOUT: 'cargo_inactivity_timeout_minutes',
+  SESSION_INVALIDATION_NOTICE: 'cargo_session_invalidation_notice',
 } as const;
+
+export interface SessionInvalidationNotice {
+  code: 'CREDENTIALS_CHANGED' | 'ACCOUNT_SUSPENDED' | 'ACCOUNT_DELETED' | 'SESSION_EXPIRED' | 'UNAUTHORIZED';
+  messageEn: string;
+  messageAr: string;
+  timestamp: string;
+}
+
+/**
+ * Set Session Invalidation Notice
+ */
+export function setSessionInvalidationNotice(notice: SessionInvalidationNotice | null): void {
+  try {
+    if (!notice) {
+      sessionStorage.removeItem(STORAGE_KEYS.SESSION_INVALIDATION_NOTICE);
+      localStorage.removeItem(STORAGE_KEYS.SESSION_INVALIDATION_NOTICE);
+      return;
+    }
+    const data = JSON.stringify(notice);
+    sessionStorage.setItem(STORAGE_KEYS.SESSION_INVALIDATION_NOTICE, data);
+    localStorage.setItem(STORAGE_KEYS.SESSION_INVALIDATION_NOTICE, data);
+  } catch {}
+}
+
+/**
+ * Get Session Invalidation Notice
+ */
+export function getSessionInvalidationNotice(): SessionInvalidationNotice | null {
+  try {
+    const raw =
+      sessionStorage.getItem(STORAGE_KEYS.SESSION_INVALIDATION_NOTICE) ||
+      localStorage.getItem(STORAGE_KEYS.SESSION_INVALIDATION_NOTICE);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Clear Session Invalidation Notice
+ */
+export function clearSessionInvalidationNotice(): void {
+  try {
+    sessionStorage.removeItem(STORAGE_KEYS.SESSION_INVALIDATION_NOTICE);
+    localStorage.removeItem(STORAGE_KEYS.SESSION_INVALIDATION_NOTICE);
+  } catch {}
+}
+
+/**
+ * Trigger immediate session invalidation event across the application
+ */
+export function triggerSessionInvalidation(notice: SessionInvalidationNotice): void {
+  setSessionInvalidationNotice(notice);
+  clearFullSession();
+  try {
+    const event = new CustomEvent('cargo_session_invalidated', { detail: notice });
+    window.dispatchEvent(event);
+  } catch {}
+}
+
+/**
+ * Subscribe to session invalidation events
+ */
+export function onSessionInvalidated(callback: (notice: SessionInvalidationNotice) => void): () => void {
+  const handler = (e: Event) => {
+    const customEvent = e as CustomEvent<SessionInvalidationNotice>;
+    if (customEvent.detail) {
+      callback(customEvent.detail);
+    }
+  };
+  window.addEventListener('cargo_session_invalidated', handler);
+  return () => {
+    window.removeEventListener('cargo_session_invalidated', handler);
+  };
+}
 
 /**
  * Retrieve Session Token from localStorage or sessionStorage

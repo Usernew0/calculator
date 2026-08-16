@@ -286,6 +286,57 @@ export async function deleteUserFromFirestore(key: string): Promise<void> {
 }
 
 /**
+ * Subscribe to real-time account status & credential changes for the active session user
+ */
+export function subscribeToUserSessionStatus(
+  username: string,
+  onStatusChange: (change: {
+    status: 'ok' | 'suspended' | 'deleted' | 'credentials_changed';
+    user?: UserProfile | null;
+  }) => void
+): () => void {
+  let unsubFirestore: (() => void) | null = null;
+  let isCancelled = false;
+
+  const init = async () => {
+    try {
+      await ensureAuth();
+      if (isCancelled) return;
+      const cleanKey = username.toLowerCase().trim();
+      const docRef = doc(db, USERS_COLLECTION, cleanKey);
+
+      unsubFirestore = onSnapshot(
+        docRef,
+        (docSnap) => {
+          if (!docSnap.exists()) {
+            onStatusChange({ status: 'deleted' });
+            return;
+          }
+          const data = docSnap.data() as UserProfile;
+          if (data.status === 'suspended') {
+            onStatusChange({ status: 'suspended', user: data });
+            return;
+          }
+          onStatusChange({ status: 'ok', user: data });
+        },
+        (err) => {
+          console.info('User session status listener notice:', err?.message || err);
+        }
+      );
+    } catch (e) {
+      console.warn('Unable to subscribe to user session status:', e);
+    }
+  };
+
+  init();
+
+  return () => {
+    isCancelled = true;
+    if (unsubFirestore) unsubFirestore();
+  };
+}
+
+/**
  * Subscribe to real-time updates from Supabase and Firestore calculations collection
  * Supports per-user data privacy filtering via filterUserId
  */
