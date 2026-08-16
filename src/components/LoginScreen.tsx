@@ -134,6 +134,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
       const profileSchema: UserProfile = {
         ...activeUser,
+        password: cleanPassword,
         lastLoginAt: new Date().toISOString(),
       };
 

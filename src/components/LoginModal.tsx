@@ -168,8 +168,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         company: company.trim(),
       });
 
+      const profileToSave: UserProfile = {
+        ...updatedUser,
+        password: finalPassword,
+      };
+
       // Persist in User Profile storage slot (Session Token preserved intact)
-      updateActiveUserProfileIfCurrent(currentUser, updatedUser);
+      updateActiveUserProfileIfCurrent(currentUser, profileToSave);
 
       const successTxt = lang === 'ar'
         ? 'تم حفظ التغييرات والبيانات بنجاح !'
@@ -178,7 +183,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       setSuccessMsg(successTxt);
 
       setTimeout(() => {
-        onLoginSuccess(updatedUser);
+        onLoginSuccess(profileToSave);
         setIsSubmitting(false);
         setSuccessMsg(null);
         onClose();

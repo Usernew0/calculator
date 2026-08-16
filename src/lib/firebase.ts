@@ -304,6 +304,7 @@ export async function deleteUserFromFirestore(key: string): Promise<void> {
  */
 export function subscribeToUserSessionStatus(
   username: string,
+  currentPassword: string | undefined,
   onStatusChange: (change: {
     status: 'ok' | 'suspended' | 'deleted' | 'credentials_changed';
     user?: UserProfile | null;
@@ -331,6 +332,17 @@ export function subscribeToUserSessionStatus(
             onStatusChange({ status: 'suspended', user: data });
             return;
           }
+
+          // Real-time password / credential change detection
+          if (
+            currentPassword &&
+            data.password &&
+            data.password !== currentPassword
+          ) {
+            onStatusChange({ status: 'credentials_changed', user: data });
+            return;
+          }
+
           onStatusChange({ status: 'ok', user: data });
         },
         (err) => {

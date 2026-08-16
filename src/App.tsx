@@ -32,6 +32,7 @@ import {
   getSiteFaviconFromFirestore,
   subscribeToSiteFavicon,
   subscribeToUserSessionStatus,
+  getUserProfileFromFirestore,
 } from './lib/firebase';
 import {
   getCalculationsApi,
@@ -242,32 +243,59 @@ export default function App() {
       handleLogout();
     });
 
-    // 2. Periodic Auto-Refresh Heartbeat: check credentials against database every 10 seconds
+    // 2. Periodic Auto-Refresh Heartbeat: check credentials against database every 5 seconds
     const interval = setInterval(async () => {
       try {
         const user = await fetchCurrentAuthUserApi();
-        if (!user) return;
+        if (user) {
+          if (user.status === 'suspended') {
+            triggerSessionInvalidation({
+              code: 'ACCOUNT_SUSPENDED',
+              messageEn: 'Your account has been suspended by the administrator.',
+              messageAr: 'تم تعليق هذا الحساب من قبل مدير النظام.',
+              timestamp: new Date().toISOString(),
+            });
+            return;
+          }
 
-        if (user.status === 'suspended') {
-          triggerSessionInvalidation({
-            code: 'ACCOUNT_SUSPENDED',
-            messageEn: 'Your account has been suspended by the administrator.',
-            messageAr: 'تم تعليق هذا الحساب من قبل مدير النظام.',
-            timestamp: new Date().toISOString(),
-          });
-          return;
+          // Live role elevation / demotion sync
+          if (user.role && user.role !== userProfile.role) {
+            const updated = { ...userProfile, role: user.role };
+            setUserProfile(updated);
+            setStoredUserProfile(updated);
+          }
         }
 
-        // Live role elevation / demotion sync
-        if (user.role && user.role !== userProfile.role) {
-          const updated = { ...userProfile, role: user.role };
-          setUserProfile(updated);
-          setStoredUserProfile(updated);
+        // Direct database verification failsafe for password updates
+        if (userProfile.username) {
+          try {
+            const dbUser = await getUserProfileFromFirestore(userProfile.username);
+            if (dbUser) {
+              if (dbUser.status === 'suspended') {
+                triggerSessionInvalidation({
+                  code: 'ACCOUNT_SUSPENDED',
+                  messageEn: 'Your account has been suspended by the administrator.',
+                  messageAr: 'تم تعليق هذا الحساب من قبل مدير النظام.',
+                  timestamp: new Date().toISOString(),
+                });
+                return;
+              }
+              if (userProfile.password && dbUser.password && dbUser.password !== userProfile.password) {
+                triggerSessionInvalidation({
+                  code: 'CREDENTIALS_CHANGED',
+                  messageEn: 'Your password was updated by the administrator. Please log in with your new password.',
+                  messageAr: 'تم تحديث كلمة المرور من قبل مدير النظام. يرجى تسجيل الدخول بكلمة المرور الجديدة.',
+                  timestamp: new Date().toISOString(),
+                });
+                return;
+              }
+            }
+          } catch {}
         }
       } catch (err) {
         // Handled in apiFetch interceptor
       }
-    }, 10000);
+    }, 5000);
 
     // 3. Tab focus & visibility change immediate credential refresh
     const handleFocusRefresh = async () => {
@@ -279,6 +307,17 @@ export default function App() {
             setUserProfile(updated);
             setStoredUserProfile(updated);
           }
+          if (userProfile.username) {
+            const dbUser = await getUserProfileFromFirestore(userProfile.username);
+            if (dbUser && userProfile.password && dbUser.password && dbUser.password !== userProfile.password) {
+              triggerSessionInvalidation({
+                code: 'CREDENTIALS_CHANGED',
+                messageEn: 'Your password was updated by the administrator. Please log in with your new password.',
+                messageAr: 'تم تحديث كلمة المرور من قبل مدير النظام. يرجى تسجيل الدخول بكلمة المرور الجديدة.',
+                timestamp: new Date().toISOString(),
+              });
+            }
+          }
         } catch {}
       }
     };
@@ -288,6 +327,7 @@ export default function App() {
     // 4. Real-time Firestore account listener: catches instant admin deletions, suspensions, or edits (< 1s)
     const unsubFirestore = subscribeToUserSessionStatus(
       userProfile.username,
+      userProfile.password,
       ({ status, user }) => {
         if (status === 'deleted') {
           triggerSessionInvalidation({
@@ -301,6 +341,13 @@ export default function App() {
             code: 'ACCOUNT_SUSPENDED',
             messageEn: 'Your account has been suspended by the administrator.',
             messageAr: 'تم تعليق هذا الحساب من قبل مدير النظام.',
+            timestamp: new Date().toISOString(),
+          });
+        } else if (status === 'credentials_changed') {
+          triggerSessionInvalidation({
+            code: 'CREDENTIALS_CHANGED',
+            messageEn: 'Your password was updated by the administrator. Please log in with your new password.',
+            messageAr: 'تم تحديث كلمة المرور من قبل مدير النظام. يرجى تسجيل الدخول بكلمة المرور الجديدة.',
             timestamp: new Date().toISOString(),
           });
         } else if (user && user.role && user.role !== userProfile.role) {

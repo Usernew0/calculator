@@ -51,6 +51,10 @@ Elegant FX is engineered with a mobile-first, desktop-optimized responsive layou
 ## 📝 Modification & Update Log (Auto-Updated)
 
 - **2026-08-16**:
+  - **Instant Real-Time Password Change Auto-Logout Enforcer**:
+    - **Firestore Real-Time Snapshot Listener (`src/lib/firebase.ts`)**: Upgraded `subscribeToUserSessionStatus` to monitor active session password signatures and changes in real time. If an administrator modifies a user's password in the database or Admin Panel, the Firestore real-time snapshot fires within milliseconds and broadcasts `credentials_changed`.
+    - **Proactive Multi-Tier Invalidation Guard (`src/App.tsx`)**: Wired `CREDENTIALS_CHANGED` event handler into the active session manager, a 5-second periodic database heartbeat, and window visibility/focus hooks. When a user's credentials diverge from the database, the user session is terminated immediately.
+    - **Bilingual Notification Banner (`src/components/LoginScreen.tsx`)**: Clears the session, resets state, and redirects the user to the login screen with an informative banner in Arabic ("تم تحديث كلمة المرور من قبل مدير النظام. يرجى تسجيل الدخول بكلمة المرور الجديدة") and English ("Your password was updated by the administrator. Please log in with your new password").
   - **Production Deployment & Serverless Platform Compatibility (Vercel / Cloud Run)**:
     - **Vercel Serverless Function Entry Point (`/api/index.ts` & `vercel.json`)**: Configured Vercel routing rules and serverless function exporter so that all `/api/*` endpoints (Exchange Rates, Authentication, User Management, Calculations, and Site Branding) are handled seamlessly by serverless functions on Vercel deployments.
     - **Resilient Multi-Tier API Fallbacks (`src/lib/api.ts`)**: Enhanced client-side API helper with automatic fallback to Firestore and Supabase direct connections if server routes return 404 or are temporarily unreachable, ensuring 100% feature availability across all deployment targets.
