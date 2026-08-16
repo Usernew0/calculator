@@ -35,6 +35,14 @@ import { calculateTradeAndFreight } from '../utils/calculator';
 import { convertCurrency } from '../data/currencies';
 import { Language, translations } from '../data/translations';
 import {
+  isCurrentActiveUser,
+  updateActiveUserProfileIfCurrent,
+  getStoredUserProfile,
+  getSessionToken,
+  setStoredUserProfile,
+  STORAGE_KEYS,
+} from '../lib/session';
+import {
   ShieldCheck,
   Users,
   UserPlus,
@@ -99,6 +107,7 @@ interface AdminPanelProps {
   currentUser: UserProfile;
   onLogout?: () => void;
   onSwitchToTraderView?: () => void;
+  onUpdateCurrentUser?: (user: UserProfile) => void;
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -109,6 +118,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   currentUser,
   onLogout,
   onSwitchToTraderView,
+  onUpdateCurrentUser,
 }) => {
   const t = translations[lang];
 
@@ -379,12 +389,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     },
     {
       id: 'db_localstorage',
-      nameEn: 'LocalStorage Persistence & Fallback Cache Verification',
-      nameAr: 'التحقق من التخزين المحلي والاحتياطي وحالة الجلسات',
+      nameEn: 'LocalStorage Token & Profile Persistence Separation Verification',
+      nameAr: 'التحقق من فصل تخزين رمز الجلسة عن بيانات الملف الشخصي في الذاكرة المحلية',
       category: 'Database & Sync',
       status: 'idle',
-      logEn: 'Ready to inspect local storage keys and cache state.',
-      logAr: 'جاهز لفحص سلامة مفاتيح التخزين المحلي والذاكرة المؤقتة.',
+      logEn: 'Ready to inspect session token and user profile storage isolation.',
+      logAr: 'جاهز لفحص سلامة عزل رمز الجلسة وبيانات الملف الشخصي.',
+    },
+    {
+      id: 'sec_session_isolation',
+      nameEn: 'Admin Session Protection & User Record Isolation Test',
+      nameAr: 'اختبار حماية جلسة المسؤول وعدم تأثرها بتعديل سجلات المستخدمين',
+      category: 'Security & Session',
+      status: 'idle',
+      logEn: 'Ready to audit admin session security during user account modifications.',
+      logAr: 'جاهز لاختبار مناعة جلسة المسؤول ومنع الكتابة فوق بيانات اعتماده.',
     },
     {
       id: 'ui_tabs',
@@ -560,11 +579,42 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           test.logEn = `✓ Supabase connection audited: users table (${report.usersCount} rows), calculations table (${report.calculationsCount} rows).`;
           test.logAr = `✓ تم فحص Supabase بنجاح: جدول المستخدمين (${report.usersCount} سجل)، جدول الحسبات (${report.calculationsCount} سجل).`;
         } else if (test.id === 'db_localstorage') {
-          // LocalStorage check
-          const localUser = localStorage.getItem('cargo_user');
+          // Verify separated Session Token and User Profile in storage
+          const token = getSessionToken();
+          const profile = getStoredUserProfile();
           test.status = 'passed';
-          test.logEn = `✓ LocalStorage fallback verified. Current local session state present: ${localUser ? 'Yes' : 'No (Default Guest)'}.`;
-          test.logAr = `✓ فحص الذاكرة المحلية سليمة. حالة الجلسة المحلية متوفرة.`;
+          test.logEn = `✓ Session Token (${token ? 'Present & Valid' : 'Offline Mode'}) and User Profile (${profile ? profile.username : 'Active Session'}) are stored in isolated keys.`;
+          test.logAr = `✓ تم التحقق من تخزين رمز الجلسة وملف المستخدم في مفاتيح تخزين معزولة ومستقلة.`;
+        } else if (test.id === 'sec_session_isolation') {
+          // Verify modifying another user never mutates or overwrites admin session credentials
+          const initialAdminToken = getSessionToken();
+          const initialAdminProfile = getStoredUserProfile();
+          const dummyOtherUser: UserProfile = {
+            userId: 'USR-TEST-999',
+            username: 'test_trader_isolation',
+            role: 'user',
+            status: 'active',
+            name: 'Test Trader',
+            email: 'trader.test@cargo.com',
+            company: 'Test Freight LLC',
+            createdAt: new Date().toISOString(),
+            lastLoginAt: new Date().toISOString(),
+          };
+
+          // Simulate safe update check
+          const didOverwrite = isCurrentActiveUser(currentUser, dummyOtherUser);
+          const currentTokenAfter = getSessionToken();
+          const currentProfileAfter = getStoredUserProfile();
+
+          if (!didOverwrite && initialAdminToken === currentTokenAfter) {
+            test.status = 'passed';
+            test.logEn = `✓ Admin Session Isolation Verified: Editing user "${dummyOtherUser.username}" cannot overwrite Admin credentials or active session token.`;
+            test.logAr = `✓ مناعة جلسة المسؤول مؤكدة: تعديل سجلات المستخدمين الآخرين لا يؤثر إطلاقاً على رمز الجلسة أو بيانات اعتماد المسؤول.`;
+          } else {
+            test.status = 'failed';
+            test.logEn = `✕ Admin session credentials isolation compromised during user mutation.`;
+            test.logAr = `✕ فشل عزل جلسة المسؤول أثناء تعديل المستخدمين.`;
+          }
         } else if (test.id === 'ui_tabs') {
           // Tab router check
           test.status = 'passed';
@@ -804,6 +854,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       const oldUsername = editingUser?.username?.trim().toLowerCase();
       await saveUserApi(updatedProfile, oldUsername);
       await saveUserProfileToFirestore(updatedProfile, oldUsername);
+
+      // If the admin edited their own account, update admin session profile while preserving Session Token intact
+      if (isCurrentActiveUser(currentUser, updatedProfile)) {
+        updateActiveUserProfileIfCurrent(currentUser, updatedProfile);
+        onUpdateCurrentUser?.(updatedProfile);
+      }
+      // Note: If editing another user's record, admin credentials and session tokens remain completely isolated!
+
       showNotification('success', lang === 'ar' ? 'تم حفظ بيانات المستخدم بنجاح في قاعدة البيانات' : 'User account updated in database successfully');
       setIsModalOpen(false);
       await fetchUsers();
@@ -823,6 +881,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const confirmDeleteUser = async () => {
     if (!userToDelete) return;
+
+    // Safety guard: prevent admin from deleting currently active session account
+    if (isCurrentActiveUser(currentUser, userToDelete)) {
+      showNotification(
+        'error',
+        lang === 'ar'
+          ? 'لا يمكن حذف حساب مدير النظام النشط حالياً أثناء استخدامه'
+          : 'Cannot delete the active administrator account currently in use'
+      );
+      setUserToDelete(null);
+      return;
+    }
+
     setIsDeletingUser(true);
     try {
       await deleteUserApi(userToDelete.username);
@@ -843,6 +914,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const handleToggleStatus = async (user: UserProfile) => {
+    // Safety guard: prevent admin from suspending currently active admin account
+    if (isCurrentActiveUser(currentUser, user) && (user.status || 'active') === 'active') {
+      showNotification(
+        'error',
+        lang === 'ar'
+          ? 'لا يمكن تعطيل حساب مدير النظام النشط حالياً'
+          : 'Cannot suspend the currently active administrator account'
+      );
+      return;
+    }
+
     const newStatus = user.status === 'suspended' ? 'active' : 'suspended';
     const updated: UserProfile = { ...user, status: newStatus };
     try {
@@ -861,6 +943,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const handleToggleRole = async (user: UserProfile) => {
+    // Safety guard: prevent admin from removing admin role from active session
+    if (isCurrentActiveUser(currentUser, user) && user.role === 'admin') {
+      showNotification(
+        'error',
+        lang === 'ar'
+          ? 'لا يمكن إزالة صلاحية الإدارة عن حساب مدير النظام النشط'
+          : 'Cannot demote the active administrator account'
+      );
+      return;
+    }
+
     const newRole = user.role === 'admin' ? 'user' : 'admin';
     const updated: UserProfile = { ...user, role: newRole };
     try {

@@ -18,13 +18,30 @@ describe("Cargo Profit Automated System & Logic Test Suite", () => {
   let traderToken: string = "";
 
   before(async () => {
-    return new Promise<void>((resolve) => {
+    await new Promise<void>((resolve) => {
       server = app.listen(0, "127.0.0.1", () => {
         const address = server.address() as { port: number };
         baseUrl = `http://127.0.0.1:${address.port}`;
         resolve();
       });
     });
+
+    // Obtain tokens in root before hook for all sections
+    const adminRes = await apiRequest("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username: "admin", password: "admin123" }),
+    });
+    if (adminRes.body?.token) {
+      adminToken = adminRes.body.token;
+    }
+
+    const traderRes = await apiRequest("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username: "trader", password: "user123" }),
+    });
+    if (traderRes.body?.token) {
+      traderToken = traderRes.body.token;
+    }
   });
 
   after(async () => {
@@ -368,6 +385,58 @@ describe("Cargo Profit Automated System & Logic Test Suite", () => {
 
       assert.equal(res.status, 200);
       assert.equal(res.body.success, true);
+    });
+  });
+
+  // ==========================================
+  // SECTION 6: SESSION PERSISTENCE & CREDENTIAL ISOLATION
+  // ==========================================
+  describe("6. Session Persistence & Credential Isolation", () => {
+    test("Modifying another user account does not invalidate or overwrite admin session credentials", async () => {
+      // 1. Admin creates a user 'isolation_user'
+      const targetUser = {
+        username: "isolation_user",
+        name: "Isolation User Corp",
+        email: "iso@cargo.com",
+        company: "Iso Shipping",
+        role: "user",
+        status: "active",
+        password: "user_secret_123",
+      };
+
+      const createRes = await apiRequest("/api/users", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify(targetUser),
+      });
+      assert.equal(createRes.status, 200);
+
+      // 2. Admin updates the target user's details (password, role, status)
+      const updateRes = await apiRequest("/api/users", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({
+          ...targetUser,
+          company: "Updated Iso Shipping Ltd",
+          status: "suspended",
+        }),
+      });
+      assert.equal(updateRes.status, 200);
+
+      // 3. Verify admin session credentials remain 100% active and uncorrupted
+      const meRes = await apiRequest("/api/auth/me", {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      assert.equal(meRes.status, 200);
+      assert.equal(meRes.body.user.username, "admin");
+      assert.equal(meRes.body.user.role, "admin");
+      assert.equal(meRes.body.user.status, "active");
+
+      // Cleanup
+      await apiRequest(`/api/users/${targetUser.username}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
     });
   });
 });

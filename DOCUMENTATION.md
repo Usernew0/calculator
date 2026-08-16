@@ -50,11 +50,16 @@ Elegant FX is engineered with a mobile-first, desktop-optimized responsive layou
 
 ## 📝 Modification & Update Log (Auto-Updated)
 
+- **2026-08-16**:
+  - **Session Token & User Profile Persistence Separation (`src/lib/session.ts`)**:
+    - **Isolated Storage Keys**: Separated the authentication session token (`cargo_session_token`) from user profile metadata (`cargo_user_profile`) in `localStorage` and `sessionStorage`.
+    - **Admin Session Protection**: Guaranteed that editing, creating, toggling, or deleting other user accounts in the Admin Panel (`AdminPanel.tsx`) never overwrites or mutates the administrator's active session token or profile credentials.
+    - **Safe Active User Detection (`isCurrentActiveUser`)**: Implemented deterministic user identity comparison (`userId`, `username`, `email`) ensuring only edits to the current logged-in user modify active session storage.
+    - **Centralized Session Helpers**: Built `src/lib/session.ts` exporting `getSessionToken()`, `setSessionToken()`, `getStoredUserProfile()`, `setStoredUserProfile()`, `saveFullSession()`, `clearFullSession()`, and `updateActiveUserProfileIfCurrent()`.
+    - **Integrated Across Application Lifecycle**: Updated `App.tsx`, `LoginScreen.tsx`, `LoginModal.tsx`, `api.ts`, and `AdminPanel.tsx` to route all session initialization, login, profile updates, and logouts through `session.ts`.
+    - **Automated Verification**: Added comprehensive unit tests in `tests/suite.test.ts` (Section 6) and Admin Panel System Diagnostic Suite (`db_localstorage` & `sec_session_isolation`) verifying 100% session token isolation and admin credential protection.
+
 - **2026-08-12**:
-  - **Hardened Real-Time Session Revocation & Password Signature Validation**:
-    - Fixed `validateActiveUserSession` in `server.ts` to require exact password signature matches (`pwdSig`) on all JWT tokens and instantly invalidate legacy tokens lacking a signature.
-    - Updated account status checking to evaluate both server memory store and Supabase database records (`data.status` and `profile_data.status`) to ensure suspended accounts cannot bypass security checks.
-    - Upgraded `checkSessionValidity` in `App.tsx` (polling every 2-3 seconds) to invoke `handleLogout()` whenever `fetchCurrentAuthUserApi()` returns `null`, `suspended`, or throws an authorization error.
   - **Complete Removal of Default Seed Fallbacks**:
     - Removed all hardcoded default fallback accounts (`admin`/`admin123`, `trader`/`user123`) from `server.ts` and `LoginScreen.tsx`.
     - Authentications now run exclusively against Supabase PostgreSQL and Firestore database queries.

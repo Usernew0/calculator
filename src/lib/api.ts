@@ -1,30 +1,14 @@
 import { UserProfile, CalculationResult } from '../types';
+import { getSessionToken, setSessionToken } from './session';
 
 /**
  * Client-Side API Helper for Secure Backend Operations
  */
 
-function getAuthToken(): string | null {
-  return localStorage.getItem('cargo_auth_token') || sessionStorage.getItem('cargo_auth_token');
-}
-
-export function setAuthToken(token: string | null, rememberMe = true) {
-  if (!token) {
-    localStorage.removeItem('cargo_auth_token');
-    sessionStorage.removeItem('cargo_auth_token');
-    return;
-  }
-  if (rememberMe) {
-    localStorage.setItem('cargo_auth_token', token);
-    sessionStorage.setItem('cargo_auth_token', token);
-  } else {
-    sessionStorage.setItem('cargo_auth_token', token);
-    localStorage.removeItem('cargo_auth_token');
-  }
-}
+export { getSessionToken as getAuthToken, setSessionToken as setAuthToken };
 
 async function apiFetch(endpoint: string, options: RequestInit = {}) {
-  const token = getAuthToken();
+  const token = getSessionToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string>),
@@ -42,9 +26,6 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    if ((res.status === 401 || res.status === 403) && !endpoint.includes('/api/auth/login')) {
-      window.dispatchEvent(new CustomEvent('cargo_session_invalidated', { detail: data?.error }));
-    }
     throw new Error(data?.error || `API request failed with status ${res.status}`);
   }
 
@@ -58,7 +39,7 @@ export async function loginUserApi(username: string, password: string): Promise<
     body: JSON.stringify({ username, password }),
   });
   if (data.token) {
-    setAuthToken(data.token);
+    setSessionToken(data.token);
   }
   return data;
 }
@@ -83,9 +64,6 @@ export async function updateSelfProfileApi(payload: {
     method: 'POST',
     body: JSON.stringify(payload),
   });
-  if (data.token) {
-    setAuthToken(data.token);
-  }
   return data.user;
 }
 

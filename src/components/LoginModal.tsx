@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { UserProfile } from '../types';
 import { updateSelfProfileApi } from '../lib/api';
+import { updateActiveUserProfileIfCurrent, setStoredUserProfile } from '../lib/session';
 import { Language } from '../data/translations';
 import {
   UserCheck,
@@ -167,8 +168,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         company: company.trim(),
       });
 
-      // Persist in localStorage
-      localStorage.setItem('cargo_user_profile', JSON.stringify(updatedUser));
+      // Persist in User Profile storage slot (Session Token preserved intact)
+      updateActiveUserProfileIfCurrent(currentUser, updatedUser);
 
       const successTxt = lang === 'ar'
         ? 'تم حفظ التغييرات والبيانات بنجاح !'

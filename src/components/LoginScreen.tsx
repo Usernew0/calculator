@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { UserProfile } from '../types';
 import { loginUserApi } from '../lib/api';
 import { getUserProfileFromFirestore } from '../lib/firebase';
+import { saveFullSession, STORAGE_KEYS } from '../lib/session';
 import { translations, Language } from '../data/translations';
 import {
   Ship,
@@ -75,11 +76,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
     try {
       let activeUser: UserProfile | null = null;
+      let sessionToken: string | null = null;
 
       // 1. Try Backend API login
       try {
-        const { user } = await loginUserApi(cleanUsername, cleanPassword);
-        activeUser = user;
+        const loginRes = await loginUserApi(cleanUsername, cleanPassword);
+        activeUser = loginRes.user;
+        sessionToken = loginRes.token || null;
       } catch (apiErr: any) {
         console.warn('API authentication notice, checking database fallback:', apiErr);
       }
@@ -122,17 +125,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         lastLoginAt: new Date().toISOString(),
       };
 
-      // Persist in localStorage/sessionStorage according to rememberMe preference
-      if (rememberMe) {
-        localStorage.setItem('cargo_remember_username', cleanUsername);
-        localStorage.setItem('cargo_remember_me', 'true');
-        localStorage.setItem('cargo_user_profile', JSON.stringify(profileSchema));
-      } else {
-        localStorage.removeItem('cargo_remember_username');
-        localStorage.setItem('cargo_remember_me', 'false');
-        sessionStorage.setItem('cargo_session_active', 'true');
-        localStorage.setItem('cargo_user_profile', JSON.stringify(profileSchema));
-      }
+      // Persist Session Token and User Profile in separated storage slots
+      saveFullSession(sessionToken, profileSchema, rememberMe);
 
       setSuccessMsg(t.loginSuccessMsg);
       setTimeout(() => {

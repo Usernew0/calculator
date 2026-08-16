@@ -14,6 +14,12 @@ import { AdminPanel } from './components/AdminPanel';
 import { exportSingleCalculationPDF, exportHistoricalSummaryPDF } from './utils/pdfExport';
 import { calculateTradeAndFreight } from './utils/calculator';
 import {
+  getStoredUserProfile,
+  clearFullSession,
+  saveFullSession,
+  STORAGE_KEYS,
+} from './lib/session';
+import {
   subscribeToCalculations,
   saveCalculationToFirestore,
   deleteCalculationFromFirestore,
@@ -28,7 +34,6 @@ import {
   deleteCalculationApi,
   clearCalculationsApi,
   getSiteFaviconApi,
-  fetchCurrentAuthUserApi,
 } from './lib/api';
 import {
   updateWebsiteFavicon,
@@ -42,28 +47,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'calculator' | 'rates' | 'dashboard' | 'gallery' | 'admin'>('calculator');
   const [calculatorInitialInput, setCalculatorInitialInput] = useState<CalculationInput | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(() => {
-    try {
-      const isRemembered = localStorage.getItem('cargo_remember_me') !== 'false';
-      const isSessionActive = sessionStorage.getItem('cargo_session_active') === 'true';
-      if (!isRemembered && !isSessionActive) {
-        localStorage.removeItem('cargo_user_profile');
-        return null;
-      }
-      const saved = localStorage.getItem('cargo_user_profile');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (
-          parsed &&
-          (parsed.username?.toLowerCase() === 'admin' || parsed.userId === 'USR-ADMIN-001') &&
-          parsed.role !== 'admin'
-        ) {
-          parsed.role = 'admin';
-          localStorage.setItem('cargo_user_profile', JSON.stringify(parsed));
-        }
-        return parsed;
-      }
-    } catch {}
-    return null;
+    return getStoredUserProfile();
   });
 
   // Auto-seed Firestore on initial app mount and initialize site Favicon
@@ -236,50 +220,12 @@ export default function App() {
       localStorage.removeItem(userStorageKey);
     }
     localStorage.removeItem(LOCAL_STORAGE_KEY);
-    localStorage.removeItem('cargo_user_profile');
-    localStorage.removeItem('cargo_auth_token');
-    sessionStorage.removeItem('cargo_auth_token');
-    sessionStorage.removeItem('cargo_session_active');
+    clearFullSession();
     setUserProfile(null);
     setHistory([]);
     setCalculatorInitialInput(null);
     setActiveTab('calculator');
   }, [userProfile]);
-
-  // Listen for session invalidation events (e.g. password changed or account suspended/deleted)
-  useEffect(() => {
-    const handleSessionInvalidated = (e: Event) => {
-      const customEvent = e as CustomEvent<string>;
-      console.warn('[Session Revoked]:', customEvent.detail || 'Password changed or account updated');
-      handleLogout();
-    };
-    window.addEventListener('cargo_session_invalidated', handleSessionInvalidated);
-    return () => window.removeEventListener('cargo_session_invalidated', handleSessionInvalidated);
-  }, [handleLogout]);
-
-  // Real-time active session verification against backend API (checks for password changes or status updates)
-  useEffect(() => {
-    if (!userProfile) return;
-
-    const checkSessionValidity = async () => {
-      try {
-        const freshUser = await fetchCurrentAuthUserApi();
-        if (!freshUser || freshUser.status === 'suspended') {
-          console.warn('[Session Invalidation]: User account suspended, password changed, or session expired.');
-          handleLogout();
-        }
-      } catch {
-        handleLogout();
-      }
-    };
-
-    // Run check immediately on mount
-    checkSessionValidity();
-
-    // Fast polling interval (every 3 seconds) for instant response to password or status changes
-    const interval = setInterval(checkSessionValidity, 3000);
-    return () => clearInterval(interval);
-  }, [userProfile, handleLogout]);
 
   // Inactivity Timeout Management
   const [inactivityTimeoutMinutes, setInactivityTimeoutMinutes] = useState<number>(() => {

@@ -114,6 +114,8 @@ The application implements a secure 3-tier full-stack architecture:
 
 1. **Client Tier (Vite Single Page App)**:
    - Zero database credentials or private service keys exposed in client bundles.
+   - **Isolated Storage Keys (`src/lib/session.ts`)**: Session token (`cargo_session_token`) is stored in a dedicated key separate from the user profile metadata (`cargo_user_profile`), preventing administrative session corruption during user record management.
+   - **Admin Session Isolation**: Modifying, creating, or toggling user accounts in the Admin Panel strictly safeguards the active administrator's session credentials.
    - All authenticated requests pass JWT tokens in `Authorization: Bearer <token>` headers.
    - Communicates exclusively through secure `/api/*` endpoints.
 
