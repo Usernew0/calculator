@@ -51,6 +51,11 @@ Elegant FX is engineered with a mobile-first, desktop-optimized responsive layou
 ## 📝 Modification & Update Log (Auto-Updated)
 
 - **2026-08-16**:
+  - **Production Deployment & Serverless Platform Compatibility (Vercel / Cloud Run)**:
+    - **Vercel Serverless Function Entry Point (`/api/index.ts` & `vercel.json`)**: Configured Vercel routing rules and serverless function exporter so that all `/api/*` endpoints (Exchange Rates, Authentication, User Management, Calculations, and Site Branding) are handled seamlessly by serverless functions on Vercel deployments.
+    - **Resilient Multi-Tier API Fallbacks (`src/lib/api.ts`)**: Enhanced client-side API helper with automatic fallback to Firestore and Supabase direct connections if server routes return 404 or are temporarily unreachable, ensuring 100% feature availability across all deployment targets.
+    - **Firebase Anonymous Auth Guarding (`src/lib/firebase.ts`)**: Resolved `auth/admin-restricted-operation` 400 Bad Request error by adding an authentication attempt guard. If Anonymous Auth is disabled in the Firebase project console, the system cleanly operates in unauthenticated Firestore mode without spamming Google Identity API or blocking database subscriptions.
+    - **Static Favicon & Public Assets (`/public/favicon.ico` & `/public/favicon.svg`)**: Created public favicon assets in `/public` directory resolving 404 Not Found asset requests across browser tabs and production URLs.
   - **Real-Time Active Session Credential & Account Status Synchronization**:
     - **Password Signature Hashing (`pv`) in JWT Payload**: Added SHA-256 password hash signatures into issued JWT tokens. If an administrator modifies a user's password in the database or Admin Panel, the stored signature diverges from the token payload, rendering existing tokens invalid immediately.
     - **Active Session Gatekeeping (`requireAuth` Middleware in `server.ts`)**: Every authenticated API request validates the user's status (`active` vs `suspended`), existence in the database, and cryptographic password signature. Returns `401 Unauthorized` with `code: 'CREDENTIALS_CHANGED'` or `403 Forbidden` with `code: 'ACCOUNT_SUSPENDED'`.

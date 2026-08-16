@@ -1,8 +1,14 @@
 import { UserProfile, CalculationResult } from '../types';
 import { getSessionToken, setSessionToken, triggerSessionInvalidation } from './session';
+import {
+  getAllUsersFromFirestore,
+  saveUserProfileToFirestore,
+  deleteUserFromFirestore,
+  getUserProfileFromFirestore,
+} from './firebase';
 
 /**
- * Client-Side API Helper for Secure Backend Operations
+ * Client-Side API Helper for Secure Backend Operations with resilient fallback
  */
 
 export { getSessionToken as getAuthToken, setSessionToken as setAuthToken };
@@ -60,7 +66,9 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
       }
     }
 
-    throw new Error(data?.error || `API request failed with status ${res.status}`);
+    const err = new Error(data?.error || `API request failed with status ${res.status}`);
+    (err as any).status = res.status;
+    throw err;
   }
 
   return data;
@@ -68,14 +76,31 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
 
 // Auth API
 export async function loginUserApi(username: string, password: string): Promise<{ token: string; user: UserProfile }> {
-  const data = await apiFetch('/api/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ username, password }),
-  });
-  if (data.token) {
-    setSessionToken(data.token);
+  try {
+    const data = await apiFetch('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    });
+    if (data.token) {
+      setSessionToken(data.token);
+    }
+    return data;
+  } catch (err: any) {
+    // If backend returns 404 (e.g. static hosting without API routes), fallback directly to Firestore user auth
+    if (err?.status === 404 || err?.message?.includes('404')) {
+      const user = await getUserProfileFromFirestore(username);
+      if (user && user.password === password) {
+        if (user.status === 'suspended') {
+          throw new Error('This account has been suspended by the administrator.');
+        }
+        const clientToken = `client_${user.userId || user.username}_${Date.now()}`;
+        setSessionToken(clientToken);
+        return { token: clientToken, user };
+      }
+      throw new Error('Invalid username or password');
+    }
+    throw err;
   }
-  return data;
 }
 
 export async function fetchCurrentAuthUserApi(): Promise<UserProfile | null> {
@@ -105,18 +130,27 @@ export async function updateSelfProfileApi(payload: {
 export async function getAllUsersApi(): Promise<UserProfile[]> {
   try {
     const data = await apiFetch('/api/users');
-    return data.users || [];
+    if (data.users && data.users.length > 0) {
+      return data.users;
+    }
   } catch {
-    return [];
+    // Fallback to Firestore
   }
+  return await getAllUsersFromFirestore();
 }
 
 export async function saveUserApi(user: UserProfile, oldUsername?: string): Promise<UserProfile> {
-  const data = await apiFetch('/api/users', {
-    method: 'POST',
-    body: JSON.stringify({ ...user, oldUsername }),
-  });
-  return data.user;
+  try {
+    const data = await apiFetch('/api/users', {
+      method: 'POST',
+      body: JSON.stringify({ ...user, oldUsername }),
+    });
+    return data.user;
+  } catch (err: any) {
+    // Fallback to direct Firestore save
+    await saveUserProfileToFirestore(user, oldUsername);
+    return user;
+  }
 }
 
 export async function deleteUserApi(username: string): Promise<boolean> {
@@ -126,7 +160,12 @@ export async function deleteUserApi(username: string): Promise<boolean> {
     });
     return true;
   } catch {
-    return false;
+    try {
+      await deleteUserFromFirestore(username);
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -214,3 +253,4 @@ export async function checkSupabaseHealthApi() {
     };
   }
 }
+

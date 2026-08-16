@@ -935,6 +935,7 @@ app.get("/api/health", (_req, res) => {
 // Start Server
 async function startServer() {
   if (
+    process.env.VERCEL ||
     process.env.NODE_ENV === "test" ||
     process.env.npm_lifecycle_event === "test" ||
     process.argv.some((a) => a.includes("test"))

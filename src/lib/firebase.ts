@@ -42,13 +42,27 @@ setLogLevel('error');
 
 export const auth = getAuth(app);
 
+let isAuthAttemptInProgress = false;
+let isAnonymousAuthDisabled = false;
+
 // Ensure anonymous or persistent authentication before performing Firestore queries
 export async function ensureAuth(): Promise<void> {
-  if (auth.currentUser) return;
+  if (auth.currentUser || isAnonymousAuthDisabled) return;
+  if (isAuthAttemptInProgress) return;
+
+  isAuthAttemptInProgress = true;
   try {
     await signInAnonymously(auth);
   } catch (err: any) {
-    console.info("Firebase anonymous auth status:", err?.message || err);
+    const msg = err?.message || String(err);
+    if (msg.includes('admin-restricted-operation') || msg.includes('operation-not-allowed')) {
+      // Anonymous authentication is not enabled in Firebase Console; operate in standard unauthenticated mode
+      isAnonymousAuthDisabled = true;
+    } else {
+      console.info("Firebase auth status:", msg);
+    }
+  } finally {
+    isAuthAttemptInProgress = false;
   }
 }
 
