@@ -216,6 +216,28 @@ export async function clearCalculationsApi(userId?: string): Promise<boolean> {
 }
 
 // Site Settings & Branding API
+export async function getSessionTimeoutApi(): Promise<number | null> {
+  try {
+    const res = await fetch('/api/settings/session-timeout');
+    const data = await res.json();
+    return data.timeoutMinutes || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveSessionTimeoutApi(timeoutMinutes: number): Promise<boolean> {
+  try {
+    await apiFetch('/api/settings/session-timeout', {
+      method: 'POST',
+      body: JSON.stringify({ timeoutMinutes }),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function getSiteFaviconApi(): Promise<string | null> {
   try {
     const res = await fetch('/api/settings/favicon');

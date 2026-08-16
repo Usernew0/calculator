@@ -51,6 +51,13 @@ Elegant FX is engineered with a mobile-first, desktop-optimized responsive layou
 ## 📝 Modification & Update Log (Auto-Updated)
 
 - **2026-08-16**:
+  - **Session Inactivity Timeout in Firestore `site_settings` Collection**:
+    - Centralized and persisted the session inactivity timeout setting in the `site_settings` collection (`site_settings/security` & `site_settings/session_timeout` documents) in Firestore, replacing isolated browser local storage.
+    - Implemented Firestore helpers `saveSessionTimeoutToFirestore`, `getSessionTimeoutFromFirestore`, and `subscribeToSessionTimeout` in `src/lib/firebase.ts`.
+    - Added backend API endpoints `GET /api/settings/session-timeout` and `POST /api/settings/session-timeout` (Admin-only) with validation in `server.ts` and API helpers in `src/lib/api.ts`.
+    - Created a dedicated, interactive "Session Inactivity & Auto-Logout Security Policy" card in `src/components/AdminPanel.tsx` with preset durations (5m, 15m, 30m, 60m, 120m), range slider, numeric input, and real-time Firestore persistence.
+    - Added real-time subscription in `src/App.tsx` via `subscribeToSessionTimeout` to update active session inactivity timers across all client sessions without requiring a page refresh.
+    - Added comprehensive unit and integration test suite (`tests/suite.test.ts`) covering session inactivity timeout APIs, authorization checks, range validation, and Admin updates.
   - **Instant Real-Time Password Change Auto-Logout Enforcer**:
     - **Firestore Real-Time Snapshot Listener (`src/lib/firebase.ts`)**: Upgraded `subscribeToUserSessionStatus` to monitor active session password signatures and changes in real time. If an administrator modifies a user's password in the database or Admin Panel, the Firestore real-time snapshot fires within milliseconds and broadcasts `credentials_changed`.
     - **Proactive Multi-Tier Invalidation Guard (`src/App.tsx`)**: Wired `CREDENTIALS_CHANGED` event handler into the active session manager, a 5-second periodic database heartbeat, and window visibility/focus hooks. When a user's credentials diverge from the database, the user session is terminated immediately.

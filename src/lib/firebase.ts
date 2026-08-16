@@ -589,6 +589,107 @@ export async function syncAllDataWithFirestore(): Promise<{
 const SETTINGS_COLLECTION = "site_settings";
 
 /**
+ * Save session inactivity timeout in minutes to Firestore site_settings collection
+ */
+export async function saveSessionTimeoutToFirestore(
+  timeoutMinutes: number,
+  updatedBy?: string
+): Promise<void> {
+  const cleanMinutes = Math.max(1, Math.min(180, Number(timeoutMinutes) || 15));
+  try {
+    await ensureAuth();
+    const securityDocRef = doc(db, SETTINGS_COLLECTION, "security");
+    await setDoc(
+      securityDocRef,
+      {
+        inactivityTimeoutMinutes: cleanMinutes,
+        updatedAt: new Date().toISOString(),
+        updatedBy: updatedBy || "admin",
+      },
+      { merge: true }
+    );
+
+    // Also mirror to session_timeout document for multiple key compatibility
+    const timeoutDocRef = doc(db, SETTINGS_COLLECTION, "session_timeout");
+    await setDoc(
+      timeoutDocRef,
+      {
+        inactivityTimeoutMinutes: cleanMinutes,
+        timeoutMinutes: cleanMinutes,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+
+    // Update local cache
+    try {
+      localStorage.setItem("cargo_inactivity_timeout_minutes", String(cleanMinutes));
+      window.dispatchEvent(new CustomEvent("cargo_timeout_updated", { detail: cleanMinutes }));
+    } catch {}
+
+    console.info(`Session inactivity timeout (${cleanMinutes}m) saved to Firestore site_settings.`);
+  } catch (error: any) {
+    handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/security`);
+  }
+}
+
+/**
+ * Fetch saved session inactivity timeout in minutes from Firestore site_settings
+ */
+export async function getSessionTimeoutFromFirestore(): Promise<number | null> {
+  try {
+    await ensureAuth();
+    // 1. Try site_settings/security
+    const secDocRef = doc(db, SETTINGS_COLLECTION, "security");
+    const secSnap = await getDoc(secDocRef);
+    if (secSnap.exists()) {
+      const data = secSnap.data();
+      const mins = Number(data?.inactivityTimeoutMinutes || data?.timeoutMinutes);
+      if (mins && mins > 0) return mins;
+    }
+
+    // 2. Try site_settings/session_timeout fallback
+    const timeoutDocRef = doc(db, SETTINGS_COLLECTION, "session_timeout");
+    const timeoutSnap = await getDoc(timeoutDocRef);
+    if (timeoutSnap.exists()) {
+      const data = timeoutSnap.data();
+      const mins = Number(data?.inactivityTimeoutMinutes || data?.timeoutMinutes);
+      if (mins && mins > 0) return mins;
+    }
+  } catch (error: any) {
+    console.info("Firestore session timeout fetch notice:", error?.message || error);
+  }
+  return null;
+}
+
+/**
+ * Real-time subscription to session inactivity timeout changes in Firestore site_settings
+ */
+export function subscribeToSessionTimeout(callback: (timeoutMinutes: number) => void): () => void {
+  try {
+    const docRef = doc(db, SETTINGS_COLLECTION, "security");
+    return onSnapshot(
+      docRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data();
+          const mins = Number(data?.inactivityTimeoutMinutes || data?.timeoutMinutes);
+          if (mins && mins > 0) {
+            callback(mins);
+          }
+        }
+      },
+      (error) => {
+        console.info("Notice: Session timeout subscription status:", error?.message || error);
+      }
+    );
+  } catch (err) {
+    console.info("Realtime session timeout subscription notice:", err);
+    return () => {};
+  }
+}
+
+/**
  * Save site favicon URL / Data-URI to Firestore and local cache
  */
 export async function saveSiteFaviconToFirestore(faviconUrl: string): Promise<void> {

@@ -71,6 +71,7 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 ---
 
 ### 5. Session Security & Real-Time Credential Synchronization
+- **Session Inactivity Timeout in Firestore `site_settings`**: Inactivity timeout settings (5m, 15m, 30m, 60m, 120m) are centralized and persisted directly in Firestore (`site_settings/security` & `site_settings/session_timeout`), ensuring unified timeout security across devices. Changes propagate to all active client sessions in real time via Firestore snapshot listeners without requiring page reloads.
 - **Real-Time Active Session Credential Auto-Refresh**: User sessions continuously synchronize with the database. If an administrator edits a user's status (`active` vs `suspended`) or updates their password, the user's active session is invalidated immediately in real-time, prompting them to re-authenticate with their new credentials.
 - **Cryptographic Password Signatures (`pv`) in JWT**: Every JWT token embeds a SHA-256 password signature. Password changes instantly cause the signature to mismatch on the backend gatekeeper (`requireAuth`), rejecting previous tokens with `CREDENTIALS_CHANGED`.
 - **Sub-Second Push Invalidation**: Firestore real-time snapshots (`subscribeToUserSessionStatus`) and periodic auto-refresh heartbeats guarantee immediate session termination across all tabs and devices when an administrator updates or deletes an account.
@@ -79,7 +80,8 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 
 ---
 
-### 6. Admin Control Panel & Website Favicon Settings
+### 6. Admin Control Panel & Website Settings
+- **Session Inactivity & Security Policy Card**: Administrators can configure and customize the global inactivity timeout with preset duration chips (5m High Security, 15m Default, 30m Standard, 60m 1-Hour, 120m 2-Hours) and custom numeric/slider inputs, saving directly to Firestore `site_settings`.
 - **Website Favicon & Branding Management**: System administrators can set and publish custom website favicons (`favicon.ico` / `<link rel="icon">`) that display in browser tabs, mobile web shortcuts, and bookmarks for all site visitors.
 - **5 High-Resolution SVG Presets**: Built-in SVG favicon presets (Golden Freight Ship, Global Trade Network, Emerald Logistics Box, Express Lightning Trade, Gold Shield Security).
 - **Custom Image Upload**: Support uploading `.ico`, `.png`, `.svg`, `.jpg`, `.webp` images with auto HTML5 canvas downscaling to 64x64 Data-URIs.

@@ -10,6 +10,9 @@ import {
   deduplicateUsers,
   saveSiteFaviconToFirestore,
   getSiteFaviconFromFirestore,
+  saveSessionTimeoutToFirestore,
+  getSessionTimeoutFromFirestore,
+  subscribeToSessionTimeout,
 } from '../lib/firebase';
 import {
   getAllUsersApi,
@@ -17,6 +20,8 @@ import {
   deleteUserApi,
   saveSiteFaviconApi,
   getSiteFaviconApi,
+  saveSessionTimeoutApi,
+  getSessionTimeoutApi,
   checkSupabaseHealthApi,
 } from '../lib/api';
 import {
@@ -156,7 +161,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Inactivity Timeout Settings
+  // Inactivity Timeout Settings (Stored in Firestore site_settings collection)
   const [inactivityMinutes, setInactivityMinutes] = useState<number>(() => {
     try {
       const saved = localStorage.getItem('cargo_inactivity_timeout_minutes');
@@ -165,18 +170,73 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return 15;
     }
   });
+  const [isSavingTimeout, setIsSavingTimeout] = useState<boolean>(false);
 
-  const handleSaveInactivityTimeout = () => {
-    const val = Math.max(1, Math.min(120, inactivityMinutes));
+  // Load site session timeout from Firestore site_settings on mount
+  useEffect(() => {
+    getSessionTimeoutFromFirestore().then((remoteTimeout) => {
+      if (remoteTimeout && remoteTimeout > 0) {
+        setInactivityMinutes(remoteTimeout);
+        try {
+          localStorage.setItem('cargo_inactivity_timeout_minutes', String(remoteTimeout));
+        } catch {}
+      } else {
+        getSessionTimeoutApi().then((apiTimeout) => {
+          if (apiTimeout && apiTimeout > 0) {
+            setInactivityMinutes(apiTimeout);
+            try {
+              localStorage.setItem('cargo_inactivity_timeout_minutes', String(apiTimeout));
+            } catch {}
+          }
+        });
+      }
+    });
+
+    const unsub = subscribeToSessionTimeout((newVal) => {
+      if (newVal && newVal > 0) {
+        setInactivityMinutes(newVal);
+      }
+    });
+
+    return () => {
+      unsub();
+    };
+  }, []);
+
+  const handleSaveInactivityTimeout = async () => {
+    const val = Math.max(1, Math.min(180, inactivityMinutes));
     setInactivityMinutes(val);
-    localStorage.setItem('cargo_inactivity_timeout_minutes', String(val));
-    window.dispatchEvent(new CustomEvent('cargo_timeout_updated', { detail: val }));
-    showNotification(
-      'success',
-      lang === 'ar'
-        ? `تم حفظ مهلة عدم النشاط للجلسات بنجاح (${val} دقيقة)`
-        : `Session inactivity timeout successfully set to ${val} minutes`
-    );
+    setIsSavingTimeout(true);
+
+    try {
+      // 1. Persist directly to Firestore site_settings/security
+      await saveSessionTimeoutToFirestore(val, currentUser?.username || 'admin');
+
+      // 2. Persist via backend API
+      await saveSessionTimeoutApi(val);
+
+      // 3. Local update and dispatch
+      try {
+        localStorage.setItem('cargo_inactivity_timeout_minutes', String(val));
+        window.dispatchEvent(new CustomEvent('cargo_timeout_updated', { detail: val }));
+      } catch {}
+
+      showNotification(
+        'success',
+        lang === 'ar'
+          ? `تم حفظ وتطبيق مهلة عدم النشاط للجلسات بنجاح في Firestore site_settings (${val} دقيقة)`
+          : `Session inactivity timeout saved to Firestore site_settings (${val} minutes)`
+      );
+    } catch (err: any) {
+      showNotification(
+        'error',
+        lang === 'ar'
+          ? 'تعذر حفظ مهلة الجلسة في Firestore'
+          : 'Failed to save session timeout setting to Firestore'
+      );
+    } finally {
+      setIsSavingTimeout(false);
+    }
   };
 
   // Favicon & Branding State
@@ -1294,6 +1354,138 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </button>
             </div>
           )}
+        </div>
+
+        {/* Session Inactivity & Security Policy Settings Card (Firestore site_settings) */}
+        <div className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-5 shadow-xl space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-700/80">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400">
+                <Clock className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-white flex items-center gap-2">
+                  <span>
+                    {lang === 'ar'
+                      ? 'إعدادات أمان الجلسات ومهلة تسجيل الخروج التلقائي'
+                      : 'Session Inactivity & Auto-Logout Security Policy'}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono text-[10px] font-bold">
+                    Firestore site_settings
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  {lang === 'ar'
+                    ? 'يتم حفظ المهلة في مجموعة site_settings في Firestore وتطبيقها فورياً على جميع حسابات المستخدمين'
+                    : 'Persisted to Firestore site_settings collection and enforced in real time across all active client sessions'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-end sm:self-auto">
+              <button
+                onClick={handleSaveInactivityTimeout}
+                disabled={isSavingTimeout}
+                className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-black text-xs transition-all flex items-center gap-1.5 shadow-md shadow-amber-950/40 cursor-pointer disabled:opacity-50 active:scale-95"
+              >
+                {isSavingTimeout ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-950" />
+                ) : (
+                  <Save className="w-3.5 h-3.5 text-slate-950" />
+                )}
+                <span>
+                  {isSavingTimeout
+                    ? lang === 'ar'
+                      ? 'جاري الحفظ في Firestore...'
+                      : 'Saving to Firestore...'
+                    : lang === 'ar'
+                    ? 'حفظ مهلة الجلسة في Firestore'
+                    : 'Save Timeout to Firestore'}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+            {/* Presets Selection */}
+            <div className="md:col-span-8 space-y-2.5">
+              <label className="text-xs font-bold text-slate-300 flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-amber-400" />
+                <span>
+                  {lang === 'ar'
+                    ? 'الخيارات السريعة لمهلة عدم النشاط الموصى بها:'
+                    : 'Preset Recommended Inactivity Durations:'}
+                </span>
+              </label>
+
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                {[
+                  { mins: 5, labelAr: '5 دقائق (أمان عالي)', labelEn: '5m (High Sec)' },
+                  { mins: 15, labelAr: '15 دقيقة (افتراضي)', labelEn: '15m (Default)' },
+                  { mins: 30, labelAr: '30 دقيقة (قياسي)', labelEn: '30m (Standard)' },
+                  { mins: 60, labelAr: '60 دقيقة (ساعة)', labelEn: '60m (1 Hour)' },
+                  { mins: 120, labelAr: '120 دقيقة (ساعتان)', labelEn: '120m (2 Hours)' },
+                ].map((preset) => {
+                  const isSelected = inactivityMinutes === preset.mins;
+                  return (
+                    <button
+                      key={preset.mins}
+                      type="button"
+                      onClick={() => setInactivityMinutes(preset.mins)}
+                      className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-1 ${
+                        isSelected
+                          ? 'bg-amber-500/20 border-amber-400 text-amber-300 font-bold shadow-md shadow-amber-950/30'
+                          : 'bg-slate-900/60 border-slate-700/70 text-slate-300 hover:bg-slate-900 hover:border-slate-600'
+                      }`}
+                    >
+                      <span className="text-xs font-black">{preset.mins} {lang === 'ar' ? 'د' : 'min'}</span>
+                      <span className="text-[10px] text-slate-400">
+                        {lang === 'ar' ? preset.labelAr.split('(')[1]?.replace(')', '') || '' : preset.labelEn.split('(')[1]?.replace(')', '') || ''}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Custom Input & Range Slider */}
+            <div className="md:col-span-4 p-3.5 rounded-xl bg-slate-900/80 border border-slate-700/80 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-300">
+                  {lang === 'ar' ? 'تخصيص يدوي:' : 'Custom Duration:'}
+                </span>
+                <span className="px-2.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 font-black text-xs">
+                  {inactivityMinutes} {lang === 'ar' ? 'دقيقة' : 'minutes'}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min="1"
+                  max="180"
+                  step="1"
+                  value={inactivityMinutes}
+                  onChange={(e) => setInactivityMinutes(parseInt(e.target.value, 10) || 15)}
+                  className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-400"
+                />
+                <input
+                  type="number"
+                  min="1"
+                  max="180"
+                  value={inactivityMinutes}
+                  onChange={(e) => setInactivityMinutes(Math.max(1, Math.min(180, parseInt(e.target.value, 10) || 1)))}
+                  className="w-16 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white text-center font-bold focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              <p className="text-[10px] text-slate-400">
+                {lang === 'ar'
+                  ? 'يتم إغلاق الجلسة عند عدم تحريك الفأرة أو اللمس أو الكتابة'
+                  : 'Session expires on lack of mouse, keyboard, or touch inputs'}
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Website Favicon & Branding Management Panel */}

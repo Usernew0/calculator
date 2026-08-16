@@ -33,6 +33,8 @@ import {
   subscribeToSiteFavicon,
   subscribeToUserSessionStatus,
   getUserProfileFromFirestore,
+  getSessionTimeoutFromFirestore,
+  subscribeToSessionTimeout,
 } from './lib/firebase';
 import {
   getCalculationsApi,
@@ -40,6 +42,7 @@ import {
   deleteCalculationApi,
   clearCalculationsApi,
   getSiteFaviconApi,
+  getSessionTimeoutApi,
   fetchCurrentAuthUserApi,
 } from './lib/api';
 import {
@@ -367,7 +370,7 @@ export default function App() {
     };
   }, [userProfile, handleLogout]);
 
-  // Inactivity Timeout Management
+  // Inactivity Timeout Management: Loaded from Firestore site_settings collection
   const [inactivityTimeoutMinutes, setInactivityTimeoutMinutes] = useState<number>(() => {
     try {
       const saved = localStorage.getItem('cargo_inactivity_timeout_minutes');
@@ -380,16 +383,50 @@ export default function App() {
   const lastActivityRef = useRef<number>(Date.now());
   const [inactivityNotice, setInactivityNotice] = useState<string | null>(null);
 
-  // Sync timeout setting if updated from Admin Panel in real time
+  // 1. Initial Load & Real-Time Subscription from Firestore site_settings collection
   useEffect(() => {
+    // Initial fetch from Firestore & API
+    getSessionTimeoutFromFirestore().then((firestoreTimeout) => {
+      if (firestoreTimeout && firestoreTimeout > 0) {
+        setInactivityTimeoutMinutes(firestoreTimeout);
+        try {
+          localStorage.setItem('cargo_inactivity_timeout_minutes', String(firestoreTimeout));
+        } catch {}
+      } else {
+        getSessionTimeoutApi().then((apiTimeout) => {
+          if (apiTimeout && apiTimeout > 0) {
+            setInactivityTimeoutMinutes(apiTimeout);
+            try {
+              localStorage.setItem('cargo_inactivity_timeout_minutes', String(apiTimeout));
+            } catch {}
+          }
+        });
+      }
+    });
+
+    // Real-time Firestore snapshot listener for site_settings/security
+    const unsubTimeout = subscribeToSessionTimeout((newMinutes) => {
+      if (newMinutes && newMinutes > 0) {
+        setInactivityTimeoutMinutes(newMinutes);
+        try {
+          localStorage.setItem('cargo_inactivity_timeout_minutes', String(newMinutes));
+        } catch {}
+      }
+    });
+
+    // Local custom event listener from within same tab
     const handleTimeoutUpdate = (e: Event) => {
       const customEvent = e as CustomEvent<number>;
-      if (customEvent.detail) {
+      if (customEvent.detail && customEvent.detail > 0) {
         setInactivityTimeoutMinutes(customEvent.detail);
       }
     };
     window.addEventListener('cargo_timeout_updated', handleTimeoutUpdate);
-    return () => window.removeEventListener('cargo_timeout_updated', handleTimeoutUpdate);
+
+    return () => {
+      unsubTimeout();
+      window.removeEventListener('cargo_timeout_updated', handleTimeoutUpdate);
+    };
   }, []);
 
   // Track activity & trigger auto logout upon inactivity timeout

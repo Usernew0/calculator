@@ -563,4 +563,58 @@ describe("Cargo Profit Automated System & Logic Test Suite", () => {
       });
     });
   });
+
+  // ==========================================
+  // SECTION 7: SITE SETTINGS & SESSION INACTIVITY TIMEOUT
+  // ==========================================
+  describe("7. Site Settings & Session Inactivity Timeout Policy", () => {
+    test("GET /api/settings/session-timeout returns active timeout number", async () => {
+      const res = await apiRequest("/api/settings/session-timeout");
+      assert.equal(res.status, 200);
+      assert.ok(typeof res.body.timeoutMinutes === "number");
+      assert.ok(res.body.timeoutMinutes > 0);
+    });
+
+    test("POST /api/settings/session-timeout is rejected for non-admin user", async () => {
+      const res = await apiRequest("/api/settings/session-timeout", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${traderToken}` },
+        body: JSON.stringify({ timeoutMinutes: 45 }),
+      });
+      assert.equal(res.status, 403);
+    });
+
+    test("POST /api/settings/session-timeout rejects invalid timeout values", async () => {
+      const res1 = await apiRequest("/api/settings/session-timeout", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({ timeoutMinutes: 0 }),
+      });
+      assert.equal(res1.status, 400);
+
+      const res2 = await apiRequest("/api/settings/session-timeout", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({ timeoutMinutes: 9999 }),
+      });
+      assert.equal(res2.status, 400);
+    });
+
+    test("POST /api/settings/session-timeout succeeds for admin and updates global timeout", async () => {
+      const targetTimeout = 45;
+      const res = await apiRequest("/api/settings/session-timeout", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({ timeoutMinutes: targetTimeout }),
+      });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.success, true);
+      assert.equal(res.body.timeoutMinutes, targetTimeout);
+
+      // Verify GET returns updated timeout
+      const getRes = await apiRequest("/api/settings/session-timeout");
+      assert.equal(getRes.status, 200);
+      assert.equal(getRes.body.timeoutMinutes, targetTimeout);
+    });
+  });
 });

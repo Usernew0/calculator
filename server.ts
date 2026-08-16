@@ -220,6 +220,7 @@ seedInMemoryUsers();
 
 let serverCalculationsStore: Record<string, any> = {};
 let serverSiteFavicon: string | null = null;
+let serverInactivityTimeoutMinutes: number = 15;
 
 // Clean Sensitive Fields (Password) before returning User object to client
 function sanitizeUser(user: any) {
@@ -675,6 +676,57 @@ app.post("/api/settings/favicon", requireAdmin, async (req, res) => {
     res.json({ success: true, faviconUrl });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to save favicon setting" });
+  }
+});
+
+// GET /api/settings/session-timeout
+app.get("/api/settings/session-timeout", async (_req, res) => {
+  try {
+    try {
+      const { data } = await supabase
+        .from("site_settings")
+        .select("*")
+        .eq("id", "security")
+        .maybeSingle();
+      if (data && data.settings_data && typeof data.settings_data.inactivityTimeoutMinutes === "number") {
+        serverInactivityTimeoutMinutes = data.settings_data.inactivityTimeoutMinutes;
+      }
+    } catch {}
+
+    res.json({ timeoutMinutes: serverInactivityTimeoutMinutes || 15 });
+  } catch {
+    res.json({ timeoutMinutes: 15 });
+  }
+});
+
+// POST /api/settings/session-timeout (Admin Only)
+app.post("/api/settings/session-timeout", requireAdmin, async (req, res) => {
+  try {
+    const { timeoutMinutes } = req.body || {};
+    const parsedMinutes = Number(timeoutMinutes);
+    if (!parsedMinutes || isNaN(parsedMinutes) || parsedMinutes < 1 || parsedMinutes > 180) {
+      return res.status(400).json({
+        error: "Invalid timeout value. Must be a number between 1 and 180 minutes.",
+      });
+    }
+
+    const cleanMinutes = Math.round(parsedMinutes);
+    serverInactivityTimeoutMinutes = cleanMinutes;
+
+    try {
+      await supabase.from("site_settings").upsert({
+        id: "security",
+        settings_data: {
+          inactivityTimeoutMinutes: cleanMinutes,
+          updatedAt: new Date().toISOString(),
+        },
+        updated_at: new Date().toISOString(),
+      });
+    } catch {}
+
+    res.json({ success: true, timeoutMinutes: cleanMinutes });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to save session timeout setting" });
   }
 });
 

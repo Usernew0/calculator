@@ -35,6 +35,17 @@
         "createdAt": { "type": "string" }
       },
       "required": ["id", "currencyPair", "amount", "profit"]
+    },
+    "site_settings": {
+      "title": "Site Settings & Security Policy",
+      "description": "Global application settings including favicon branding and session inactivity timeout",
+      "type": "object",
+      "properties": {
+        "faviconUrl": { "type": "string" },
+        "inactivityTimeoutMinutes": { "type": "number" },
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
     }
   }
 }
