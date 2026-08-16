@@ -41,16 +41,35 @@ Elegant FX is engineered with a mobile-first, desktop-optimized responsive layou
 
 ---
 
-## 🛡️ Database & Persistent Storage Fallbacks
+## 🛡️ Database & Persistent Storage Architecture
 
-- Seamless real-time subscriptions with automatic local storage (`localStorage`) fallback if database permissions or offline networks occur.
-- Multi-channel realtime subscriptions generated with unique channel IDs to prevent subscription duplication warnings.
+Elegant FX implements a dual-engine persistent storage architecture separating concerns between identity security and analytical data:
+
+1. **Google Cloud Firestore (Auth, Identity & Security Hub)**:
+   - **User Accounts & Credentials (`users` collection)**: Secure password hash signatures, user roles (`admin` / `user`), account statuses (`active` / `suspended`), and metadata.
+   - **Real-Time Session Invalidation**: Sub-second snapshot listeners (`subscribeToUserSessionStatus`) to instantly terminate compromised or modified sessions across clients.
+   - **Site Settings & Inactivity Policy (`site_settings` collection)**: Global session inactivity timeout configuration (`site_settings/security` & `site_settings/session_timeout`) and custom branding favicon assets.
+
+2. **Supabase PostgreSQL (Calculations, Relational Financials & Media Store)**:
+   - **Trade Calculations (`calculations` table)**: Structured relational landed cost calculations, currency rates, itemized freight breakdown, customs duties, and pricing strategies.
+   - **Product & Cargo Gallery Media (`gallery_images` table)**: Product images, invoice captures, and media assets linked via foreign key `calculation_id` to calculations, indexed by `user_id`, `sku`, and `created_at`.
+   - **Row Level Security (RLS)**: Fine-grained access control on all relational tables with instant health verification endpoints.
 
 ---
 
 ## 📝 Modification & Update Log (Auto-Updated)
 
 - **2026-08-16**:
+  - **Automated Calculation Invoice Image Synchronization in Supabase SQL Schema**:
+    - Enhanced `/schema.sql` and `src/lib/supabase.ts` with a dedicated PostgreSQL Trigger `trg_sync_calculation_invoice_image` and function `sync_calculation_invoice_image()`.
+    - Automatically extracts `invoiceImage`, product title, supplier SKU, trade category, and trade direction directly from the calculation's JSONB document upon INSERT/UPDATE and syncs into `gallery_images`.
+    - Configured `calculation_id TEXT REFERENCES public.calculations(id) ON DELETE CASCADE` ensuring zero-maintenance cascading cleanup when calculations are deleted.
+    - Added the relational PostgreSQL view `v_calculation_gallery_images` providing a virtual real-time projection of all calculations containing cargo invoice images.
+  - **Dual Engine Architecture Realization (Firestore + Supabase)**:
+    - Formalized strict architectural separation: **Firestore** handles authentication, security credentials, real-time session invalidation, and site settings; **Supabase** handles calculation records, landed cost data, and the `gallery_images` media store.
+    - Updated `/schema.sql` and `SUPABASE_REQUIRED_DDL_SQL` in `src/lib/supabase.ts` with the new `gallery_images` table, indexes on `calculation_id`, `user_id`, and `sku`, and RLS policies.
+    - Added gallery image synchronization and REST API endpoints (`GET /api/gallery`, `POST /api/gallery`, `DELETE /api/gallery/:id`) in `server.ts` and client helper functions in `src/lib/api.ts` & `src/lib/supabase.ts`.
+    - Integrated gallery image count and health verification in `/api/supabase-health` and updated the Admin Panel Database diagnostic card in `AdminPanel.tsx`.
   - **Session Inactivity Timeout in Firestore `site_settings` Collection**:
     - Centralized and persisted the session inactivity timeout setting in the `site_settings` collection (`site_settings/security` & `site_settings/session_timeout` documents) in Firestore, replacing isolated browser local storage.
     - Implemented Firestore helpers `saveSessionTimeoutToFirestore`, `getSessionTimeoutFromFirestore`, and `subscribeToSessionTimeout` in `src/lib/firebase.ts`.

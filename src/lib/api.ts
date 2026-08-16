@@ -215,6 +215,40 @@ export async function clearCalculationsApi(userId?: string): Promise<boolean> {
   }
 }
 
+// Gallery Images API (Supabase-backed)
+export async function getGalleryImagesApi(userId?: string): Promise<any[]> {
+  try {
+    const query = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+    const data = await apiFetch(`/api/gallery${query}`);
+    return data.gallery || [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveGalleryImageApi(imageRecord: any): Promise<boolean> {
+  try {
+    await apiFetch('/api/gallery', {
+      method: 'POST',
+      body: JSON.stringify(imageRecord),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function deleteGalleryImageApi(id: string): Promise<boolean> {
+  try {
+    await apiFetch(`/api/gallery/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Site Settings & Branding API
 export async function getSessionTimeoutApi(): Promise<number | null> {
   try {

@@ -219,6 +219,7 @@ function seedInMemoryUsers() {
 seedInMemoryUsers();
 
 let serverCalculationsStore: Record<string, any> = {};
+let serverGalleryStore: Record<string, any> = {};
 let serverSiteFavicon: string | null = null;
 let serverInactivityTimeoutMinutes: number = 15;
 
@@ -580,6 +581,24 @@ app.post("/api/calculations", requireAuth, async (req, res) => {
         calculation_data: calc,
         created_at: calc.createdAt,
       });
+
+      // Synchronize image to gallery_images table if present
+      if (calc.input?.invoiceImage) {
+        const imageId = `IMG-${calc.id}`;
+        const galleryRecord = {
+          id: imageId,
+          calculation_id: calc.id,
+          user_id: calc.userId,
+          title: calc.input?.title || "Product Image",
+          sku: calc.input?.skuSupplier || "",
+          category: calc.input?.category || "General",
+          image_url: calc.input.invoiceImage,
+          trade_direction: calc.input?.tradeDirection || "import",
+          created_at: calc.createdAt,
+        };
+        serverGalleryStore[imageId] = galleryRecord;
+        await supabase.from("gallery_images").upsert(galleryRecord);
+      }
     } catch {}
 
     res.json({ success: true, calculation: calc });
@@ -593,9 +612,12 @@ app.delete("/api/calculations/:id", requireAuth, async (req, res) => {
   try {
     const id = req.params.id;
     delete serverCalculationsStore[id];
+    const imageId = `IMG-${id}`;
+    delete serverGalleryStore[imageId];
 
     try {
       await supabase.from("calculations").delete().eq("id", id);
+      await supabase.from("gallery_images").delete().eq("calculation_id", id);
     } catch {}
 
     res.json({ success: true });
@@ -612,27 +634,110 @@ app.post("/api/calculations/clear", requireAuth, async (req, res) => {
 
     if (!targetUserId) {
       serverCalculationsStore = {};
+      serverGalleryStore = {};
     } else {
       Object.keys(serverCalculationsStore).forEach((key) => {
         if (serverCalculationsStore[key].userId === targetUserId) {
           delete serverCalculationsStore[key];
         }
       });
+      Object.keys(serverGalleryStore).forEach((key) => {
+        if (serverGalleryStore[key].userId === targetUserId) {
+          delete serverGalleryStore[key];
+        }
+      });
     }
 
     try {
       let query = supabase.from("calculations").delete();
+      let queryGallery = supabase.from("gallery_images").delete();
       if (targetUserId) {
         query = query.eq("user_id", targetUserId);
+        queryGallery = queryGallery.eq("user_id", targetUserId);
       } else {
         query = query.neq("id", "");
+        queryGallery = queryGallery.neq("id", "");
       }
       await query;
+      await queryGallery;
     } catch {}
 
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to clear calculations" });
+  }
+});
+
+// --- API ROUTES: GALLERY IMAGES ---
+
+// GET /api/gallery
+app.get("/api/gallery", requireAuth, async (req, res) => {
+  try {
+    const authUser = (req as any).authUser;
+    const filterUserId = authUser.role === "admin" ? (req.query.userId as string) : authUser.userId;
+
+    let galleryList: any[] = [];
+
+    try {
+      let query = supabase.from("gallery_images").select("*");
+      if (filterUserId && authUser.role !== "admin") {
+        query = query.eq("user_id", filterUserId);
+      }
+      const { data, error } = await query.order("created_at", { ascending: false });
+      if (!error && Array.isArray(data)) {
+        galleryList = data;
+      }
+    } catch {}
+
+    if (galleryList.length === 0) {
+      galleryList = Object.values(serverGalleryStore).filter((item) => {
+        if (authUser.role === "admin") return true;
+        return item.user_id === authUser.userId || item.user_id === authUser.username;
+      });
+    }
+
+    res.json({ gallery: galleryList });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to fetch gallery images" });
+  }
+});
+
+// POST /api/gallery
+app.post("/api/gallery", requireAuth, async (req, res) => {
+  try {
+    const authUser = (req as any).authUser;
+    const record = req.body || {};
+    if (!record.id) {
+      record.id = `IMG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    }
+    record.user_id = record.user_id || authUser.userId || authUser.username;
+    record.created_at = record.created_at || new Date().toISOString();
+
+    serverGalleryStore[record.id] = record;
+
+    try {
+      await supabase.from("gallery_images").upsert(record);
+    } catch {}
+
+    res.json({ success: true, image: record });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to save gallery image" });
+  }
+});
+
+// DELETE /api/gallery/:id
+app.delete("/api/gallery/:id", requireAuth, async (req, res) => {
+  try {
+    const id = req.params.id;
+    delete serverGalleryStore[id];
+
+    try {
+      await supabase.from("gallery_images").delete().eq("id", id);
+    } catch {}
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to delete gallery image" });
   }
 });
 
@@ -736,6 +841,7 @@ app.get("/api/supabase-health", requireAdmin, async (_req, res) => {
     let isConnected = false;
     let usersCount = Object.keys(serverUsersStore).length;
     let calculationsCount = Object.keys(serverCalculationsStore).length;
+    let galleryImagesCount = Object.keys(serverGalleryStore).length;
 
     try {
       const { count: uCount, error: uErr } = await supabase.from("users").select("id", { count: "exact", head: true });
@@ -747,14 +853,20 @@ app.get("/api/supabase-health", requireAdmin, async (_req, res) => {
       if (!cErr) {
         calculationsCount = cCount ?? calculationsCount;
       }
+      const { count: gCount, error: gErr } = await supabase.from("gallery_images").select("id", { count: "exact", head: true });
+      if (!gErr) {
+        galleryImagesCount = gCount ?? galleryImagesCount;
+      }
     } catch {}
 
     res.json({
       isConnected,
       usersTableOk: true,
       calculationsTableOk: true,
+      galleryTableOk: true,
       usersCount,
       calculationsCount,
+      galleryImagesCount,
       checkedAt: new Date().toISOString(),
     });
   } catch (err: any) {

@@ -1331,6 +1331,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     </span>
                   )}
                 </div>
+
+                <div className="flex justify-between items-center">
+                  <span className="flex items-center gap-1">
+                    <Table className="w-3 h-3 text-slate-500" />
+                    <span>gallery_images table:</span>
+                  </span>
+                  {supabaseHealth?.galleryTableOk !== false ? (
+                    <span className="text-emerald-400 font-bold">
+                      ✓ OK ({supabaseHealth?.galleryImagesCount ?? 0} {lang === 'ar' ? 'صورة' : 'images'})
+                    </span>
+                  ) : (
+                    <span className="text-amber-400 font-bold flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      Missing Table
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           </div>

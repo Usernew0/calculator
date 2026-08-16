@@ -617,4 +617,62 @@ describe("Cargo Profit Automated System & Logic Test Suite", () => {
       assert.equal(getRes.body.timeoutMinutes, targetTimeout);
     });
   });
+
+  // ==========================================
+  // SECTION 8: SUPABASE DUAL ENGINE & GALLERY IMAGES
+  // ==========================================
+  describe("8. Supabase Calculations & Gallery Images Media Engine", () => {
+    test("POST /api/calculations with invoiceImage automatically creates gallery record", async () => {
+      const calcPayload = {
+        id: `CALC-TEST-${Date.now()}`,
+        userId: "trader",
+        input: {
+          title: "Solar Inverter Pro 5000",
+          skuSupplier: "SOL-5000-X",
+          category: "Electronics",
+          invoiceImage: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+          tradeDirection: "import",
+          targetCurrency: "USD",
+        },
+        totalLandedCostTarget: 1250,
+        totalRevenueTarget: 1800,
+        totalProfitTarget: 550,
+        createdAt: new Date().toISOString(),
+      };
+
+      const saveRes = await apiRequest("/api/calculations", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${traderToken}` },
+        body: JSON.stringify(calcPayload),
+      });
+      assert.equal(saveRes.status, 200);
+      assert.equal(saveRes.body.success, true);
+
+      // Verify gallery images list contains the image
+      const galleryRes = await apiRequest("/api/gallery", {
+        headers: { Authorization: `Bearer ${traderToken}` },
+      });
+      assert.equal(galleryRes.status, 200);
+      assert.ok(Array.isArray(galleryRes.body.gallery));
+      const found = galleryRes.body.gallery.find((item: any) => item.calculation_id === calcPayload.id);
+      assert.ok(found, "Gallery record should be synchronized from calculation");
+      assert.equal(found.sku, "SOL-5000-X");
+
+      // Cleanup
+      await apiRequest(`/api/calculations/${calcPayload.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${traderToken}` },
+      });
+    });
+
+    test("GET /api/supabase-health reports all tables including gallery_images", async () => {
+      const healthRes = await apiRequest("/api/supabase-health", {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      assert.equal(healthRes.status, 200);
+      assert.equal(healthRes.body.calculationsTableOk, true);
+      assert.equal(healthRes.body.galleryTableOk, true);
+      assert.ok(typeof healthRes.body.galleryImagesCount === "number");
+    });
+  });
 });

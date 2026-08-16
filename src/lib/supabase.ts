@@ -13,6 +13,8 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const USERS_TABLE = 'users';
 const CALCULATIONS_TABLE = 'calculations';
+const GALLERY_TABLE = 'gallery_images';
+const SETTINGS_TABLE = 'site_settings';
 
 function handleSupabaseError(context: string, error: any) {
   if (!error) return;
@@ -338,23 +340,120 @@ export function subscribeToUsersSupabase(onUpdate: (data: UserProfile[]) => void
   };
 }
 
+/**
+ * Save gallery image record to Supabase
+ */
+export interface GalleryImageRecord {
+  id: string;
+  calculation_id?: string;
+  user_id?: string;
+  title: string;
+  sku?: string;
+  category?: string;
+  image_url: string;
+  thumbnail_url?: string;
+  file_size_bytes?: number;
+  mime_type?: string;
+  trade_direction?: string;
+  metadata?: Record<string, any>;
+  created_at?: string;
+}
+
+export async function saveGalleryImageToSupabase(record: GalleryImageRecord): Promise<boolean> {
+  try {
+    const payload = {
+      id: record.id || `IMG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      calculation_id: record.calculation_id || null,
+      user_id: record.user_id || 'guest',
+      title: record.title || 'Product Image',
+      sku: record.sku || '',
+      category: record.category || 'General',
+      image_url: record.image_url,
+      thumbnail_url: record.thumbnail_url || null,
+      file_size_bytes: record.file_size_bytes || null,
+      mime_type: record.mime_type || 'image/jpeg',
+      trade_direction: record.trade_direction || 'import',
+      metadata: record.metadata || {},
+      created_at: record.created_at || new Date().toISOString(),
+    };
+
+    const { error } = await supabase
+      .from(GALLERY_TABLE)
+      .upsert(payload, { onConflict: 'id' });
+
+    if (error) {
+      handleSupabaseError('save gallery image', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    handleSupabaseError('save gallery image exception', err);
+    return false;
+  }
+}
+
+/**
+ * Get gallery images from Supabase
+ */
+export async function getGalleryImagesFromSupabase(filterUserId?: string | null): Promise<GalleryImageRecord[]> {
+  try {
+    let query = supabase.from(GALLERY_TABLE).select('*');
+    if (filterUserId) {
+      query = query.eq('user_id', filterUserId);
+    }
+    const { data, error } = await query.order('created_at', { ascending: false });
+    if (error) {
+      handleSupabaseError('fetch gallery images', error);
+      return [];
+    }
+    return (data || []) as GalleryImageRecord[];
+  } catch (err) {
+    handleSupabaseError('fetch gallery images exception', err);
+    return [];
+  }
+}
+
+/**
+ * Delete gallery image from Supabase
+ */
+export async function deleteGalleryImageFromSupabase(id: string): Promise<boolean> {
+  try {
+    const { error } = await supabase.from(GALLERY_TABLE).delete().eq('id', id);
+    if (error) {
+      handleSupabaseError('delete gallery image', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    handleSupabaseError('delete gallery image exception', err);
+    return false;
+  }
+}
+
 export interface SupabaseHealthReport {
   isConnected: boolean;
   usersTableOk: boolean;
   calculationsTableOk: boolean;
+  galleryTableOk: boolean;
   usersCount: number;
   calculationsCount: number;
+  galleryImagesCount: number;
   usersError?: string;
   calculationsError?: string;
+  galleryError?: string;
   generalError?: string;
   checkedAt: string;
   recommendedSqlDDL: string;
 }
 
-export const SUPABASE_REQUIRED_DDL_SQL = `-- Supabase & PostgreSQL Table Schema Setup for Elegant Application
--- Auto-Updated: Includes support for Product Cargo Images, Unit/Total Prices & Freight History
+export const SUPABASE_REQUIRED_DDL_SQL = `-- ==============================================================================
+-- Elegant Application Database Schema (PostgreSQL / Supabase DDL)
+-- Auto-Updated: Syncs with SUPABASE_REQUIRED_DDL_SQL in src/lib/supabase.ts
+-- Architecture: Supabase powers Calculations, Gallery Images, Invoices & Relational Analytics
+--               Firestore powers User Authentication, Security Credentials & Real-Time Session Invalidation
+-- ==============================================================================
 
--- 1. Create users table (Stores full user account data & metadata)
+-- 1. Create users table (Stores user account metadata & backup cache)
 CREATE TABLE IF NOT EXISTS public.users (
   id TEXT PRIMARY KEY,
   user_id TEXT,
@@ -365,12 +464,12 @@ CREATE TABLE IF NOT EXISTS public.users (
   role TEXT DEFAULT 'user',
   status TEXT DEFAULT 'active',
   password TEXT,
-  profile_data JSONB, -- Contains full UserProfile object
+  profile_data JSONB, -- Stores full UserProfile object
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 2. Create calculations table (Stores all calculations, quotes, products & uploaded invoice/cargo images)
+-- 2. Create calculations table (Stores all landed cost calculations, quotes, and pricing breakdowns)
 CREATE TABLE IF NOT EXISTS public.calculations (
   id TEXT PRIMARY KEY,
   user_id TEXT,
@@ -383,7 +482,24 @@ CREATE TABLE IF NOT EXISTS public.calculations (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 3. Create site_settings table (Stores global branding, favicon, and site config)
+-- 3. Create gallery_images table (Stores product photos, invoice captures, and cargo media assets linked to calculations)
+CREATE TABLE IF NOT EXISTS public.gallery_images (
+  id TEXT PRIMARY KEY,
+  calculation_id TEXT REFERENCES public.calculations(id) ON DELETE CASCADE,
+  user_id TEXT,
+  title TEXT,
+  sku TEXT,
+  category TEXT DEFAULT 'General',
+  image_url TEXT NOT NULL, -- High-res Base64 / Data-URI or Storage URL (extracted from invoiceImage)
+  thumbnail_url TEXT,
+  file_size_bytes BIGINT,
+  mime_type TEXT DEFAULT 'image/jpeg',
+  trade_direction TEXT DEFAULT 'import',
+  metadata JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 4. Create site_settings table (Stores global branding, favicon, and site config)
 CREATE TABLE IF NOT EXISTS public.site_settings (
   id TEXT PRIMARY KEY,
   favicon_url TEXT,
@@ -391,16 +507,104 @@ CREATE TABLE IF NOT EXISTS public.site_settings (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 4. Optimization Indexes (Enables instant searching by Product SKU, Title, Trade Direction & Cargo Image presence)
+-- 5. Optimization Indexes (Enables instant searching by Product SKU, Title, Trade Direction & Cargo Media)
 CREATE INDEX IF NOT EXISTS idx_calculations_user_id ON public.calculations (user_id);
 CREATE INDEX IF NOT EXISTS idx_calculations_created_at ON public.calculations (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_calculations_product_sku ON public.calculations ((calculation_data->'input'->>'skuSupplier'));
 CREATE INDEX IF NOT EXISTS idx_calculations_trade_direction ON public.calculations ((calculation_data->'input'->>'tradeDirection'));
 CREATE INDEX IF NOT EXISTS idx_calculations_has_image ON public.calculations (((calculation_data->'input'->>'invoiceImage') IS NOT NULL));
 
--- 5. Enable Row Level Security (RLS) and permissive policies for public client app
+CREATE INDEX IF NOT EXISTS idx_gallery_images_user_id ON public.gallery_images (user_id);
+CREATE INDEX IF NOT EXISTS idx_gallery_images_calculation_id ON public.gallery_images (calculation_id);
+CREATE INDEX IF NOT EXISTS idx_gallery_images_sku ON public.gallery_images (sku);
+CREATE INDEX IF NOT EXISTS idx_gallery_images_created_at ON public.gallery_images (created_at DESC);
+
+-- 6. Trigger Function: Automatically extracts and synchronizes gallery_images from calculations.invoiceImage
+CREATE OR REPLACE FUNCTION public.sync_calculation_invoice_image()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_invoice_img TEXT;
+  v_title TEXT;
+  v_sku TEXT;
+  v_category TEXT;
+  v_direction TEXT;
+BEGIN
+  -- Extract fields safely from calculation_data JSONB
+  v_invoice_img := NEW.calculation_data->'input'->>'invoiceImage';
+  v_title := COALESCE(NEW.calculation_data->'input'->>'title', NEW.title, 'Product Cargo Image');
+  v_sku := COALESCE(NEW.calculation_data->'input'->>'skuSupplier', '');
+  v_category := COALESCE(NEW.calculation_data->'input'->>'category', 'General');
+  v_direction := COALESCE(NEW.calculation_data->'input'->>'tradeDirection', 'import');
+
+  IF v_invoice_img IS NOT NULL AND length(trim(v_invoice_img)) > 0 THEN
+    INSERT INTO public.gallery_images (
+      id,
+      calculation_id,
+      user_id,
+      title,
+      sku,
+      category,
+      image_url,
+      trade_direction,
+      created_at
+    ) VALUES (
+      'IMG-' || NEW.id,
+      NEW.id,
+      NEW.user_id,
+      v_title,
+      v_sku,
+      v_category,
+      v_invoice_img,
+      v_direction,
+      COALESCE(NEW.created_at, NOW())
+    )
+    ON CONFLICT (id) DO UPDATE SET
+      user_id = EXCLUDED.user_id,
+      title = EXCLUDED.title,
+      sku = EXCLUDED.sku,
+      category = EXCLUDED.category,
+      image_url = EXCLUDED.image_url,
+      trade_direction = EXCLUDED.trade_direction,
+      created_at = EXCLUDED.created_at;
+  ELSE
+    -- If invoiceImage was removed on update, remove record from gallery_images
+    DELETE FROM public.gallery_images WHERE calculation_id = NEW.id;
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_sync_calculation_invoice_image ON public.calculations;
+CREATE TRIGGER trg_sync_calculation_invoice_image
+  AFTER INSERT OR UPDATE ON public.calculations
+  FOR EACH ROW
+  EXECUTE FUNCTION public.sync_calculation_invoice_image();
+
+-- 7. Relational View: Direct dynamic projection of calculation invoice images
+CREATE OR REPLACE VIEW public.v_calculation_gallery_images AS
+SELECT 
+  'IMG-' || id AS id,
+  id AS calculation_id,
+  user_id,
+  COALESCE(calculation_data->'input'->>'title', title, 'Product Cargo Image') AS title,
+  COALESCE(calculation_data->'input'->>'skuSupplier', '') AS sku,
+  COALESCE(calculation_data->'input'->>'category', 'General') AS category,
+  calculation_data->'input'->>'invoiceImage' AS image_url,
+  COALESCE(calculation_data->'input'->>'tradeDirection', 'import') AS trade_direction,
+  total_landed_cost,
+  total_revenue,
+  net_profit,
+  target_currency,
+  created_at
+FROM public.calculations
+WHERE calculation_data->'input'->>'invoiceImage' IS NOT NULL 
+  AND length(trim(calculation_data->'input'->>'invoiceImage')) > 0;
+
+-- 8. Enable Row Level Security (RLS) and permissive policies for public client app
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.calculations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.gallery_images ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.site_settings ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Allow anon read write users" ON public.users;
@@ -408,6 +612,9 @@ CREATE POLICY "Allow anon read write users" ON public.users FOR ALL USING (true)
 
 DROP POLICY IF EXISTS "Allow anon read write calculations" ON public.calculations;
 CREATE POLICY "Allow anon read write calculations" ON public.calculations FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow anon read write gallery_images" ON public.gallery_images;
+CREATE POLICY "Allow anon read write gallery_images" ON public.gallery_images FOR ALL USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow anon read write site_settings" ON public.site_settings;
 CREATE POLICY "Allow anon read write site_settings" ON public.site_settings FOR ALL USING (true) WITH CHECK (true);
@@ -421,8 +628,10 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthReport> {
     isConnected: false,
     usersTableOk: false,
     calculationsTableOk: false,
+    galleryTableOk: false,
     usersCount: 0,
     calculationsCount: 0,
+    galleryImagesCount: 0,
     checkedAt: new Date().toISOString(),
     recommendedSqlDDL: SUPABASE_REQUIRED_DDL_SQL,
   };
@@ -458,7 +667,22 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthReport> {
       report.calculationsCount = calcsCount ?? 0;
     }
 
-    report.isConnected = report.usersTableOk || report.calculationsTableOk || !report.usersError?.includes('FetchError');
+    // Check gallery_images table
+    const { count: galleryCount, error: galleryErr } = await supabase
+      .from(GALLERY_TABLE)
+      .select('id', { count: 'exact', head: true });
+
+    if (galleryErr) {
+      report.galleryError = galleryErr.message;
+      if (galleryErr.code === '42P01' || galleryErr.message.toLowerCase().includes('does not exist')) {
+        report.galleryError = `Table "${GALLERY_TABLE}" optional table in Supabase.`;
+      }
+    } else {
+      report.galleryTableOk = true;
+      report.galleryImagesCount = galleryCount ?? 0;
+    }
+
+    report.isConnected = report.usersTableOk || report.calculationsTableOk || report.galleryTableOk || !report.usersError?.includes('FetchError');
   } catch (err: any) {
     report.generalError = err?.message || 'Failed to connect to Supabase backend';
   }

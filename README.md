@@ -70,6 +70,13 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 
 ---
 
+### 4. Trade Gallery & Invoice Media Assets
+- **Automatic Invoice Image Extraction**: Cargo invoice images uploaded during calculation input (`invoiceImage`) are automatically indexed and synchronized to the `gallery_images` table via PostgreSQL triggers and foreign keys (`ON DELETE CASCADE`).
+- **Dynamic Relational SQL View**: `v_calculation_gallery_images` provides real-time virtual projection of all calculations containing invoice images without manual duplicate writes.
+- **Interactive Cargo Media Viewer**: Filter images by SKU, supplier, trade direction, and category with zoom preview, high-res download, and linked calculation inspection.
+
+---
+
 ### 5. Session Security & Real-Time Credential Synchronization
 - **Session Inactivity Timeout in Firestore `site_settings`**: Inactivity timeout settings (5m, 15m, 30m, 60m, 120m) are centralized and persisted directly in Firestore (`site_settings/security` & `site_settings/session_timeout`), ensuring unified timeout security across devices. Changes propagate to all active client sessions in real time via Firestore snapshot listeners without requiring page reloads.
 - **Real-Time Active Session Credential Auto-Refresh**: User sessions continuously synchronize with the database. If an administrator edits a user's status (`active` vs `suspended`) or updates their password, the user's active session is invalidated immediately in real-time, prompting them to re-authenticate with their new credentials.
@@ -136,9 +143,10 @@ The application implements a secure 3-tier full-stack architecture:
    - Rate Limiting: General API rate limit (100 req/15min) and strict login rate limit (10 req/15min).
    - Server-side input validation and parameter sanitization to mitigate SQL/NoSQL Injection & XSS.
 
-3. **Database Tier (Supabase PostgreSQL & Cloud Firestore)**:
-   - Supabase connection uses `SUPABASE_SERVICE_ROLE_KEY` strictly on the server side.
-   - Row-Level Security (RLS) policies enforced.
+3. **Database Tier (Dual Engine: Cloud Firestore + Supabase PostgreSQL)**:
+   - **Google Cloud Firestore**: Primary identity, credentials, active session security, and global `site_settings` (session inactivity timeout & favicon branding). Real-time snapshot listeners for instant session invalidation.
+   - **Supabase PostgreSQL**: Relational calculation records (`calculations`), historical landed cost analytics, and media asset storage (`gallery_images`).
+   - Server-side access using `SUPABASE_SERVICE_ROLE_KEY` and Row-Level Security (RLS) policies.
 
 ---
 
