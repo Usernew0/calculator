@@ -1,6 +1,6 @@
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-import { CalculationResult } from '../types';
+import { CalculationResult, FlightConsignment } from '../types';
 import { formatCurrency } from '../data/currencies';
 import { Language } from '../data/translations';
 
@@ -345,3 +345,188 @@ export async function exportHistoricalSummaryPDF(results: CalculationResult[], l
     document.body.removeChild(container);
   }
 }
+
+/**
+ * Export Official Air Cargo Flight Manifest & Landed Cost Consolidation Report (PDF)
+ */
+export async function exportFlightManifestPDF(
+  flight: FlightConsignment,
+  items: CalculationResult[],
+  lang: Language = 'en'
+): Promise<void> {
+  const isArabic = lang === 'ar';
+  const targetCurr = flight.targetCurrency || items[0]?.input.targetCurrency || 'USD';
+
+  // Calculate aggregates
+  let totalCost = 0;
+  let totalRevenue = 0;
+  let totalProfit = 0;
+  let totalQty = 0;
+  let totalChargeableWeight = flight.totalChargeableWeightKg || 0;
+  let totalGrossWeight = flight.totalGrossWeightKg || 0;
+
+  items.forEach((item) => {
+    totalCost += item.totalLandedCostTarget || 0;
+    totalRevenue += item.totalRevenueTarget || 0;
+    totalProfit += item.totalProfitTarget || 0;
+    totalQty += item.input.quantity || 0;
+    if (!flight.totalChargeableWeightKg) totalChargeableWeight += item.chargeableWeightKg || 0;
+    if (!flight.totalGrossWeightKg) totalGrossWeight += (item.input.weight || 0) * (item.input.quantity || 1);
+  });
+
+  const overallMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
+  const flightCode = flight.flightNumber || 'FLIGHT';
+  const flightRoute = `${flight.originAirport || 'ORIGIN'} ➔ ${flight.destinationAirport || 'DEST'}`;
+
+  const container = document.createElement('div');
+  container.style.position = 'fixed';
+  container.style.left = '-9999px';
+  container.style.top = '-9999px';
+  container.style.width = '1000px';
+  container.style.backgroundColor = '#ffffff';
+  container.style.color = '#0f172a';
+  container.style.fontFamily = 'Cairo, Tajawal, "Segoe UI", Roboto, system-ui, -apple-system, sans-serif';
+  container.style.direction = isArabic ? 'rtl' : 'ltr';
+  container.style.padding = '28px';
+  container.style.boxSizing = 'border-box';
+
+  const tableRowsHtml = items
+    .map((item, idx) => {
+      const input = item.input;
+      const rowCurr = input.targetCurrency || targetCurr;
+      const profitColor = item.totalProfitTarget >= 0 ? '#16a34a' : '#dc2626';
+
+      return `
+        <tr style="border-bottom: 1px solid #e2e8f0; background: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
+          <td style="padding: 10px 8px; font-weight: 700; text-align: center; color: #64748b;">${idx + 1}</td>
+          <td style="padding: 10px 8px; font-weight: 700; color: #0f172a;">
+            <div>${input.title}</div>
+            <div style="font-size: 10px; color: #64748b;">SKU: ${input.skuSupplier || 'N/A'} | ${input.category || 'General Cargo'}</div>
+          </td>
+          <td style="padding: 10px 8px; text-align: center; font-weight: 600;">${input.quantity.toLocaleString()}</td>
+          <td style="padding: 10px 8px; text-align: center; font-weight: 600;">${(item.chargeableWeightKg || 0).toFixed(1)} kg</td>
+          <td style="padding: 10px 8px; text-align: ${isArabic ? 'left' : 'right'}; font-weight: 700; color: #334155;">
+            ${formatCurrency(item.totalLandedCostTarget, rowCurr)}
+          </td>
+          <td style="padding: 10px 8px; text-align: ${isArabic ? 'left' : 'right'}; font-weight: 700; color: #059669;">
+            ${formatCurrency(item.totalRevenueTarget, rowCurr)}
+          </td>
+          <td style="padding: 10px 8px; text-align: ${isArabic ? 'left' : 'right'}; font-weight: 800; color: ${profitColor};">
+            ${formatCurrency(item.totalProfitTarget, rowCurr)}
+          </td>
+          <td style="padding: 10px 8px; text-align: center; font-weight: 700; color: #2563eb;">
+            ${item.actualMarginPercentage.toFixed(1)}%
+          </td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  container.innerHTML = `
+    <div style="border: 1px solid #cbd5e1; border-radius: 14px; overflow: hidden; background: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+      <!-- Header Banner -->
+      <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #ffffff; padding: 24px 28px; display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <div style="display: flex; align-items: center; gap: 8px; color: #38bdf8; font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 4px;">
+            <span>✈</span> AIR FREIGHT CARGO MANIFEST & LANDED COST CONSOLIDATION
+          </div>
+          <h1 style="margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px;">
+            ${flight.flightName || flight.flightNumber}
+          </h1>
+          <div style="font-size: 12px; color: #94a3b8; margin-top: 4px; display: flex; gap: 16px;">
+            <span><strong>${isArabic ? 'الناقل الجوي:' : 'Airline:'}</strong> ${flight.airline || 'N/A'}</span>
+            <span><strong>${isArabic ? 'خط السير:' : 'Route:'}</strong> ${flightRoute}</span>
+            <span><strong>${isArabic ? 'تاريخ الرحلة:' : 'Date:'}</strong> ${flight.flightDate || 'N/A'}</span>
+          </div>
+        </div>
+        <div style="text-align: ${isArabic ? 'left' : 'right'}; font-size: 11px; color: #cbd5e1; font-family: monospace;">
+          <div style="font-weight: 800; color: #38bdf8; font-size: 14px;">AWB: ${flight.awbNumber || 'PENDING'}</div>
+          <div style="margin-top: 4px; color: #94a3b8;">${new Date().toLocaleDateString(isArabic ? 'ar-EG' : 'en-US')}</div>
+        </div>
+      </div>
+
+      <div style="padding: 24px;">
+        <!-- Flight KPI Summary Cards -->
+        <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 22px;">
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; text-align: center;">
+            <div style="font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase;">${isArabic ? 'إجمالي المنتجات' : 'Total Items / Qty'}</div>
+            <div style="font-size: 16px; font-weight: 800; color: #0f172a; margin-top: 4px;">${items.length} ${isArabic ? 'بند' : 'SKUs'} (${totalQty.toLocaleString()} pcs)</div>
+          </div>
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; text-align: center;">
+            <div style="font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase;">${isArabic ? 'الوزن القابل للاحتساب' : 'Chargeable Weight'}</div>
+            <div style="font-size: 16px; font-weight: 800; color: #0284c7; margin-top: 4px;">${totalChargeableWeight.toFixed(1)} kg</div>
+          </div>
+          <div style="background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 10px; padding: 12px; text-align: center;">
+            <div style="font-size: 10px; font-weight: 700; color: #475569; text-transform: uppercase;">${isArabic ? 'إجمالي تكلفة الوصول' : 'Total Landed Cost'}</div>
+            <div style="font-size: 16px; font-weight: 800; color: #0f172a; margin-top: 4px;">${formatCurrency(totalCost, targetCurr)}</div>
+          </div>
+          <div style="background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 10px; padding: 12px; text-align: center;">
+            <div style="font-size: 10px; font-weight: 700; color: #047857; text-transform: uppercase;">${isArabic ? 'الإيراد المتوقع' : 'Total Revenue'}</div>
+            <div style="font-size: 16px; font-weight: 800; color: #059669; margin-top: 4px;">${formatCurrency(totalRevenue, targetCurr)}</div>
+          </div>
+          <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px; padding: 12px; text-align: center;">
+            <div style="font-size: 10px; font-weight: 700; color: #15803d; text-transform: uppercase;">${isArabic ? 'صافي أرباح الرحلة' : 'Net Profit (Margin)'}</div>
+            <div style="font-size: 16px; font-weight: 800; color: #16a34a; margin-top: 4px;">${formatCurrency(totalProfit, targetCurr)} (${overallMargin.toFixed(1)}%)</div>
+          </div>
+        </div>
+
+        <!-- Manifest Cargo Table -->
+        <div style="font-size: 13px; font-weight: 800; color: #0f172a; margin-bottom: 8px;">
+          ${isArabic ? 'بيان حمولة الرحلة وتفاصيل التكلفة والأرباح للبضائع' : 'ITEMIZED FLIGHT MANIFEST & FINANCIAL BREAKDOWN'}
+        </div>
+        <table style="width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 20px; text-align: ${isArabic ? 'right' : 'left'};">
+          <thead>
+            <tr style="background: #1e293b; color: #ffffff; font-weight: 700;">
+              <th style="padding: 10px 8px; border: 1px solid #334155; text-align: center;">#</th>
+              <th style="padding: 10px 8px; border: 1px solid #334155;">${isArabic ? 'اسم الصنف / البضاعة' : 'Cargo Description / SKU'}</th>
+              <th style="padding: 10px 8px; border: 1px solid #334155; text-align: center;">${isArabic ? 'الكمية' : 'Qty'}</th>
+              <th style="padding: 10px 8px; border: 1px solid #334155; text-align: center;">${isArabic ? 'الوزن' : 'Weight (kg)'}</th>
+              <th style="padding: 10px 8px; border: 1px solid #334155; text-align: ${isArabic ? 'left' : 'right'};">${isArabic ? 'تكلفة الوصول' : 'Landed Cost'}</th>
+              <th style="padding: 10px 8px; border: 1px solid #334155; text-align: ${isArabic ? 'left' : 'right'};">${isArabic ? 'الإيراد المتوقع' : 'Revenue'}</th>
+              <th style="padding: 10px 8px; border: 1px solid #334155; text-align: ${isArabic ? 'left' : 'right'};">${isArabic ? 'صافي الربح' : 'Net Profit'}</th>
+              <th style="padding: 10px 8px; border: 1px solid #334155; text-align: center;">${isArabic ? 'الهامش' : 'Margin'}</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRowsHtml || `<tr><td colspan="8" style="padding: 16px; text-align: center; color: #64748b;">${isArabic ? 'لا توجد منتجات مسجلة في هذه الرحلة' : 'No cargo items linked to this flight'}</td></tr>`}
+          </tbody>
+        </table>
+
+        ${flight.notes ? `
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px; font-size: 11px; color: #475569;">
+            <strong style="color: #0f172a;">${isArabic ? 'ملاحظات وتوجيهات الشحنة:' : 'Handling & Routing Remarks:'}</strong> ${flight.notes}
+          </div>
+        ` : ''}
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(container);
+
+  try {
+    const canvas = await html2canvas(container, {
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      backgroundColor: '#ffffff',
+    });
+
+    const imgData = canvas.toDataURL('image/png');
+    const pdf = new jsPDF({
+      orientation: 'landscape',
+      unit: 'mm',
+      format: 'a4',
+    });
+
+    const pdfWidth = 297;
+    const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+    pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+    pdf.save(`Flight_Manifest_${flightCode}_${flight.flightDate || 'Export'}.pdf`);
+  } catch (error) {
+    console.error('Error generating flight manifest PDF:', error);
+  } finally {
+    document.body.removeChild(container);
+  }
+}
+

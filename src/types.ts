@@ -66,9 +66,79 @@ export interface CalculationInput {
   targetCurrency: string;
   customExchangeRate?: number; // if user locks exchange rate manually
 
+  // Flight & Air Consignment Linking
+  flightName?: string; // e.g., "MS 777 - EgyptAir Cargo"
+  flightNumber?: string; // e.g., "MS 777"
+  flightDate?: string; // e.g., "2026-08-25"
+  originAirport?: string; // e.g., "CAN (Guangzhou)"
+  originCountry?: string; // e.g., "China"
+  destinationAirport?: string; // e.g., "CAI (Cairo)"
+  destinationCountry?: string; // e.g., "Egypt"
+  awbNumber?: string; // Air Waybill # e.g., "077-12345678"
+  airline?: string; // e.g., "EgyptAir Cargo"
+  flightConsignmentId?: string; // Linked Flight Consignment Batch ID
+
   // Profit Strategy
   pricingStrategy: 'margin' | 'markup' | 'target_price';
   targetValue: number; // margin % (e.g. 25%), or markup % (e.g. 35%), or target price in target currency
+}
+
+export interface FlightConsignment {
+  id: string; // e.g. "FLIGHT-20260825-MS777-XYZ"
+  userId?: string;
+  flightNumber: string; // e.g. "MS 777"
+  flightName: string; // e.g. "MS 777 (CAN ➔ CAI)"
+  airline?: string; // e.g. "EgyptAir Cargo"
+  flightDate: string; // YYYY-MM-DD
+  originAirport: string; // Code or name, e.g. "CAN (Guangzhou)"
+  originCountry?: string; // e.g. "China"
+  destinationAirport: string; // Code or name, e.g. "CAI (Cairo)"
+  destinationCountry?: string; // e.g. "Egypt"
+  awbNumber?: string; // Air Waybill #
+  totalGrossWeightKg?: number;
+  totalChargeableWeightKg?: number;
+  totalPackagesCount?: number;
+  totalLandedCost?: number;
+  totalRevenue?: number;
+  totalProfit?: number;
+  targetCurrency?: string;
+  documentPdfUrl?: string; // Stored PDF / image or Data URL of flight manifest / AWB
+  documentFileName?: string;
+  notes?: string;
+  status?: 'scheduled' | 'in_transit' | 'customs_clearance' | 'cleared' | 'delivered';
+  calculationIds: string[]; // Linked calculation records
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface FlightManifestParsedItem {
+  title: string;
+  sku?: string;
+  quantity: number;
+  unitPrice?: number;
+  currency?: string;
+  totalWeightKg?: number;
+  cbm?: number;
+  hsCode?: string;
+  category?: string;
+  freightRatePerKg?: number;
+}
+
+export interface FlightManifestParsedData {
+  flightNumber?: string;
+  flightDate?: string;
+  airline?: string;
+  originAirport?: string;
+  originCountry?: string;
+  destinationAirport?: string;
+  destinationCountry?: string;
+  awbNumber?: string;
+  totalGrossWeightKg?: number;
+  totalChargeableWeightKg?: number;
+  totalPackagesCount?: number;
+  currency?: string;
+  notes?: string;
+  items?: FlightManifestParsedItem[];
 }
 
 export interface CalculationResult {

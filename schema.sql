@@ -59,7 +59,25 @@ CREATE TABLE IF NOT EXISTS public.site_settings (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 5. Optimization Indexes (Enables instant searching by Product SKU, Title, Trade Direction & Cargo Media)
+-- 5. Create flight_consignments table (Stores grouped flight batches, air waybills, routes, and cargo manifests)
+CREATE TABLE IF NOT EXISTS public.flight_consignments (
+  id TEXT PRIMARY KEY,
+  user_id TEXT,
+  flight_number TEXT,
+  flight_name TEXT,
+  airline TEXT,
+  flight_date TEXT,
+  origin_airport TEXT,
+  destination_airport TEXT,
+  awb_number TEXT,
+  document_pdf_url TEXT,
+  status TEXT DEFAULT 'scheduled',
+  flight_data JSONB, -- Stores full FlightConsignment metadata, weights, and items
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 6. Optimization Indexes (Enables instant searching by Product SKU, Title, Trade Direction & Cargo Media)
 CREATE INDEX IF NOT EXISTS idx_calculations_user_id ON public.calculations (user_id);
 CREATE INDEX IF NOT EXISTS idx_calculations_created_at ON public.calculations (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_calculations_product_sku ON public.calculations ((calculation_data->'input'->>'skuSupplier'));
@@ -71,7 +89,11 @@ CREATE INDEX IF NOT EXISTS idx_gallery_images_calculation_id ON public.gallery_i
 CREATE INDEX IF NOT EXISTS idx_gallery_images_sku ON public.gallery_images (sku);
 CREATE INDEX IF NOT EXISTS idx_gallery_images_created_at ON public.gallery_images (created_at DESC);
 
--- 6. Trigger Function: Automatically extracts and synchronizes gallery_images from calculations.invoiceImage
+CREATE INDEX IF NOT EXISTS idx_flight_consignments_user_id ON public.flight_consignments (user_id);
+CREATE INDEX IF NOT EXISTS idx_flight_consignments_flight_date ON public.flight_consignments (flight_date DESC);
+CREATE INDEX IF NOT EXISTS idx_flight_consignments_flight_num ON public.flight_consignments (flight_number);
+
+-- 7. Trigger Function: Automatically extracts and synchronizes gallery_images from calculations.invoiceImage
 CREATE OR REPLACE FUNCTION public.sync_calculation_invoice_image()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -158,6 +180,7 @@ ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.calculations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.gallery_images ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.site_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.flight_consignments ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Allow anon read write users" ON public.users;
 CREATE POLICY "Allow anon read write users" ON public.users FOR ALL USING (true) WITH CHECK (true);
@@ -170,4 +193,7 @@ CREATE POLICY "Allow anon read write gallery_images" ON public.gallery_images FO
 
 DROP POLICY IF EXISTS "Allow anon read write site_settings" ON public.site_settings;
 CREATE POLICY "Allow anon read write site_settings" ON public.site_settings FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow anon read write flight_consignments" ON public.flight_consignments;
+CREATE POLICY "Allow anon read write flight_consignments" ON public.flight_consignments FOR ALL USING (true) WITH CHECK (true);
 

@@ -14,7 +14,7 @@ import {
   setLogLevel
 } from "firebase/firestore";
 import { getAuth, signInAnonymously } from "firebase/auth";
-import { CalculationResult, UserProfile } from "../types";
+import { CalculationResult, UserProfile, FlightConsignment } from "../types";
 import firebaseConfig from "../../firebase-applet-config.json";
 import {
   saveUserProfileToSupabase,
@@ -27,6 +27,9 @@ import {
   getCalculationsFromSupabase,
   subscribeToCalculationsSupabase,
   subscribeToUsersSupabase,
+  saveFlightConsignmentToSupabase,
+  getFlightConsignmentsFromSupabase,
+  deleteFlightConsignmentFromSupabase,
 } from "./supabase";
 
 // Initialize Firebase App
@@ -752,6 +755,68 @@ export function subscribeToSiteFavicon(callback: (faviconUrl: string) => void): 
 }
 
 /**
+ * Save Gemini AI Key to Firestore site_settings/ai_config
+ */
+export async function saveAiKeyToFirestore(apiKey: string): Promise<void> {
+  try {
+    await ensureAuth();
+    const docRef = doc(db, SETTINGS_COLLECTION, "ai_config");
+    await setDoc(
+      docRef,
+      {
+        apiKey: apiKey.trim(),
+        configured: Boolean(apiKey.trim()),
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+    console.info("Gemini AI key saved to Firestore site_settings/ai_config.");
+  } catch (error: any) {
+    handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/ai_config`);
+  }
+}
+
+/**
+ * Fetch saved Gemini AI Key from Firestore site_settings/ai_config
+ */
+export async function getAiKeyFromFirestore(): Promise<string | null> {
+  try {
+    await ensureAuth();
+    const docRef = doc(db, SETTINGS_COLLECTION, "ai_config");
+    const snap = await getDoc(docRef);
+    if (snap.exists() && snap.data()?.apiKey) {
+      return snap.data().apiKey as string;
+    }
+  } catch (error: any) {
+    console.info("Firestore AI key fetch notice:", error?.message || error);
+  }
+  return null;
+}
+
+/**
+ * Real-time subscription to AI Key configuration changes
+ */
+export function subscribeToAiKey(callback: (apiKey: string) => void): () => void {
+  try {
+    const docRef = doc(db, SETTINGS_COLLECTION, "ai_config");
+    return onSnapshot(
+      docRef,
+      (snapshot) => {
+        if (snapshot.exists() && snapshot.data()?.apiKey) {
+          callback(snapshot.data().apiKey as string);
+        }
+      },
+      (error) => {
+        console.info("Notice: AI key subscription status:", error?.message || error);
+      }
+    );
+  } catch (err) {
+    console.info("Realtime AI key setup notice:", err);
+    return () => {};
+  }
+}
+
+/**
  * Clear calculation records from Supabase and Firestore for a specific user (or all if omitted)
  */
 export async function clearAllCalculationsFromFirestore(filterUserId?: string | null): Promise<void> {
@@ -783,3 +848,124 @@ export async function clearAllCalculationsFromFirestore(filterUserId?: string | 
     handleFirestoreError(error, OperationType.DELETE, CALCULATIONS_COLLECTION);
   }
 }
+
+export const FLIGHTS_COLLECTION = 'flight_consignments';
+
+/**
+ * Save Flight Consignment to Supabase and Firestore
+ */
+export async function saveFlightConsignmentToFirestore(flight: FlightConsignment): Promise<void> {
+  // 1. Dual-write to Supabase
+  try {
+    await saveFlightConsignmentToSupabase(flight);
+  } catch (err) {
+    console.warn("Supabase save flight warning:", err);
+  }
+
+  // 2. Dual-write to Firestore
+  try {
+    await ensureAuth();
+    const docRef = doc(db, FLIGHTS_COLLECTION, flight.id);
+    await setDoc(docRef, flight, { merge: true });
+    console.info("Flight consignment saved to Firestore:", flight.id);
+  } catch (error: any) {
+    handleFirestoreError(error, OperationType.WRITE, `${FLIGHTS_COLLECTION}/${flight.id}`);
+  }
+}
+
+/**
+ * Fetch all Flight Consignments from Supabase with Firestore fallback
+ */
+export async function getFlightConsignmentsFromFirestore(filterUserId?: string | null): Promise<FlightConsignment[]> {
+  // 1. Try Supabase first
+  try {
+    const supabaseFlights = await getFlightConsignmentsFromSupabase(filterUserId || undefined);
+    if (supabaseFlights && supabaseFlights.length > 0) {
+      return supabaseFlights;
+    }
+  } catch (err) {
+    console.info("Supabase flight fetch notice, switching to Firestore fallback:", err);
+  }
+
+  // 2. Firestore fallback
+  try {
+    await ensureAuth();
+    const q = query(collection(db, FLIGHTS_COLLECTION), orderBy('createdAt', 'desc'));
+    const querySnapshot = await getDocs(q);
+    const flights: FlightConsignment[] = [];
+    querySnapshot.forEach((docSnap) => {
+      const data = docSnap.data() as FlightConsignment;
+      if (
+        !filterUserId ||
+        filterUserId === 'admin' ||
+        data.userId === filterUserId ||
+        data.userId?.toLowerCase() === filterUserId.toLowerCase()
+      ) {
+        flights.push({ ...data, id: docSnap.id });
+      }
+    });
+    return flights;
+  } catch (error: any) {
+    handleFirestoreError(error, OperationType.LIST, FLIGHTS_COLLECTION);
+    return [];
+  }
+}
+
+/**
+ * Delete Flight Consignment from Supabase and Firestore
+ */
+export async function deleteFlightConsignmentFromFirestore(id: string): Promise<void> {
+  // Delete from Supabase
+  try {
+    await deleteFlightConsignmentFromSupabase(id);
+  } catch (err) {
+    console.warn("Supabase delete flight warning:", err);
+  }
+
+  // Delete from Firestore
+  try {
+    await ensureAuth();
+    const docRef = doc(db, FLIGHTS_COLLECTION, id);
+    await deleteDoc(docRef);
+    console.info("Flight consignment deleted from Firestore:", id);
+  } catch (error: any) {
+    handleFirestoreError(error, OperationType.DELETE, `${FLIGHTS_COLLECTION}/${id}`);
+  }
+}
+
+/**
+ * Subscribe to Flight Consignments real-time changes
+ */
+export function subscribeToFlightConsignments(
+  callback: (flights: FlightConsignment[]) => void,
+  filterUserId?: string | null
+): () => void {
+  try {
+    const q = query(collection(db, FLIGHTS_COLLECTION), orderBy('createdAt', 'desc'));
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const flights: FlightConsignment[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as FlightConsignment;
+          if (
+            !filterUserId ||
+            filterUserId === 'admin' ||
+            data.userId === filterUserId ||
+            data.userId?.toLowerCase() === filterUserId.toLowerCase()
+          ) {
+            flights.push({ ...data, id: docSnap.id });
+          }
+        });
+        callback(flights);
+      },
+      (error) => {
+        console.info("Notice: Flight real-time subscription status:", error?.message || error);
+      }
+    );
+  } catch (err) {
+    console.info("Realtime flights subscription setup notice:", err);
+    return () => {};
+  }
+}
+

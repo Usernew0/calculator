@@ -1,10 +1,13 @@
-import { UserProfile, CalculationResult } from '../types';
+import { UserProfile, CalculationResult, FlightConsignment, FlightManifestParsedData } from '../types';
 import { getSessionToken, setSessionToken, triggerSessionInvalidation } from './session';
 import {
   getAllUsersFromFirestore,
   saveUserProfileToFirestore,
   deleteUserFromFirestore,
   getUserProfileFromFirestore,
+  saveFlightConsignmentToFirestore,
+  getFlightConsignmentsFromFirestore,
+  deleteFlightConsignmentFromFirestore,
 } from './firebase';
 
 /**
@@ -309,4 +312,111 @@ export async function checkSupabaseHealthApi() {
     };
   }
 }
+
+// Flight Consignments API
+export async function getFlightsApi(userId?: string): Promise<FlightConsignment[]> {
+  try {
+    const url = userId ? `/api/flights?userId=${encodeURIComponent(userId)}` : '/api/flights';
+    const data = await apiFetch(url);
+    if (data.flights && Array.isArray(data.flights)) {
+      return data.flights;
+    }
+  } catch (err) {
+    console.info('Backend flights fetch notice, falling back to Firestore/Supabase:', err);
+  }
+  return await getFlightConsignmentsFromFirestore(userId);
+}
+
+export async function saveFlightApi(flight: FlightConsignment): Promise<FlightConsignment> {
+  try {
+    const data = await apiFetch('/api/flights', {
+      method: 'POST',
+      body: JSON.stringify(flight),
+    });
+    if (data.flight) {
+      // Background async dual-write to Firestore
+      saveFlightConsignmentToFirestore(data.flight).catch(() => {});
+      return data.flight;
+    }
+  } catch (err) {
+    console.info('Backend flight save notice, writing directly to Firestore/Supabase:', err);
+  }
+  await saveFlightConsignmentToFirestore(flight);
+  return flight;
+}
+
+export async function deleteFlightApi(id: string): Promise<boolean> {
+  try {
+    await apiFetch(`/api/flights/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    deleteFlightConsignmentFromFirestore(id).catch(() => {});
+    return true;
+  } catch (err) {
+    console.info('Backend flight delete notice, deleting directly from Firestore/Supabase:', err);
+    await deleteFlightConsignmentFromFirestore(id);
+    return true;
+  }
+}
+
+// AI Flight Manifest & Air Waybill PDF Extraction API
+export async function parseFlightManifestApi(
+  fileData: string,
+  mimeType: string = 'application/pdf',
+  fileName?: string
+): Promise<FlightManifestParsedData> {
+  const data = await apiFetch('/api/parse-flight-manifest', {
+    method: 'POST',
+    body: JSON.stringify({ fileData, mimeType, fileName }),
+  });
+
+  if (data.success && data.extracted) {
+    return data.extracted as FlightManifestParsedData;
+  }
+  throw new Error(data.error || 'Failed to extract flight manifest data');
+}
+
+// AI Key Management API
+export interface AiKeyStatusResponse {
+  configured: boolean;
+  maskedKey: string;
+  source: 'admin_configured' | 'env' | 'none';
+  model: string;
+  features?: string[];
+}
+
+export async function getAiKeyStatusApi(): Promise<AiKeyStatusResponse> {
+  try {
+    return await apiFetch('/api/admin/ai-key-status');
+  } catch (err: any) {
+    return {
+      configured: false,
+      maskedKey: '',
+      source: 'none',
+      model: 'gemini-3.7-flash',
+    };
+  }
+}
+
+export async function saveAiKeyApi(apiKey: string): Promise<{ success: boolean; message: string; maskedKey?: string }> {
+  return await apiFetch('/api/admin/ai-key', {
+    method: 'POST',
+    body: JSON.stringify({ apiKey }),
+  });
+}
+
+export async function testAiKeyApi(apiKey?: string): Promise<{ success: boolean; message: string; latencyMs?: number; model?: string; error?: string }> {
+  return await apiFetch('/api/admin/test-ai-key', {
+    method: 'POST',
+    body: JSON.stringify({ apiKey }),
+  });
+}
+
+export async function deleteAiKeyApi(): Promise<{ success: boolean; message: string; configured: boolean; maskedKey?: string }> {
+  return await apiFetch('/api/admin/ai-key', {
+    method: 'DELETE',
+  });
+}
+
+
 

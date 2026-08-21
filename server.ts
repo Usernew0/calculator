@@ -220,8 +220,69 @@ seedInMemoryUsers();
 
 let serverCalculationsStore: Record<string, any> = {};
 let serverGalleryStore: Record<string, any> = {};
+let serverFlightsStore: Record<string, any> = {};
 let serverSiteFavicon: string | null = null;
 let serverInactivityTimeoutMinutes: number = 15;
+let serverGeminiApiKey: string = "";
+
+function getEffectiveGeminiKey(): string {
+  return serverGeminiApiKey || process.env.GEMINI_API_KEY || "";
+}
+
+function maskApiKey(key: string): string {
+  if (!key) return "";
+  if (key.length <= 10) return "••••••••";
+  return key.slice(0, 6) + "••••••••" + key.slice(-4);
+}
+
+// Helper: Resilient Gemini Generation with automatic model fallback for 503 / 404 / high demand spikes
+const GEMINI_MODELS_CASCADE = [
+  "gemini-3.7-flash",
+  "gemini-2.0-flash",
+  "gemini-2.5-flash",
+  "gemini-1.5-flash",
+  "gemini-2.5-pro",
+];
+
+async function generateGeminiWithFallback(ai: GoogleGenAI, contents: any[], options?: { systemInstruction?: string }) {
+  let lastError: any = null;
+
+  for (const model of GEMINI_MODELS_CASCADE) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+        ...(options?.systemInstruction ? { systemInstruction: options.systemInstruction } : {}),
+      });
+      return { response, successfulModel: model };
+    } catch (err: any) {
+      lastError = err;
+      const errMsg = String(err?.message || "");
+      const isRecoverable =
+        errMsg.includes("503") ||
+        errMsg.includes("UNAVAILABLE") ||
+        errMsg.includes("high demand") ||
+        errMsg.includes("RESOURCE_EXHAUSTED") ||
+        errMsg.includes("429") ||
+        errMsg.includes("404") ||
+        errMsg.includes("NOT_FOUND") ||
+        errMsg.includes("no longer available") ||
+        errMsg.includes("is not supported");
+
+      if (isRecoverable) {
+        console.warn(`Gemini model ${model} unavailable or deprecated (${errMsg}), attempting fallback model in cascade...`);
+        // Short pause before trying next model
+        await new Promise((r) => setTimeout(r, 200));
+        continue;
+      } else {
+        // Non-recoverable auth or format error, throw immediately
+        throw err;
+      }
+    }
+  }
+
+  throw lastError;
+}
 
 // Clean Sensitive Fields (Password) before returning User object to client
 function sanitizeUser(user: any) {
@@ -668,6 +729,126 @@ app.post("/api/calculations/clear", requireAuth, async (req, res) => {
   }
 });
 
+// --- API ROUTES: FLIGHT CONSIGNMENTS & AIR MANIFESTS ---
+
+// GET /api/flights
+app.get("/api/flights", requireAuth, async (req, res) => {
+  try {
+    const authUser = (req as any).authUser;
+    const filterUserId = authUser.role === "admin" ? (req.query.userId as string) : authUser.userId;
+
+    let flights: any[] = [];
+
+    try {
+      let query = supabase.from("flight_consignments").select("*");
+      if (filterUserId && authUser.role !== "admin") {
+        query = query.eq("user_id", filterUserId);
+      }
+      const { data, error } = await query;
+      if (!error && Array.isArray(data)) {
+        flights = data.map((item) => {
+          if (item.flight_data) {
+            return {
+              ...item.flight_data,
+              id: item.id || item.flight_data.id,
+              status: item.status || item.flight_data.status,
+            };
+          }
+          return {
+            id: item.id,
+            userId: item.user_id,
+            flightNumber: item.flight_number,
+            flightName: item.flight_name || item.flight_number,
+            airline: item.airline,
+            flightDate: item.flight_date,
+            originAirport: item.origin_airport,
+            destinationAirport: item.destination_airport,
+            awbNumber: item.awb_number,
+            documentPdfUrl: item.document_pdf_url,
+            status: item.status,
+            calculationIds: [],
+            createdAt: item.created_at || new Date().toISOString(),
+          };
+        });
+      }
+    } catch {}
+
+    if (flights.length === 0) {
+      flights = Object.values(serverFlightsStore).filter((item) => {
+        if (authUser.role === "admin") return true;
+        return item.userId === authUser.userId || item.userId === authUser.username;
+      });
+    }
+
+    flights.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    res.json({ flights });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to fetch flight consignments" });
+  }
+});
+
+// POST /api/flights
+app.post("/api/flights", requireAuth, async (req, res) => {
+  try {
+    const authUser = (req as any).authUser;
+    const flight = req.body || {};
+
+    if (!flight.id) {
+      flight.id = `FLIGHT-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    }
+
+    flight.userId = flight.userId || authUser.userId || authUser.username;
+    flight.createdAt = flight.createdAt || new Date().toISOString();
+    flight.updatedAt = new Date().toISOString();
+
+    serverFlightsStore[flight.id] = flight;
+
+    try {
+      await supabase.from("flight_consignments").upsert({
+        id: flight.id,
+        user_id: flight.userId,
+        flight_number: flight.flightNumber || "",
+        flight_name: flight.flightName || flight.flightNumber || "",
+        airline: flight.airline || "",
+        flight_date: flight.flightDate || "",
+        origin_airport: flight.originAirport || "",
+        destination_airport: flight.destinationAirport || "",
+        awb_number: flight.awbNumber || "",
+        document_pdf_url: flight.documentPdfUrl || null,
+        status: flight.status || "scheduled",
+        flight_data: flight,
+        updated_at: flight.updatedAt,
+      }, { onConflict: "id" });
+    } catch {}
+
+    res.json({ success: true, flight });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to save flight consignment" });
+  }
+});
+
+// DELETE /api/flights/:id
+app.delete("/api/flights/:id", requireAuth, async (req, res) => {
+  try {
+    const authUser = (req as any).authUser;
+    const { id } = req.params;
+
+    delete serverFlightsStore[id];
+
+    try {
+      let query = supabase.from("flight_consignments").delete().eq("id", id);
+      if (authUser.role !== "admin") {
+        query = query.eq("user_id", authUser.userId);
+      }
+      await query;
+    } catch {}
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to delete flight consignment" });
+  }
+});
+
 // --- API ROUTES: GALLERY IMAGES ---
 
 // GET /api/gallery
@@ -1031,6 +1212,128 @@ app.post("/api/exchange-rates/refresh", async (_req, res) => {
   });
 });
 
+// API Route: AI Key Management (Admin Panel)
+app.get("/api/admin/ai-key-status", async (_req, res) => {
+  const effectiveKey = getEffectiveGeminiKey();
+  const source = serverGeminiApiKey ? "admin_configured" : (process.env.GEMINI_API_KEY ? "env" : "none");
+  res.json({
+    configured: Boolean(effectiveKey),
+    maskedKey: maskApiKey(effectiveKey),
+    source,
+    model: "gemini-3.7-flash",
+    features: [
+      "AI Flight Manifest & Air Waybill PDF Extraction (/api/parse-flight-manifest)",
+      "Commercial Invoice OCR & Product Attribute Recognition (/api/parse-invoice)",
+      "Multimodal Trade Documentation Parser"
+    ]
+  });
+});
+
+app.post("/api/admin/ai-key", async (req, res) => {
+  try {
+    const { apiKey } = req.body || {};
+    const cleanKey = String(apiKey || "").trim();
+    if (!cleanKey) {
+      return res.status(400).json({ error: "Gemini API Key cannot be empty." });
+    }
+
+    serverGeminiApiKey = cleanKey;
+
+    // Dual-write to Supabase site_settings table if available
+    try {
+      await supabase.from("site_settings").upsert({
+        id: "ai_config",
+        data: { apiKey: cleanKey, updatedAt: new Date().toISOString() },
+        updated_at: new Date().toISOString()
+      }, { onConflict: "id" });
+    } catch {}
+
+    res.json({
+      success: true,
+      message: "Google Gemini API key successfully saved and activated on the server.",
+      configured: true,
+      maskedKey: maskApiKey(cleanKey),
+      source: "admin_configured"
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || "Failed to save AI key" });
+  }
+});
+
+app.post("/api/admin/test-ai-key", async (req, res) => {
+  try {
+    const { apiKey } = req.body || {};
+    const keyToTest = String(apiKey || "").trim() || getEffectiveGeminiKey();
+    if (!keyToTest) {
+      return res.status(400).json({
+        success: false,
+        error: "No Gemini API key provided or configured on the server."
+      });
+    }
+
+    const start = performance.now();
+    const ai = new GoogleGenAI({
+      apiKey: keyToTest,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        },
+      },
+    });
+
+    const { response, successfulModel } = await generateGeminiWithFallback(ai, [
+      {
+        role: "user",
+        parts: [{ text: "Respond strictly with the single word: OK" }]
+      }
+    ]);
+
+    const durationMs = Math.round(performance.now() - start);
+    const reply = (response.text || "").trim();
+
+    res.json({
+      success: true,
+      message: `Google Gemini API connection verified successfully via ${successfulModel}.`,
+      latencyMs: durationMs,
+      model: successfulModel,
+      response: reply
+    });
+  } catch (err: any) {
+    let errorMsg = err?.message || "Gemini API test failed. Please verify the API key permissions and quota.";
+    
+    // Provide clear actionable guidance for Google Cloud / Project permission errors
+    if (errorMsg.includes("denied access") || errorMsg.includes("PERMISSION_DENIED") || errorMsg.includes("403")) {
+      errorMsg = "Google Cloud Project Permission Denied (403): The Google Cloud project linked to this API key has restricted access or disabled Generative Language API. To fix this: Visit https://aistudio.google.com/app/apikey and click 'Create API key in new project', then paste the new key here.";
+    } else if (errorMsg.includes("API_KEY_INVALID") || errorMsg.includes("400")) {
+      errorMsg = "Invalid API Key (400): The provided API key string is invalid or has expired. Please check that the entire key was copied correctly from Google AI Studio.";
+    } else if (errorMsg.includes("RESOURCE_EXHAUSTED") || errorMsg.includes("429")) {
+      errorMsg = "Rate Limit / Quota Exceeded (429): Your Gemini API quota limit has been reached. Please check your AI Studio billing or quota tier.";
+    } else if (errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE") || errorMsg.includes("high demand")) {
+      errorMsg = "Temporary Model High Demand (503): Google's Gemini servers are experiencing temporary peak load spikes. The system will automatically retry.";
+    }
+
+    res.status(400).json({
+      success: false,
+      error: errorMsg
+    });
+  }
+});
+
+app.delete("/api/admin/ai-key", async (_req, res) => {
+  serverGeminiApiKey = "";
+  try {
+    await supabase.from("site_settings").delete().eq("id", "ai_config");
+  } catch {}
+  const effective = getEffectiveGeminiKey();
+  res.json({
+    success: true,
+    message: "Admin AI key removed.",
+    configured: Boolean(effective),
+    maskedKey: maskApiKey(effective),
+    source: effective ? "env" : "none"
+  });
+});
+
 // API Route: AI Invoice OCR Parsing
 app.post("/api/parse-invoice", async (req, res) => {
   try {
@@ -1039,12 +1342,21 @@ app.post("/api/parse-invoice", async (req, res) => {
       return res.status(400).json({ error: "No image payload provided" });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = getEffectiveGeminiKey();
     if (!apiKey) {
-      return res.status(500).json({ error: "GEMINI_API_KEY environment variable is not configured on the server" });
+      return res.status(500).json({
+        error: "Gemini API Key is not configured. Please enter your Gemini API Key in the Admin Panel or set GEMINI_API_KEY."
+      });
     }
 
-    const ai = new GoogleGenAI({ apiKey });
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        },
+      },
+    });
     const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
     const mimeMatch = image.match(/^data:(image\/\w+);base64,/);
     const mimeType = mimeMatch ? mimeMatch[1] : "image/jpeg";
@@ -1064,23 +1376,20 @@ Return a valid JSON object matching this schema:
 }
 Do not include markdown formatting or commentary. Return raw JSON string only.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: prompt },
-            {
-              inlineData: {
-                data: base64Data,
-                mimeType: mimeType,
-              },
+    const { response } = await generateGeminiWithFallback(ai, [
+      {
+        role: "user",
+        parts: [
+          { text: prompt },
+          {
+            inlineData: {
+              data: base64Data,
+              mimeType: mimeType,
             },
-          ],
-        },
-      ],
-    });
+          },
+        ],
+      },
+    ]);
 
     const text = response.text || "";
     const cleanJsonText = text.replace(/```json/g, "").replace(/```/g, "").trim();
@@ -1089,6 +1398,109 @@ Do not include markdown formatting or commentary. Return raw JSON string only.`;
     res.json({ success: true, extracted });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || "Failed to analyze image" });
+  }
+});
+
+// API Route: AI Flight Manifest & Air Waybill PDF/Image OCR Parsing
+app.post("/api/parse-flight-manifest", async (req, res) => {
+  try {
+    const { fileData, mimeType = "application/pdf", fileName } = req.body || {};
+    if (!fileData || typeof fileData !== "string") {
+      return res.status(400).json({ error: "No document file payload provided" });
+    }
+
+    const apiKey = getEffectiveGeminiKey();
+    if (!apiKey) {
+      return res.status(500).json({
+        error: "Gemini API Key is not configured. Please enter your Gemini API Key in the Admin Panel or set GEMINI_API_KEY."
+      });
+    }
+
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        },
+      },
+    });
+
+    let cleanBase64 = fileData;
+    let cleanMimeType = mimeType;
+
+    const dataUriMatch = fileData.match(/^data:([^;]+);base64,(.*)$/s);
+    if (dataUriMatch) {
+      cleanMimeType = dataUriMatch[1];
+      cleanBase64 = dataUriMatch[2];
+    } else {
+      cleanBase64 = fileData.replace(/^data:[^;]+;base64,/, "");
+    }
+
+    // Default to application/pdf if not specified and ends with .pdf
+    if (fileName && fileName.toLowerCase().endsWith(".pdf") && (!cleanMimeType || cleanMimeType === "application/octet-stream")) {
+      cleanMimeType = "application/pdf";
+    }
+
+    const prompt = `You are an expert Air Freight Logistics Specialist, IATA Air Waybill (AWB) auditor, and Cargo Flight Manifest extractor.
+Examine this Air Waybill (AWB), Flight Cargo Manifest, Airline Bill of Lading, or Air Freight Packing List document carefully.
+
+Extract all flight and cargo parameters into a clean, structured JSON object adhering strictly to this schema:
+{
+  "flightNumber": "e.g. MS 777, EK 923, QR 884, TK 654",
+  "airline": "Airline name e.g. EgyptAir Cargo, Emirates SkyCargo, Qatar Airways Cargo, Turkish Cargo, Saudia Cargo",
+  "flightDate": "Flight departure date in YYYY-MM-DD format (or ISO date)",
+  "originAirport": "Airport name and 3-letter IATA code e.g. CAN - Guangzhou Baiyun, PVG - Shanghai Pudong, DXB - Dubai",
+  "originCountry": "Country of origin e.g. China, United Arab Emirates, Turkey",
+  "destinationAirport": "Destination Airport name and 3-letter IATA code e.g. CAI - Cairo International, RUH - King Khalid, JED - King Abdulaziz",
+  "destinationCountry": "Destination Country e.g. Egypt, Saudi Arabia",
+  "awbNumber": "Master or House Air Waybill Number e.g. 077-98765432, 176-12345678",
+  "totalGrossWeightKg": number (total shipment gross weight in KG),
+  "totalChargeableWeightKg": number (total chargeable / volumetric weight in KG),
+  "totalPackagesCount": number (number of packages / cartons / pieces),
+  "currency": "3-letter currency code e.g. USD, EUR, CNY, EGP, SAR",
+  "notes": "Any special cargo handling remarks, flight routing, or airwaybill remarks",
+  "items": [
+    {
+      "title": "Item name / description of goods",
+      "sku": "Product SKU or part number if available",
+      "quantity": number (pieces/units count),
+      "unitPrice": number (price per unit if indicated),
+      "totalWeightKg": number (weight for this line item in KG),
+      "cbm": number (volume CBM if available),
+      "hsCode": "Harmonized System tariff code if present",
+      "category": "Electronics, Textiles, Machinery, Spare Parts, General Cargo, etc.",
+      "freightRatePerKg": number (freight rate per kg if specified)
+    }
+  ]
+}
+
+Ensure all numerical fields are numbers (not strings with units).
+If any field cannot be found or is ambiguous, make a reasonable operational estimate or omit/leave null.
+Do NOT output markdown fences or commentary outside the JSON. Output raw valid JSON ONLY.`;
+
+    const { response } = await generateGeminiWithFallback(ai, [
+      {
+        role: "user",
+        parts: [
+          { text: prompt },
+          {
+            inlineData: {
+              data: cleanBase64,
+              mimeType: cleanMimeType,
+            },
+          },
+        ],
+      },
+    ]);
+
+    const text = response.text || "";
+    const cleanJsonText = text.replace(/```json/g, "").replace(/```/g, "").trim();
+    const extracted = JSON.parse(cleanJsonText);
+
+    res.json({ success: true, extracted });
+  } catch (err: any) {
+    console.error("Flight manifest OCR parsing error:", err);
+    res.status(500).json({ error: err?.message || "Failed to analyze flight manifest PDF document" });
   }
 });
 

@@ -759,6 +759,7 @@ export default function App() {
               t={t}
               lang={lang}
               currentUserCompany={userProfile?.companyName || userProfile?.fullName || ''}
+              currentUser={userProfile}
             />
           )}
 

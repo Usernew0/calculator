@@ -1,7 +1,7 @@
-import React, { useState, useMemo } from 'react';
-import { CalculationResult } from '../types';
+import React, { useState, useMemo, useEffect } from 'react';
+import { CalculationResult, FlightConsignment } from '../types';
 import { formatCurrency } from '../data/currencies';
-import { exportSingleCalculationPDF, exportHistoricalSummaryPDF } from '../utils/pdfExport';
+import { exportSingleCalculationPDF, exportHistoricalSummaryPDF, exportFlightManifestPDF } from '../utils/pdfExport';
 import { translations, Language } from '../data/translations';
 import {
   ResponsiveContainer,
@@ -42,9 +42,21 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   Edit3,
+  Layers,
+  Plus,
+  RefreshCw,
+  Building2,
+  Compass,
+  Globe,
+  Scale,
+  Upload,
 } from 'lucide-react';
 import { ClientQuoteModal } from './ClientQuoteModal';
 import { EditTransactionModal } from './EditTransactionModal';
+import { MultiHistoryAnalysisModal } from './MultiHistoryAnalysisModal';
+import { FlightConsignmentModal } from './FlightConsignmentModal';
+import { getFlightsApi, deleteFlightApi } from '../lib/api';
+import { subscribeToFlightConsignments } from '../lib/firebase';
 
 interface DashboardViewProps {
   history: CalculationResult[];
@@ -57,6 +69,7 @@ interface DashboardViewProps {
   t: typeof translations['en'];
   lang: Language;
   currentUserCompany?: string;
+  currentUser?: any;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -70,6 +83,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   t,
   lang,
   currentUserCompany = '',
+  currentUser,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedMethodFilter, setSelectedMethodFilter] = useState<string>('all');
@@ -82,8 +96,139 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState<boolean>(false);
   const [selectedQuoteItems, setSelectedQuoteItems] = useState<CalculationResult[] | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [showMultiAnalysisModal, setShowMultiAnalysisModal] = useState<boolean>(false);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
   const [editingRecord, setEditingRecord] = useState<CalculationResult | null>(null);
+
+  // Flight Consignments State
+  const [dashboardSubTab, setDashboardSubTab] = useState<'records' | 'flights'>('records');
+  const [flights, setFlights] = useState<FlightConsignment[]>([]);
+  const [isLoadingFlights, setIsLoadingFlights] = useState<boolean>(false);
+  const [showFlightConsignmentModal, setShowFlightConsignmentModal] = useState<boolean>(false);
+  const [selectedFlightForView, setSelectedFlightForView] = useState<FlightConsignment | null>(null);
+  const [flightToDelete, setFlightToDelete] = useState<FlightConsignment | null>(null);
+  const [isExportingFlightPdf, setIsExportingFlightPdf] = useState<string | null>(null);
+
+  // Load and Subscribe to Flights
+  useEffect(() => {
+    let isMounted = true;
+    const fetchFlights = async () => {
+      setIsLoadingFlights(true);
+      try {
+        const list = await getFlightsApi(currentUser?.userId || currentUser?.username);
+        if (isMounted && list) {
+          setFlights(list);
+        }
+      } catch (err) {
+        console.info('Flight fetch notice:', err);
+      } finally {
+        if (isMounted) setIsLoadingFlights(false);
+      }
+    };
+
+    fetchFlights();
+
+    const unsubscribe = subscribeToFlightConsignments((updatedFlights) => {
+      if (isMounted) {
+        setFlights(updatedFlights);
+      }
+    }, currentUser?.userId || currentUser?.username);
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, [currentUser]);
+
+  const handleDeleteFlight = async (flightId: string) => {
+    try {
+      await deleteFlightApi(flightId);
+      setFlights((prev) => prev.filter((f) => f.id !== flightId));
+      if (selectedFlightForView?.id === flightId) {
+        setSelectedFlightForView(null);
+      }
+    } catch (err: any) {
+      console.error('Failed to delete flight:', err);
+      alert(err?.message || (lang === 'ar' ? 'فشل حذف الرحلة' : 'Failed to delete flight'));
+    }
+  };
+
+  const handleExportFlightManifest = async (flight: FlightConsignment) => {
+    setIsExportingFlightPdf(flight.id);
+    try {
+      // Find all calculation items linked to this flight
+      const flightItems = history.filter((h) => flight.calculationIds.includes(h.id));
+      await exportFlightManifestPDF(flight, flightItems, lang);
+    } catch (err) {
+      console.error('Flight manifest export failed:', err);
+    } finally {
+      setIsExportingFlightPdf(null);
+    }
+  };
+
+  // Map calculationId to FlightConsignment for fast lookup
+  const flightMapByCalcId = useMemo(() => {
+    const map: Record<string, FlightConsignment> = {};
+    flights.forEach((flight) => {
+      (flight.calculationIds || []).forEach((calcId) => {
+        map[calcId] = flight;
+      });
+    });
+    return map;
+  }, [flights]);
+
+  // Flight search & status filters
+  const [flightSearchQuery, setFlightSearchQuery] = useState('');
+  const [flightStatusFilter, setFlightStatusFilter] = useState('all');
+
+  const filteredFlights = useMemo(() => {
+    return flights.filter((flight) => {
+      const q = flightSearchQuery.toLowerCase();
+      const matchQuery =
+        !q ||
+        flight.flightNumber.toLowerCase().includes(q) ||
+        flight.airline.toLowerCase().includes(q) ||
+        flight.originAirport.toLowerCase().includes(q) ||
+        flight.destinationAirport.toLowerCase().includes(q) ||
+        flight.originCountry.toLowerCase().includes(q) ||
+        flight.destinationCountry.toLowerCase().includes(q) ||
+        (flight.masterAwbNumber && flight.masterAwbNumber.toLowerCase().includes(q));
+
+      const matchStatus = flightStatusFilter === 'all' || flight.status === flightStatusFilter;
+
+      return matchQuery && matchStatus;
+    });
+  }, [flights, flightSearchQuery, flightStatusFilter]);
+
+  // Selected items list memo
+  const selectedItemsList = useMemo(() => {
+    return history.filter((item) => selectedIds.includes(item.id));
+  }, [history, selectedIds]);
+
+  // Quick live aggregates for selected items
+  const selectedQuickMetrics = useMemo(() => {
+    if (selectedItemsList.length === 0) return { cost: 0, profit: 0, revenue: 0, margin: 0, imports: 0, exports: 0, curr: 'USD' };
+    const curr = selectedItemsList[0]?.input.targetCurrency || 'USD';
+    let cost = 0;
+    let profit = 0;
+    let revenue = 0;
+    let imports = 0;
+    let exports = 0;
+
+    selectedItemsList.forEach((item) => {
+      cost += item.totalLandedCostTarget || 0;
+      profit += item.totalProfitTarget || 0;
+      revenue += item.totalRevenueTarget || 0;
+      if (item.input.tradeDirection === 'export') {
+        exports++;
+      } else {
+        imports++;
+      }
+    });
+
+    const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
+    return { cost, profit, revenue, margin, imports, exports, curr };
+  }, [selectedItemsList]);
 
   // Filtered & Sorted list
   const filteredHistory = useMemo(() => {
@@ -476,18 +621,67 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* Historical Data Table */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 p-4 sm:p-6 shadow-xs space-y-4 transition-colors duration-200">
-        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="font-bold text-slate-800 dark:text-slate-100 text-lg">{t.historicalRecordsTableTitle}</h2>
-              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                {filteredHistory.length} {lang === 'ar' ? 'حسبة' : 'records'}
-              </span>
+      {/* Subtab Navigation Bar: Records vs Flight Consignments */}
+      <div className="flex flex-wrap items-center justify-between gap-3 p-2 bg-slate-200/60 dark:bg-slate-800/80 rounded-2xl border border-slate-300/80 dark:border-slate-700/80 transition-colors">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setDashboardSubTab('records')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition-all cursor-pointer ${
+              dashboardSubTab === 'records'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-md'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-900/50'
+            }`}
+          >
+            <Package className="w-4 h-4 text-emerald-500" />
+            <span>{lang === 'ar' ? 'سجلات الحسبات والشحنات' : 'Calculation Records'}</span>
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+              {history.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setDashboardSubTab('flights')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition-all cursor-pointer ${
+              dashboardSubTab === 'flights'
+                ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-900/50'
+            }`}
+          >
+            <Plane className="w-4 h-4 text-sky-400" />
+            <span>{lang === 'ar' ? 'رحلات الطيران والبوالص (Flight Consignments)' : 'Flight Consignments & Manifests'}</span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${dashboardSubTab === 'flights' ? 'bg-sky-700 text-white' : 'bg-sky-100 dark:bg-sky-900/50 text-sky-700 dark:text-sky-300'}`}>
+              {flights.length}
+            </span>
+          </button>
+        </div>
+
+        {dashboardSubTab === 'flights' && (
+          <button
+            type="button"
+            onClick={() => setShowFlightConsignmentModal(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white rounded-xl text-xs font-black shadow-md shadow-sky-950/40 transition-all active:scale-95 cursor-pointer min-h-[38px]"
+          >
+            <Plus className="w-4 h-4" />
+            <span>{lang === 'ar' ? 'ربط رحلة جديدة / رفع PDF' : 'New Flight / Upload PDF'}</span>
+          </button>
+        )}
+      </div>
+
+      {/* SUBTAB 1: Historical Data Table */}
+      {dashboardSubTab === 'records' && (
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 p-4 sm:p-6 shadow-xs space-y-4 transition-colors duration-200">
+          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="font-bold text-slate-800 dark:text-slate-100 text-lg">{t.historicalRecordsTableTitle}</h2>
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                  {filteredHistory.length} {lang === 'ar' ? 'حسبة' : 'records'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">{t.historicalRecordsTableSub}</p>
             </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">{t.historicalRecordsTableSub}</p>
-          </div>
 
           {/* Filters, Search & Sort */}
           <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
@@ -563,8 +757,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         {/* Multi-Select Active Action Bar */}
         {selectedIds.length > 0 && (
-          <div className="p-3.5 sm:p-4 bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 border border-blue-500/40 rounded-2xl flex flex-wrap items-center justify-between gap-3 shadow-xl animate-in fade-in slide-in-from-top-2">
-            <div className="flex items-center gap-2.5">
+          <div className="p-3.5 sm:p-4 bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 border border-blue-500/40 rounded-2xl flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3.5 shadow-xl animate-in fade-in slide-in-from-top-2">
+            <div className="flex flex-wrap items-center gap-2.5">
               <button
                 type="button"
                 onClick={handleToggleSelectAll}
@@ -587,9 +781,50 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   ? `تم تحديد ${selectedIds.length} من أصل ${filteredHistory.length}`
                   : `Selected ${selectedIds.length} of ${filteredHistory.length}`}
               </span>
+
+              {/* Live Mini Aggregates Strip */}
+              <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-slate-950/60 rounded-xl border border-slate-800 text-[11px]">
+                <div>
+                  <span className="text-slate-400">{lang === 'ar' ? 'التكلفة:' : 'Cost:'}</span>{' '}
+                  <strong className="text-white font-mono">{formatCurrency(selectedQuickMetrics.cost, selectedQuickMetrics.curr)}</strong>
+                </div>
+                <div className="w-px h-3 bg-slate-700" />
+                <div>
+                  <span className="text-slate-400">{lang === 'ar' ? 'الربح:' : 'Profit:'}</span>{' '}
+                  <strong className="text-teal-400 font-mono">+{formatCurrency(selectedQuickMetrics.profit, selectedQuickMetrics.curr)}</strong>
+                </div>
+                <div className="w-px h-3 bg-slate-700" />
+                <div>
+                  <span className="text-slate-400">{lang === 'ar' ? 'الهامش:' : 'Margin:'}</span>{' '}
+                  <strong className="text-blue-400 font-mono">{selectedQuickMetrics.margin.toFixed(1)}%</strong>
+                </div>
+                {(selectedQuickMetrics.imports > 0 || selectedQuickMetrics.exports > 0) && (
+                  <>
+                    <div className="w-px h-3 bg-slate-700" />
+                    <span className="text-[10px] text-slate-300">
+                      ({selectedQuickMetrics.imports} {lang === 'ar' ? 'استيراد' : 'Imp'} / {selectedQuickMetrics.exports} {lang === 'ar' ? 'تصدير' : 'Exp'})
+                    </span>
+                  </>
+                )}
+              </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              {/* Comprehensive Multi-History Analysis Button */}
+              <button
+                type="button"
+                onClick={() => setShowMultiAnalysisModal(true)}
+                className="px-4 py-2 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-teal-400 text-slate-950 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-lg shadow-emerald-950/50 transition-all active:scale-95 min-h-[38px] group"
+                title={lang === 'ar' ? 'لوحة التحليل المالي والربحي المجمع للشحنات المحددة' : 'Consolidated financial & profit analysis'}
+              >
+                <BarChart3 className="w-4 h-4 text-slate-950 shrink-0 group-hover:scale-110 transition-transform" />
+                <span>
+                  {lang === 'ar'
+                    ? `تحليل الحسبات المحددة (${selectedIds.length})`
+                    : `Analyze Selected (${selectedIds.length})`}
+                </span>
+              </button>
+
               {/* Export Selected PDF Report */}
               <button
                 type="button"
@@ -602,6 +837,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   {lang === 'ar'
                     ? `تصدير PDF (${selectedIds.length})`
                     : `Export PDF (${selectedIds.length})`}
+                </span>
+              </button>
+
+              {/* Consolidate into Flight Consignment */}
+              <button
+                type="button"
+                onClick={() => setShowFlightConsignmentModal(true)}
+                className="px-3.5 py-2 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-md shadow-sky-950/50 transition-all active:scale-95 min-h-[38px] group"
+                title={lang === 'ar' ? 'ربط الحسبات المحددة برحلة طيران وبوليصة شحن' : 'Consolidate selected records into a Flight Consignment'}
+              >
+                <Plane className="w-4 h-4 shrink-0 group-hover:scale-110 transition-transform" />
+                <span>
+                  {lang === 'ar'
+                    ? `ربط برحلة (${selectedIds.length})`
+                    : `Consolidate Flight (${selectedIds.length})`}
                 </span>
               </button>
 
@@ -635,8 +885,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <Trash2 className="w-4 h-4 shrink-0" />
                 <span>
                   {lang === 'ar'
-                    ? `حذف المحدد (${selectedIds.length})`
-                    : `Delete Selected (${selectedIds.length})`}
+                    ? `حذف (${selectedIds.length})`
+                    : `Delete (${selectedIds.length})`}
                 </span>
               </button>
 
@@ -733,9 +983,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       )}
 
                       <div>
-                        <h3 className="font-bold text-slate-900 dark:text-slate-100 text-sm leading-snug">
-                          {item.input.title}
-                        </h3>
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-bold text-slate-900 dark:text-slate-100 text-sm leading-snug">
+                            {item.input.title}
+                          </h3>
+                          {flightMapByCalcId[item.id] && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedFlightForView(flightMapByCalcId[item.id]);
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30 hover:bg-sky-500/25 transition-colors cursor-pointer"
+                              title={`${flightMapByCalcId[item.id].airline} (${flightMapByCalcId[item.id].originAirport} → ${flightMapByCalcId[item.id].destinationAirport})`}
+                            >
+                              <Plane className="w-2.5 h-2.5 shrink-0 text-sky-500" />
+                              <span>{flightMapByCalcId[item.id].flightNumber}</span>
+                            </button>
+                          )}
+                        </div>
                         <div className="flex flex-wrap items-center gap-2 mt-1">
                           <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">
                             {item.input.skuSupplier || 'N/A'}
@@ -966,7 +1232,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                           )}
 
                           <div>
-                            <div className="font-bold text-slate-900 dark:text-slate-100">{item.input.title}</div>
+                            <div className="flex items-center gap-2">
+                              <div className="font-bold text-slate-900 dark:text-slate-100">{item.input.title}</div>
+                              {flightMapByCalcId[item.id] && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedFlightForView(flightMapByCalcId[item.id]);
+                                  }}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30 hover:bg-sky-500/25 transition-colors cursor-pointer"
+                                  title={`${flightMapByCalcId[item.id].airline} (${flightMapByCalcId[item.id].originAirport} → ${flightMapByCalcId[item.id].destinationAirport})`}
+                                >
+                                  <Plane className="w-2.5 h-2.5 shrink-0 text-sky-500" />
+                                  <span>{flightMapByCalcId[item.id].flightNumber}</span>
+                                </button>
+                              )}
+                            </div>
                             <div className="text-[10px] text-slate-400 font-mono">{item.input.skuSupplier || 'N/A'}</div>
                           </div>
                         </div>
@@ -1059,6 +1341,378 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </table>
         </div>
       </div>
+      )}
+
+      {/* SUBTAB 2: Flight Consignments & Air Manifests */}
+      {dashboardSubTab === 'flights' && (
+        <div className="space-y-6">
+          {/* Flight Consignments KPI Strip */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
+            <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs">
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">
+                  {lang === 'ar' ? 'إجمالي الرحلات' : 'Total Flights'}
+                </span>
+                <Plane className="w-4 h-4 text-sky-500" />
+              </div>
+              <div className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
+                {flights.length}
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                {lang === 'ar' ? 'بوالص جوية مسجلة' : 'Registered manifests'}
+              </div>
+            </div>
+
+            <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs">
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">
+                  {lang === 'ar' ? 'إجمالي وزن الشحن' : 'Total Air Weight'}
+                </span>
+                <Scale className="w-4 h-4 text-amber-500" />
+              </div>
+              <div className="text-xl sm:text-2xl font-black text-amber-600 dark:text-amber-400">
+                {flights.reduce((sum, f) => sum + (f.totalWeightKg || 0), 0).toLocaleString()} <span className="text-xs">KG</span>
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                {flights.reduce((sum, f) => sum + (f.totalPieces || 0), 0).toLocaleString()} {lang === 'ar' ? 'طرد / كرتونة' : 'packages'}
+              </div>
+            </div>
+
+            <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs">
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">
+                  {lang === 'ar' ? 'الحجم الإجمالي' : 'Total Volume'}
+                </span>
+                <Layers className="w-4 h-4 text-indigo-500" />
+              </div>
+              <div className="text-xl sm:text-2xl font-black text-indigo-600 dark:text-indigo-400">
+                {flights.reduce((sum, f) => sum + (f.totalVolumeCbm || 0), 0).toFixed(2)} <span className="text-xs">CBM</span>
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                {lang === 'ar' ? 'حجم البضائع الجوية' : 'Cubic meter volume'}
+              </div>
+            </div>
+
+            <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs">
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">
+                  {lang === 'ar' ? 'تكلفة الشحنات الجوية' : 'Total Landed Cost'}
+                </span>
+                <DollarSign className="w-4 h-4 text-rose-500" />
+              </div>
+              <div className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
+                {formatCurrency(flights.reduce((sum, f) => sum + (f.totalLandedCostEGP || 0), 0), 'EGP')}
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                {lang === 'ar' ? 'تكلفة البضائع المجمعة' : 'Consolidated cost'}
+              </div>
+            </div>
+
+            <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs col-span-2 sm:col-span-1">
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <span className="text-[11px] font-black uppercase tracking-wider text-emerald-500">
+                  {lang === 'ar' ? 'صافي الربح المتوقع' : 'Projected Profit'}
+                </span>
+                <TrendingUp className="w-4 h-4 text-emerald-500" />
+              </div>
+              <div className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400">
+                {formatCurrency(flights.reduce((sum, f) => sum + (f.totalProfitEGP || 0), 0), 'EGP')}
+              </div>
+              <div className="text-[11px] text-emerald-500/80 font-bold mt-1">
+                {lang === 'ar' ? 'أرباح الشحنات المربوطة' : 'Expected net margin'}
+              </div>
+            </div>
+          </div>
+
+          {/* Flights Filter & Search Bar */}
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 p-4 sm:p-5 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="font-extrabold text-lg text-slate-900 dark:text-white flex items-center gap-2">
+                  <Plane className="w-5 h-5 text-sky-500" />
+                  <span>{lang === 'ar' ? 'إدارة رحلات الطيران وبوالص الشحن (Air Manifests)' : 'Flight Manifests & Consignments'}</span>
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/20">
+                    {filteredFlights.length}
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  {lang === 'ar'
+                    ? 'ربط الحسبات والمنتجات برقم الرحلة والمطار، واستخراج بيانات المانيفست الذكي من ملفات PDF'
+                    : 'Link calculations & products to flights, airports, and parse manifests automatically from PDF'}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowFlightConsignmentModal(true)}
+                className="px-4 py-2.5 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white rounded-xl text-xs sm:text-sm font-black flex items-center gap-2 shadow-md shadow-sky-950/40 transition-all active:scale-95 cursor-pointer min-h-[40px]"
+              >
+                <Plus className="w-4 h-4" />
+                <span>{lang === 'ar' ? 'إنشاء رحلة / رفع PDF' : 'New Flight / Upload PDF'}</span>
+              </button>
+            </div>
+
+            {/* Search & Status Filter */}
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="relative flex-1 min-w-[220px]">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3 rtl:left-auto rtl:right-3 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder={lang === 'ar' ? 'بحث برقم الرحلة، شركة الطيران، المطار، أو رقم البوليصة...' : 'Search by flight #, airline, airport, AWB #...'}
+                  value={flightSearchQuery}
+                  onChange={(e) => setFlightSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3 rtl:pl-3 rtl:pr-9 py-2.5 text-xs sm:text-sm rounded-xl border border-slate-300 dark:border-slate-700/80 bg-slate-50/80 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-hidden focus:ring-2 focus:ring-sky-500/50 focus:border-sky-500 min-h-[40px] transition-all"
+                />
+              </div>
+
+              <div className="relative">
+                <select
+                  value={flightStatusFilter}
+                  onChange={(e) => setFlightStatusFilter(e.target.value)}
+                  className="px-3.5 py-2.5 text-xs sm:text-sm rounded-xl border border-slate-300 dark:border-slate-700/80 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-semibold focus:outline-hidden focus:ring-2 focus:ring-sky-500/50 focus:border-sky-500 cursor-pointer min-h-[40px]"
+                >
+                  <option value="all">{lang === 'ar' ? 'كافة حالات الرحلات' : 'All Statuses'}</option>
+                  <option value="scheduled">{lang === 'ar' ? 'مجدولة (Scheduled)' : 'Scheduled'}</option>
+                  <option value="in_transit">{lang === 'ar' ? 'في مسار الرحلة (In Transit)' : 'In Transit'}</option>
+                  <option value="customs_clearance">{lang === 'ar' ? 'تخليص جمركي (Customs Clearance)' : 'Customs Clearance'}</option>
+                  <option value="arrived">{lang === 'ar' ? 'وصلت المطار (Arrived)' : 'Arrived'}</option>
+                  <option value="delivered">{lang === 'ar' ? 'تم التسليم (Delivered)' : 'Delivered'}</option>
+                  <option value="cancelled">{lang === 'ar' ? 'ملغية (Cancelled)' : 'Cancelled'}</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Flights Grid / Cards */}
+          {filteredFlights.length === 0 ? (
+            <div className="py-16 text-center bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 p-6 space-y-4">
+              <div className="w-16 h-16 rounded-2xl bg-sky-500/10 text-sky-500 flex items-center justify-center mx-auto border border-sky-500/20">
+                <Plane className="w-8 h-8" />
+              </div>
+              <div className="max-w-md mx-auto space-y-1">
+                <h4 className="font-bold text-slate-800 dark:text-slate-200 text-base">
+                  {flights.length === 0
+                    ? (lang === 'ar' ? 'لا توجد رحلات طيران مسجلة بعد' : 'No Flight Consignments Registered Yet')
+                    : (lang === 'ar' ? 'لا توجد رحلات مطابقة لمعايير البحث' : 'No flights matched your filter')}
+                </h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  {flights.length === 0
+                    ? (lang === 'ar'
+                        ? 'يمكنك تحديد عدة حسبات من جدول الحسابات والضغط على "ربط برحلة"، أو رفع ملف PDF لمانيفست الطيران مباشرة لاستخراج كافة البيانات.'
+                        : 'Select multiple items in the calculation table and click "Consolidate Flight", or upload a Flight Manifest PDF to parse cargo data automatically.')
+                    : (lang === 'ar' ? 'جرب تغيير مصطلح البحث أو فلتر الحالة' : 'Try adjusting your search query or status filter')}
+                </p>
+              </div>
+
+              {flights.length === 0 && (
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowFlightConsignmentModal(true)}
+                    className="px-5 py-2.5 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white rounded-xl text-xs sm:text-sm font-black flex items-center gap-2 shadow-md shadow-sky-950/40 transition-all cursor-pointer min-h-[42px]"
+                  >
+                    <Upload className="w-4 h-4" />
+                    <span>{lang === 'ar' ? 'رفع بوليصة / مانيفست PDF أو إدخال يدوي' : 'Upload Flight Manifest PDF / Manual Entry'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDashboardSubTab('records')}
+                    className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer min-h-[42px]"
+                  >
+                    <span>{lang === 'ar' ? 'الذهاب لجدول الحسبات لتحديد شحنات' : 'Go to Calculation Records'}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4">
+              {filteredFlights.map((flight) => {
+                const linkedItems = history.filter((h) => (flight.calculationIds || []).includes(h.id));
+                const statusBadgeStyle = {
+                  scheduled: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/30',
+                  in_transit: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30',
+                  customs_clearance: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/30',
+                  arrived: 'bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/30',
+                  delivered: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30',
+                  cancelled: 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30',
+                }[flight.status] || 'bg-slate-500/10 text-slate-400 border-slate-500/30';
+
+                const statusLabel = {
+                  scheduled: lang === 'ar' ? 'مجدولة' : 'Scheduled',
+                  in_transit: lang === 'ar' ? 'في مسار الرحلة' : 'In Transit',
+                  customs_clearance: lang === 'ar' ? 'تخليص جمركي' : 'Customs Clearance',
+                  arrived: lang === 'ar' ? 'وصلت المطار' : 'Arrived',
+                  delivered: lang === 'ar' ? 'تم التسليم' : 'Delivered',
+                  cancelled: lang === 'ar' ? 'ملغية' : 'Cancelled',
+                }[flight.status] || flight.status;
+
+                return (
+                  <div
+                    key={flight.id}
+                    className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 p-5 shadow-xs hover:border-sky-500/40 transition-all space-y-4"
+                  >
+                    {/* Top Flight Header */}
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800/80">
+                      <div className="flex items-center gap-3">
+                        <div className="w-11 h-11 rounded-2xl bg-sky-500/10 text-sky-500 border border-sky-500/20 flex items-center justify-center shrink-0">
+                          <Plane className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-extrabold text-base sm:text-lg text-slate-900 dark:text-white">
+                              {flight.flightNumber}
+                            </span>
+                            <span className="px-2.5 py-0.5 rounded-md text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                              {flight.airline}
+                            </span>
+                            <span className={`px-2.5 py-0.5 rounded-full text-xs font-black border ${statusBadgeStyle}`}>
+                              {statusLabel}
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex flex-wrap items-center gap-3">
+                            <span className="flex items-center gap-1 font-mono">
+                              <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                              {flight.flightDate}
+                            </span>
+                            {flight.masterAwbNumber && (
+                              <span className="flex items-center gap-1 font-mono">
+                                <FileText className="w-3.5 h-3.5 text-slate-400" />
+                                AWB: <strong className="text-slate-700 dark:text-slate-300">{flight.masterAwbNumber}</strong>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Route Display */}
+                      <div className="flex items-center gap-2 p-2.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/80 dark:border-slate-800 text-xs">
+                        <div className="text-center">
+                          <div className="font-mono font-black text-sm text-slate-900 dark:text-white">
+                            {flight.originAirport}
+                          </div>
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate max-w-[90px]">
+                            {flight.originCountry}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 text-sky-500 font-bold px-1">
+                          <span className="w-4 h-px bg-sky-400" />
+                          <Plane className="w-3.5 h-3.5 rtl:-rotate-90 rotate-90" />
+                          <span className="w-4 h-px bg-sky-400" />
+                        </div>
+                        <div className="text-center">
+                          <div className="font-mono font-black text-sm text-slate-900 dark:text-white">
+                            {flight.destinationAirport}
+                          </div>
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate max-w-[90px]">
+                            {flight.destinationCountry}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Cargo & Financial 4-Box Matrix */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/70 dark:border-slate-800">
+                        <div className="text-[10px] text-slate-400 uppercase font-black tracking-wider">
+                          {lang === 'ar' ? 'الوزن الإجمالي' : 'Gross Weight'}
+                        </div>
+                        <div className="text-sm sm:text-base font-black text-slate-900 dark:text-white mt-0.5">
+                          {flight.totalWeightKg?.toLocaleString() || 0} <span className="text-xs">KG</span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                          {flight.totalPieces || 0} {lang === 'ar' ? 'طرد' : 'pcs'} • {flight.totalVolumeCbm?.toFixed(2) || 0} CBM
+                        </div>
+                      </div>
+
+                      <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/70 dark:border-slate-800">
+                        <div className="text-[10px] text-slate-400 uppercase font-black tracking-wider">
+                          {lang === 'ar' ? 'الحسبات المربوطة' : 'Linked Shipments'}
+                        </div>
+                        <div className="text-sm sm:text-base font-black text-slate-900 dark:text-white mt-0.5">
+                          {flight.calculationIds?.length || 0} {lang === 'ar' ? 'حسبة' : 'shipments'}
+                        </div>
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                          {linkedItems.length > 0 ? linkedItems.map((i) => i.input.title).join(', ').slice(0, 25) + '...' : 'Manifest record'}
+                        </div>
+                      </div>
+
+                      <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/70 dark:border-slate-800">
+                        <div className="text-[10px] text-slate-400 uppercase font-black tracking-wider">
+                          {lang === 'ar' ? 'تكلفة الشحنة' : 'Total Landed Cost'}
+                        </div>
+                        <div className="text-sm sm:text-base font-black text-slate-900 dark:text-white mt-0.5">
+                          {formatCurrency(flight.totalLandedCostEGP || 0, 'EGP')}
+                        </div>
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                          {flight.freightCostUSD ? `$${flight.freightCostUSD.toLocaleString()} Air Freight` : 'Total Landed'}
+                        </div>
+                      </div>
+
+                      <div className="p-3 bg-emerald-500/10 dark:bg-emerald-950/20 rounded-xl border border-emerald-500/20">
+                        <div className="text-[10px] text-emerald-600 dark:text-emerald-400 uppercase font-black tracking-wider">
+                          {lang === 'ar' ? 'صافي الربح المتوقع' : 'Net Projected Profit'}
+                        </div>
+                        <div className="text-sm sm:text-base font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
+                          {formatCurrency(flight.totalProfitEGP || 0, 'EGP')}
+                        </div>
+                        <div className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 font-bold">
+                          {flight.totalRevenueEGP && flight.totalRevenueEGP > 0
+                            ? `${(((flight.totalProfitEGP || 0) / flight.totalRevenueEGP) * 100).toFixed(1)}% margin`
+                            : 'Profit estimate'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Action Bar */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800/80">
+                      <div className="text-xs text-slate-400 font-mono">
+                        ID: {flight.id.slice(0, 8)}...
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        {/* View / Inspect Manifest */}
+                        <button
+                          type="button"
+                          onClick={() => setSelectedFlightForView(flight)}
+                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-black flex items-center gap-1.5 transition-colors cursor-pointer min-h-[34px]"
+                        >
+                          <Eye className="w-3.5 h-3.5 text-slate-500" />
+                          <span>{lang === 'ar' ? 'معاينة المانيفست' : 'Inspect Cargo'}</span>
+                        </button>
+
+                        {/* Export Flight Manifest PDF */}
+                        <button
+                          type="button"
+                          onClick={() => handleExportFlightManifest(flight)}
+                          disabled={isExportingFlightPdf === flight.id}
+                          className="px-3.5 py-1.5 bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all shadow-xs cursor-pointer min-h-[34px]"
+                        >
+                          {isExportingFlightPdf === flight.id ? (
+                            <div className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                          ) : (
+                            <Download className="w-3.5 h-3.5 text-slate-950" />
+                          )}
+                          <span>{lang === 'ar' ? 'تصدير مانيفست PDF' : 'Manifest PDF'}</span>
+                        </button>
+
+                        {/* Delete Flight */}
+                        <button
+                          type="button"
+                          onClick={() => setFlightToDelete(flight)}
+                          className="p-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/20 rounded-xl text-xs font-bold transition-colors cursor-pointer min-h-[34px] min-w-[34px] flex items-center justify-center"
+                          title={lang === 'ar' ? 'حذف بوليصة الرحلة' : 'Delete Flight Manifest'}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Detail View Modal (Executive Landed Cost Audit) */}
       {selectedDetailModal && (
@@ -1545,6 +2199,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       )}
 
+      {/* Multi-History Analysis Modal */}
+      {showMultiAnalysisModal && selectedItemsList.length > 0 && (
+        <MultiHistoryAnalysisModal
+          isOpen={showMultiAnalysisModal}
+          onClose={() => setShowMultiAnalysisModal(false)}
+          selectedItems={selectedItemsList}
+          rates={rates}
+          lang={lang}
+          t={t}
+          onLoadIntoCalculator={onLoadIntoCalculator}
+          onCreateQuote={(items) => setSelectedQuoteItems(items)}
+          onInspectDetail={(item) => setSelectedDetailModal(item)}
+        />
+      )}
+
       {/* Edit Transaction Modal */}
       <EditTransactionModal
         item={editingRecord}
@@ -1560,6 +2229,258 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         t={t}
         lang={lang}
       />
+
+      {/* Flight Consignment Creation / AI PDF Parser Modal */}
+      {showFlightConsignmentModal && (
+        <FlightConsignmentModal
+          isOpen={showFlightConsignmentModal}
+          onClose={() => setShowFlightConsignmentModal(false)}
+          selectedItems={selectedItemsList}
+          currentUser={currentUser}
+          lang={lang}
+          onFlightSaved={(newFlight) => {
+            setFlights((prev) => {
+              const existingIdx = prev.findIndex((f) => f.id === newFlight.id);
+              if (existingIdx >= 0) {
+                const copy = [...prev];
+                copy[existingIdx] = newFlight;
+                return copy;
+              }
+              return [newFlight, ...prev];
+            });
+            setShowFlightConsignmentModal(false);
+            setDashboardSubTab('flights');
+          }}
+        />
+      )}
+
+      {/* Flight Consignment Inspection / Detail View Modal */}
+      {selectedFlightForView && (
+        <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-3xl w-full max-h-[92vh] overflow-y-auto flex flex-col divide-y divide-slate-100 dark:divide-slate-800/80 text-slate-900 dark:text-slate-100">
+            {/* Modal Header */}
+            <div className="p-5 sm:p-6 bg-gradient-to-r from-sky-900 via-blue-900 to-slate-950 text-white rounded-t-3xl flex items-start justify-between gap-4">
+              <div>
+                <div className="flex flex-wrap items-center gap-2 mb-1.5">
+                  <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-sky-500/25 text-sky-300 border border-sky-500/30">
+                    {selectedFlightForView.airline}
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-white/10 text-white border border-white/20">
+                    AWB: {selectedFlightForView.masterAwbNumber || 'N/A'}
+                  </span>
+                </div>
+                <h3 className="font-extrabold text-xl sm:text-2xl text-white tracking-tight leading-snug flex items-center gap-2">
+                  <Plane className="w-6 h-6 text-sky-400" />
+                  <span>{selectedFlightForView.flightNumber}</span>
+                  <span className="text-sm font-normal text-sky-300">
+                    ({selectedFlightForView.originAirport} → {selectedFlightForView.destinationAirport})
+                  </span>
+                </h3>
+                <p className="text-xs text-sky-200 mt-1 flex items-center gap-2">
+                  <Calendar className="w-3.5 h-3.5 text-sky-400" />
+                  <span>{selectedFlightForView.flightDate}</span>
+                  <span>•</span>
+                  <span>{selectedFlightForView.originCountry} → {selectedFlightForView.destinationCountry}</span>
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedFlightForView(null)}
+                className="p-2 rounded-2xl bg-white/10 hover:bg-rose-500/20 hover:text-rose-300 text-white transition-colors cursor-pointer border border-white/20 min-h-[40px] min-w-[40px] flex items-center justify-center"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 sm:p-6 space-y-6">
+              {/* 4-KPI Overview Box */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="p-3.5 bg-slate-50 dark:bg-slate-800/70 rounded-2xl border border-slate-200/80 dark:border-slate-800">
+                  <div className="text-[10px] text-slate-400 uppercase font-black tracking-wider mb-1">
+                    {lang === 'ar' ? 'الوزن الإجمالي' : 'Gross Weight'}
+                  </div>
+                  <div className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                    {selectedFlightForView.totalWeightKg?.toLocaleString() || 0} <span className="text-xs">KG</span>
+                  </div>
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    {selectedFlightForView.totalVolumeCbm?.toFixed(2) || 0} CBM Volume
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-slate-50 dark:bg-slate-800/70 rounded-2xl border border-slate-200/80 dark:border-slate-800">
+                  <div className="text-[10px] text-slate-400 uppercase font-black tracking-wider mb-1">
+                    {lang === 'ar' ? 'عدد الطرود' : 'Total Packages'}
+                  </div>
+                  <div className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                    {selectedFlightForView.totalPieces?.toLocaleString() || 0} <span className="text-xs">{lang === 'ar' ? 'طرد' : 'pcs'}</span>
+                  </div>
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    {selectedFlightForView.calculationIds?.length || 0} {lang === 'ar' ? 'حسبات مربوطة' : 'Linked Records'}
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-slate-50 dark:bg-slate-800/70 rounded-2xl border border-slate-200/80 dark:border-slate-800">
+                  <div className="text-[10px] text-slate-400 uppercase font-black tracking-wider mb-1">
+                    {lang === 'ar' ? 'تكلفة الشحنة الإجمالية' : 'Total Landed Cost'}
+                  </div>
+                  <div className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                    {formatCurrency(selectedFlightForView.totalLandedCostEGP || 0, 'EGP')}
+                  </div>
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    {selectedFlightForView.freightCostUSD ? `$${selectedFlightForView.freightCostUSD.toLocaleString()} Freight` : 'Total In EGP'}
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-emerald-500/10 dark:bg-emerald-950/30 rounded-2xl border border-emerald-500/25">
+                  <div className="text-[10px] text-emerald-600 dark:text-emerald-400 uppercase font-black tracking-wider mb-1">
+                    {lang === 'ar' ? 'صافي الربح المتوقع' : 'Projected Profit'}
+                  </div>
+                  <div className="text-base sm:text-lg font-black text-emerald-600 dark:text-emerald-400">
+                    {formatCurrency(selectedFlightForView.totalProfitEGP || 0, 'EGP')}
+                  </div>
+                  <div className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 font-bold mt-0.5">
+                    {selectedFlightForView.totalRevenueEGP && selectedFlightForView.totalRevenueEGP > 0
+                      ? `${(((selectedFlightForView.totalProfitEGP || 0) / selectedFlightForView.totalRevenueEGP) * 100).toFixed(1)}% margin`
+                      : 'Margin'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Linked Shipments List */}
+              <div className="space-y-3">
+                <h4 className="font-extrabold text-sm text-slate-900 dark:text-white flex items-center justify-between">
+                  <span>{lang === 'ar' ? 'المنتجات والشحنات المربوطة بالرحلة' : 'Cargo & Products Linked to Manifest'}</span>
+                  <span className="text-xs font-bold text-slate-400">
+                    ({(selectedFlightForView.calculationIds || []).length} {lang === 'ar' ? 'منتج / شحنة' : 'items'})
+                  </span>
+                </h4>
+
+                <div className="divide-y divide-slate-100 dark:divide-slate-800 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-slate-50/50 dark:bg-slate-900/50">
+                  {(selectedFlightForView.calculationIds || []).length === 0 ? (
+                    <div className="p-4 text-center text-xs text-slate-400">
+                      {lang === 'ar' ? 'لا توجد حسبات محددة مربوطة بالرحلة' : 'No specific calculation records linked.'}
+                    </div>
+                  ) : (
+                    (selectedFlightForView.calculationIds || []).map((calcId) => {
+                      const item = history.find((h) => h.id === calcId);
+                      if (!item) {
+                        return (
+                          <div key={calcId} className="p-3 text-xs text-slate-400 font-mono">
+                            ID: {calcId} (Archived record)
+                          </div>
+                        );
+                      }
+                      return (
+                        <div key={item.id} className="p-3.5 flex items-center justify-between gap-3 text-xs hover:bg-white dark:hover:bg-slate-800 transition-colors">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-xl bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-slate-500 font-bold shrink-0">
+                              <Package className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <div className="font-bold text-slate-900 dark:text-slate-100">{item.input.title}</div>
+                              <div className="text-[10px] text-slate-400 font-mono">
+                                {item.input.skuSupplier || 'N/A'} • {item.input.quantity.toLocaleString()} pcs • {item.chargeableWeightKg || item.grossWeightKg || 0} KG
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="text-right rtl:text-left">
+                            <div className="font-black text-slate-900 dark:text-white">
+                              {formatCurrency(item.totalLandedCostTarget, item.input.targetCurrency)}
+                            </div>
+                            <div className="text-[10px] font-bold text-emerald-500">
+                              +{formatCurrency(item.totalProfitTarget, item.input.targetCurrency)} ({item.netProfitMarginPercent?.toFixed(1)}%)
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* Manifest Remarks & Customs Notes */}
+              {selectedFlightForView.notes && (
+                <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200/80 dark:border-slate-800 text-xs space-y-1">
+                  <div className="font-bold text-slate-700 dark:text-slate-300">
+                    {lang === 'ar' ? 'ملاحظات وتفاصيل التخليص' : 'Manifest & Customs Notes'}:
+                  </div>
+                  <div className="text-slate-600 dark:text-slate-400 whitespace-pre-line">
+                    {selectedFlightForView.notes}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 sm:p-5 bg-slate-50 dark:bg-slate-900/80 rounded-b-3xl flex flex-wrap items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setSelectedFlightForView(null)}
+                className="px-4 py-2 bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                {lang === 'ar' ? 'إغلاق' : 'Close'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleExportFlightManifest(selectedFlightForView)}
+                disabled={isExportingFlightPdf === selectedFlightForView.id}
+                className="px-5 py-2.5 bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 rounded-xl text-xs sm:text-sm font-black flex items-center gap-2 shadow-md shadow-sky-950/40 transition-all cursor-pointer min-h-[40px]"
+              >
+                {isExportingFlightPdf === selectedFlightForView.id ? (
+                  <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <Download className="w-4 h-4 text-slate-950" />
+                )}
+                <span>{lang === 'ar' ? 'تحميل مانيفست الشحن الرسمي (PDF)' : 'Download Official Air Manifest (PDF)'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Flight Confirmation Modal */}
+      {flightToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-md w-full p-6 text-slate-900 dark:text-slate-100 space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-rose-500/10 text-rose-500 flex items-center justify-center mx-auto border border-rose-500/20">
+              <Trash2 className="w-6 h-6" />
+            </div>
+
+            <div className="text-center space-y-1">
+              <h3 className="font-extrabold text-lg text-slate-900 dark:text-white">
+                {lang === 'ar' ? 'حذف بوليصة / رحلة الطيران؟' : 'Delete Flight Manifest?'}
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {lang === 'ar'
+                  ? `هل أنت متأكد من حذف رحلة الطيران "${flightToDelete.flightNumber}"؟ لن يتم حذف الحسبات المرتبطة بها.`
+                  : `Are you sure you want to delete flight "${flightToDelete.flightNumber}"? The linked calculation records will not be deleted.`}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setFlightToDelete(null)}
+                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition-colors cursor-pointer min-h-[40px]"
+              >
+                {lang === 'ar' ? 'إلغاء' : 'Cancel'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleDeleteFlight(flightToDelete.id)}
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-rose-950/40 cursor-pointer min-h-[40px]"
+              >
+                {lang === 'ar' ? 'نعم، حذف الرحلة' : 'Yes, Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

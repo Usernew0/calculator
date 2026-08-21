@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { CalculationResult, UserProfile } from '../types';
+import { CalculationResult, UserProfile, FlightConsignment } from '../types';
 
 const env = (import.meta as unknown as { env?: Record<string, string> }).env || {};
 
@@ -15,6 +15,7 @@ const USERS_TABLE = 'users';
 const CALCULATIONS_TABLE = 'calculations';
 const GALLERY_TABLE = 'gallery_images';
 const SETTINGS_TABLE = 'site_settings';
+const FLIGHTS_TABLE = 'flight_consignments';
 
 function handleSupabaseError(context: string, error: any) {
   if (!error) return;
@@ -430,17 +431,121 @@ export async function deleteGalleryImageFromSupabase(id: string): Promise<boolea
   }
 }
 
+/**
+ * Save flight consignment to Supabase
+ */
+export async function saveFlightConsignmentToSupabase(flight: FlightConsignment): Promise<boolean> {
+  try {
+    const payload = {
+      id: flight.id,
+      user_id: flight.userId || 'system',
+      flight_number: flight.flightNumber || '',
+      flight_name: flight.flightName || '',
+      airline: flight.airline || '',
+      flight_date: flight.flightDate || '',
+      origin_airport: flight.originAirport || '',
+      destination_airport: flight.destinationAirport || '',
+      awb_number: flight.awbNumber || '',
+      document_pdf_url: flight.documentPdfUrl || null,
+      status: flight.status || 'scheduled',
+      flight_data: flight,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = await supabase
+      .from(FLIGHTS_TABLE)
+      .upsert(payload, { onConflict: 'id' });
+
+    if (error) {
+      handleSupabaseError('save flight consignment', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    handleSupabaseError('save flight consignment exception', err);
+    return false;
+  }
+}
+
+/**
+ * Fetch flight consignments from Supabase
+ */
+export async function getFlightConsignmentsFromSupabase(userId?: string): Promise<FlightConsignment[]> {
+  try {
+    let query = supabase.from(FLIGHTS_TABLE).select('*');
+    if (userId && userId !== 'admin') {
+      query = query.eq('user_id', userId);
+    }
+
+    const { data, error } = await query.order('created_at', { ascending: false });
+    if (error) {
+      handleSupabaseError('fetch flight consignments', error);
+      return [];
+    }
+
+    if (data && Array.isArray(data)) {
+      return data.map((item) => {
+        if (item.flight_data) {
+          return {
+            ...item.flight_data,
+            id: item.id || item.flight_data.id,
+            status: item.status || item.flight_data.status,
+          };
+        }
+        return {
+          id: item.id,
+          userId: item.user_id,
+          flightNumber: item.flight_number,
+          flightName: item.flight_name || item.flight_number,
+          airline: item.airline,
+          flightDate: item.flight_date,
+          originAirport: item.origin_airport,
+          destinationAirport: item.destination_airport,
+          awbNumber: item.awb_number,
+          documentPdfUrl: item.document_pdf_url,
+          status: item.status,
+          calculationIds: [],
+          createdAt: item.created_at || new Date().toISOString(),
+        } as FlightConsignment;
+      });
+    }
+  } catch (err) {
+    handleSupabaseError('fetch flight consignments exception', err);
+  }
+  return [];
+}
+
+/**
+ * Delete flight consignment from Supabase
+ */
+export async function deleteFlightConsignmentFromSupabase(id: string): Promise<boolean> {
+  try {
+    const { error } = await supabase.from(FLIGHTS_TABLE).delete().eq('id', id);
+    if (error) {
+      handleSupabaseError('delete flight consignment', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    handleSupabaseError('delete flight consignment exception', err);
+    return false;
+  }
+}
+
 export interface SupabaseHealthReport {
   isConnected: boolean;
   usersTableOk: boolean;
   calculationsTableOk: boolean;
   galleryTableOk: boolean;
+  flightsTableOk?: boolean;
   usersCount: number;
   calculationsCount: number;
   galleryImagesCount: number;
+  flightsCount?: number;
   usersError?: string;
   calculationsError?: string;
   galleryError?: string;
+  flightsError?: string;
   generalError?: string;
   checkedAt: string;
   recommendedSqlDDL: string;
@@ -507,7 +612,25 @@ CREATE TABLE IF NOT EXISTS public.site_settings (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 5. Optimization Indexes (Enables instant searching by Product SKU, Title, Trade Direction & Cargo Media)
+-- 5. Create flight_consignments table (Stores grouped flight batches, air waybills, routes, and cargo manifests)
+CREATE TABLE IF NOT EXISTS public.flight_consignments (
+  id TEXT PRIMARY KEY,
+  user_id TEXT,
+  flight_number TEXT,
+  flight_name TEXT,
+  airline TEXT,
+  flight_date TEXT,
+  origin_airport TEXT,
+  destination_airport TEXT,
+  awb_number TEXT,
+  document_pdf_url TEXT,
+  status TEXT DEFAULT 'scheduled',
+  flight_data JSONB, -- Stores full FlightConsignment metadata, weights, and items
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 6. Optimization Indexes (Enables instant searching by Product SKU, Title, Trade Direction & Cargo Media)
 CREATE INDEX IF NOT EXISTS idx_calculations_user_id ON public.calculations (user_id);
 CREATE INDEX IF NOT EXISTS idx_calculations_created_at ON public.calculations (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_calculations_product_sku ON public.calculations ((calculation_data->'input'->>'skuSupplier'));
@@ -519,7 +642,11 @@ CREATE INDEX IF NOT EXISTS idx_gallery_images_calculation_id ON public.gallery_i
 CREATE INDEX IF NOT EXISTS idx_gallery_images_sku ON public.gallery_images (sku);
 CREATE INDEX IF NOT EXISTS idx_gallery_images_created_at ON public.gallery_images (created_at DESC);
 
--- 6. Trigger Function: Automatically extracts and synchronizes gallery_images from calculations.invoiceImage
+CREATE INDEX IF NOT EXISTS idx_flight_consignments_user_id ON public.flight_consignments (user_id);
+CREATE INDEX IF NOT EXISTS idx_flight_consignments_flight_date ON public.flight_consignments (flight_date DESC);
+CREATE INDEX IF NOT EXISTS idx_flight_consignments_flight_num ON public.flight_consignments (flight_number);
+
+-- 7. Trigger Function: Automatically extracts and synchronizes gallery_images from calculations.invoiceImage
 CREATE OR REPLACE FUNCTION public.sync_calculation_invoice_image()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -606,6 +733,7 @@ ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.calculations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.gallery_images ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.site_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.flight_consignments ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Allow anon read write users" ON public.users;
 CREATE POLICY "Allow anon read write users" ON public.users FOR ALL USING (true) WITH CHECK (true);
@@ -618,6 +746,9 @@ CREATE POLICY "Allow anon read write gallery_images" ON public.gallery_images FO
 
 DROP POLICY IF EXISTS "Allow anon read write site_settings" ON public.site_settings;
 CREATE POLICY "Allow anon read write site_settings" ON public.site_settings FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow anon read write flight_consignments" ON public.flight_consignments;
+CREATE POLICY "Allow anon read write flight_consignments" ON public.flight_consignments FOR ALL USING (true) WITH CHECK (true);
 `;
 
 /**
@@ -629,9 +760,11 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthReport> {
     usersTableOk: false,
     calculationsTableOk: false,
     galleryTableOk: false,
+    flightsTableOk: false,
     usersCount: 0,
     calculationsCount: 0,
     galleryImagesCount: 0,
+    flightsCount: 0,
     checkedAt: new Date().toISOString(),
     recommendedSqlDDL: SUPABASE_REQUIRED_DDL_SQL,
   };
@@ -682,7 +815,22 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthReport> {
       report.galleryImagesCount = galleryCount ?? 0;
     }
 
-    report.isConnected = report.usersTableOk || report.calculationsTableOk || report.galleryTableOk || !report.usersError?.includes('FetchError');
+    // Check flight_consignments table
+    const { count: flightsCount, error: flightsErr } = await supabase
+      .from(FLIGHTS_TABLE)
+      .select('id', { count: 'exact', head: true });
+
+    if (flightsErr) {
+      report.flightsError = flightsErr.message;
+      if (flightsErr.code === '42P01' || flightsErr.message.toLowerCase().includes('does not exist')) {
+        report.flightsError = `Table "${FLIGHTS_TABLE}" optional table in Supabase.`;
+      }
+    } else {
+      report.flightsTableOk = true;
+      report.flightsCount = flightsCount ?? 0;
+    }
+
+    report.isConnected = report.usersTableOk || report.calculationsTableOk || report.galleryTableOk || report.flightsTableOk || !report.usersError?.includes('FetchError');
   } catch (err: any) {
     report.generalError = err?.message || 'Failed to connect to Supabase backend';
   }

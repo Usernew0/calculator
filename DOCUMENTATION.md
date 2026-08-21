@@ -59,7 +59,31 @@ Elegant FX implements a dual-engine persistent storage architecture separating c
 
 ## 📝 Modification & Update Log (Auto-Updated)
 
-- **2026-08-16**:
+- **2026-08-21**:
+  - **Air Freight & Flight Consignment Manifest Management System (`FlightConsignmentModal.tsx` & `DashboardView.tsx`)**:
+    - Introduced a dedicated **Flight Consignments (Air Manifests)** subsystem enabling logistics traders to group multiple historical calculation records under specific flight numbers, dates, airlines, and Master Air Waybills (MAWB).
+    - **Dual Subtab Architecture**: Added toggleable subtabs ("Calculation Records" vs. "Flight Consignments") in `DashboardView.tsx` with dedicated KPI cards for Total Flights, Total Gross Weight, Total Volume (CBM), Total Landed Cost, and Combined Projected Profit.
+    - **Flight-to-Calculation Linking**: Added reactive flight badges across calculation record cards and tables for instant origin-to-destination route visibility (e.g., `✈️ MS-789 (CAN → CAI)`).
+    - **Official Air Cargo Manifest PDF Export**: Created high-resolution branded Air Manifest PDF compilation via `exportFlightManifestPDF` complete with carrier details, flight route, itemized cargo manifest table, weights, CBM, and financial totals.
+    - **Gemini 2.5 AI Flight Manifest PDF Extraction & Fallback Parser**:
+      - Backend endpoint `POST /api/parse-flight-manifest` leverages Gemini 2.5 Flash with structured JSON schema extraction to parse flight numbers, airline carriers, origin/destination airports, AWB numbers, gross weights, volumes, and freight rates directly from uploaded PDF manifests or air waybills.
+      - Seamless UI fallback in `FlightConsignmentModal.tsx` allowing freight managers to either upload a PDF for automated 1-click parsing or manually type/modify all flight manifest fields with live consolidation metrics.
+  - **Dynamic Automated Test Suite Categories Engine in Admin Panel (`AdminPanel.tsx`)**:
+    - Replaced hardcoded category counts with dynamic real-time computation directly derived from the `testSuite` state array.
+    - Added reactive category filtering tabs and badges (`All Tests`, `Math & Formulas`, `Database & Sync`, `UI & Modals`, `Security & Session`, `Flight & Cargo`, `AI & Intelligence`) that automatically update counts and labels whenever tests are executed or dynamically loaded.
+  - **Consolidated Multi-History Financial & Profit Analysis Engine (`MultiHistoryAnalysisModal.tsx` & `DashboardView.tsx`)**:
+    - Built a comprehensive multi-item selection and financial aggregation engine allowing users to select multiple historical calculation records (both Import and Export) and analyze combined financials in depth.
+    - Added a live **Mini Financial Preview Strip** in the multi-select action bar of `DashboardView.tsx` displaying real-time Total Landed Cost, Combined Net Profit, Weighted Margin %, and Import vs. Export count distribution.
+    - **Reshaped, Crystal-Clear Multi-History Analysis Modal (`MultiHistoryAnalysisModal.tsx`)**:
+      - **Plain-Language Executive Summary Box**: Human-readable narrative detailing total shipment count, gross landed cost, projected revenue, net profit, margin %, and ROI % in simple Arabic and English terms.
+      - **4 Executive High-Contrast KPI Cards**: Total Landed Cost, Gross Projected Sales, Combined Net Profit (with ROI on cost), and Weighted Margin %.
+      - **Step-by-Step Financial Equation Flow**: Interactive 6-step money flow pipeline: `FOB Purchase` + `Freight` + `Customs & Taxes` + `Handling & Fees` = `Landed Cost` ➔ `Net Profit`.
+      - **Side-by-Side Trade Direction Comparisons**: Isolated Import Operations vs. Export Operations cards.
+      - **Multi-Currency Real-Time Unification**: Instant matrix conversion to USD, EGP, EUR, SAR, AED, RMB.
+      - **Cost Breakdown & Interactive Recharts Visualizations**: Donut chart for expense distribution, grouped bar chart for sales vs. cost vs. profit, and logistics freight method breakdown.
+      - **Smart Insights & Profitability Health**: Automatic margin health classification (Excellent / Healthy / Low Margin alert), star performer identifier (top margin product), customs duty impact metric, and actionable logistics optimization tips.
+      - **Itemized Audit Table & Search**: Searchable table with SKU, trade direction, freight method, volume, unit cost, revenue, profit, margin %, and 1-click "Inspect" and "Load in Calculator" actions.
+      - **Consolidated Exports**: 1-click PDF summary compilation, CSV spreadsheet export, and unified commercial Client Offer generation.
   - **Automated Calculation Invoice Image Synchronization in Supabase SQL Schema**:
     - Enhanced `/schema.sql` and `src/lib/supabase.ts` with a dedicated PostgreSQL Trigger `trg_sync_calculation_invoice_image` and function `sync_calculation_invoice_image()`.
     - Automatically extracts `invoiceImage`, product title, supplier SKU, trade category, and trade direction directly from the calculation's JSONB document upon INSERT/UPDATE and syncs into `gallery_images`.
@@ -164,6 +188,15 @@ Elegant FX implements a dual-engine persistent storage architecture separating c
   - **High-Res Lightbox Image Inspector**: Integrated full-screen zoom and inspection modal for product photos with 1-click image download capability and metadata display.
   - **Product Calculations History Drawer**: Implemented a detailed modal dialog listing all past calculation records for a specific product, showing unit purchase costs, total purchase costs, landed costs, freight mode badges, profit margins, PDF export, and 1-click duplicate into calculator.
   - **Responsive Filtering & Search**: Includes real-time search (Title, SKU, Category, Supplier), Trade Direction filter (Import/Export), Photo availability toggle, and Freight Mode filter.
+
+- **2026-08-21**:
+  - **Google Gemini AI API Key Management Panel (`AdminPanel.tsx`)**:
+    - Built an administrative interface to enter, view (with reveal toggle), test, and persist custom Google Gemini API Keys.
+    - Implemented live connectivity diagnostics testing with real-time latency measurement and visual success/error callouts against Gemini 3.7 Flash (`gemini-3.7-flash`).
+    - Added dual-write synchronization across the Express server in-memory state (`serverGeminiApiKey`), Supabase `site_settings` table, and Firestore `site_settings/ai_config` document with real-time snapshot subscription (`subscribeToAiKey`).
+    - Integrated backend endpoints (`GET /api/admin/ai-key-status`, `POST /api/admin/ai-key`, `POST /api/admin/test-ai-key`, `DELETE /api/admin/ai-key`).
+    - Integrated `ai_key_config` diagnostic test module in the Automated System Test Suite to verify key validity and endpoint readiness.
+    - Upgraded AI Flight Manifest parser and Commercial Invoice OCR to prioritize the active admin-configured key with automatic fallback to environment variables.
 
 - **2026-08-11**:
   - **Automated Full-System Test Suite in Admin Panel (`AdminPanel.tsx`)**: Created a real-time, interactive diagnostic test runner covering 12 automated test modules across Math & Import Formulas, Target Pricing Strategy (Margin % vs Markup %), Multi-Currency Conversion Matrix & FX Rates, Backdated Transaction Dates, Firestore User Accounts Realtime Sync, Supabase PostgreSQL Relational Schema DDL Audit, LocalStorage Fallback State, Navigation Tab View Router, Interactive Action Modals (Edit, Quote Generator, HS Code Library), Calculation Record Deletion & Batch Clear All Filters, Inactivity Timeout Event Listener, and Website Favicon & Custom Branding Persistence Engine.

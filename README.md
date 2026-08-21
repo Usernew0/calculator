@@ -36,6 +36,19 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 
 ### 3. Historical Dashboard & Analytics
 - **Saved Calculation History**: Store landed cost calculations in browser persistent storage (`localStorage`) and isolated per-user Firestore database storage.
+- **Consolidated Multi-History Financial & Profit Analysis Engine**:
+  - **Multi-Selection Across Trade Types**: Select multiple historical calculation records (both Import and Export) and analyze their aggregated financials in depth.
+  - **Live Mini Financial Preview Strip**: Shows real-time Total Landed Cost, Combined Net Profit, Weighted Margin %, and Import vs. Export counts directly in the multi-select bar.
+  - **Reshaped, Crystal-Clear Multi-History Analysis Modal (`MultiHistoryAnalysisModal.tsx`)**:
+    - **Plain-Language Executive Summary Box**: Human-readable narrative detailing total shipment count, gross landed cost, projected revenue, net profit, margin %, and ROI % in simple terms.
+    - **4 Executive KPI Metrics**: Combined Total Landed Cost, Total Projected Revenue, Total Net Profit, and Weighted Profit Margin (%) with ROI on Cost (%).
+    - **Step-by-Step Financial Equation Flow**: Interactive 6-step money flow pipeline: `FOB Purchase` + `Freight` + `Customs & Taxes` + `Handling & Fees` = `Landed Cost` ➔ `Net Profit`.
+    - **Comparative Trade Direction Analytics**: Side-by-side breakdown comparing Import Operations vs. Export Operations (Landed Cost, Duties/Tax, Freight, Revenue, Net Profit, Average Margins).
+    - **Multi-Currency Real-Time Unification**: Select any target display currency (USD, EGP, EUR, SAR, AED, RMB) with real-time rate matrix conversions.
+    - **Interactive Recharts Visualizations**: Donut/Pie Chart for consolidated cost composition, grouped Bar Chart comparing Landed Cost, Revenue, and Net Profit, and logistics mode breakdown.
+    - **Smart Insights & Profitability Health**: Automatic margin health classification (Excellent / Healthy / Low Margin alert), star performer identifier, customs duty impact metric, and actionable logistics optimization tips.
+    - **Itemized Selected Records Table & Search**: Detailed listing with instant title/SKU search, Trade Direction badges, Freight Mode, Quantities, Landed Cost, Revenue, Net Profit, Margin %, and direct "Load in Calculator" / "Inspect Detail" actions.
+    - **Consolidated Exports**: 1-click compilation to Multi-Shipment Summary PDF (`exportHistoricalSummaryPDF`), structured CSV spreadsheet, and unified commercial Client Quote (`ClientQuoteModal`).
 - **Multi-Select Checkboxes & Batch Operations**:
   - **Select All / Deselect All Controls**: Toggle selection across filtered calculation records in desktop table headers and mobile card headers.
   - **Batch PDF Summary Export**: Select multiple records and export them as a single compiled PDF summary report with combined financial metrics.
@@ -48,7 +61,19 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 
 ---
 
-### 4. Product & Cargo Image Gallery & Edit Controls
+### 4. Air Freight & Flight Consignment Manifest Management (With Gemini AI PDF Parser)
+- **Flight Consignment Manifest Subsystem (`FlightConsignmentModal.tsx` & `DashboardView.tsx`)**: Group multiple historical calculation records under specific flight numbers, dates, airlines, and Master Air Waybills (MAWB).
+- **Dual Subtab Dashboard**: Switch seamlessly between "Calculation Records" and "Flight Consignments (Air Manifests)" with real-time KPI metrics (Total Flights, Gross Weight in KG, Volume in CBM, Landed Cost in EGP, and Combined Projected Profit).
+- **Interactive Multi-History Consolidation**: Select multiple historical records from the table and click "Consolidate Flight" to group them into a single flight manifest with aggregate weights, volume, landed costs, and profits.
+- **Flight Route & Manifest Badges**: Calculation records display dynamic flight badges (e.g. `✈️ MS-789 (CAN → CAI)`) linking each product calculation directly to its flight manifest.
+- **Gemini 2.5 AI Flight Manifest PDF Extraction (`/api/parse-flight-manifest`)**:
+  - Automatically parses flight numbers, carrier airlines, origin & destination airports/countries, Master AWB numbers, gross weights, volumes, and freight rates directly from uploaded PDF documents using Google Gemini 2.5 Flash multimodal intelligence.
+  - **Manual Entry Fallback**: If an AI key is not configured or if manual entry is preferred, users can type or adjust all flight manifest fields manually with live consolidated metrics.
+- **Official Air Cargo Manifest PDF Export (`exportFlightManifestPDF`)**: Export high-resolution branded Air Cargo Manifest documents for airlines and customs authorities with comprehensive product line items, weights, and commercial metrics.
+
+---
+
+### 5. Product & Cargo Image Gallery & Edit Controls
 - **Global Product Catalog Info Modal**: The "Edit Info" button on product catalog cards (`EditProductInfoModal.tsx`) updates global product attributes (Product Name/Title, SKU, and Product Photo) across all calculations in that product group.
 - **Transaction Date Control & Editing**: Full date input (`transactionDate`) supported during both initial trade calculation creation (`CalculatorForm.tsx`) and transaction editing (`EditTransactionModal.tsx`).
 - **Selling Price & Profit Strategy Controls in Edit Modal**: `EditTransactionModal.tsx` provides target selling price strategy options (Direct Selling Price, Profit Margin %, Cost Markup %) with real-time recalculation preview cards and clear high-contrast inputs.
@@ -95,6 +120,7 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 - **External URL Input & Live Mockup**: Enter custom image URLs and preview the tab icon in a simulated live browser header mockup before publishing.
 - **Firestore & Supabase Real-Time Sync**: Favicon updates publish instantly to Firestore (`site_settings/branding`), Supabase (`site_settings`), and `localStorage`.
 - **User Account Management**: Full management of user accounts, password resets, role permissions, and dual database diagnostics (Firestore & Supabase).
+- **Google Gemini AI API Key Management**: Administrative controls to input, test, and activate custom Gemini API keys for AI Flight Manifest extraction, Commercial Invoice OCR, and HS Code recommendation with live latency testing and dual-write persistence.
 
 ---
 
