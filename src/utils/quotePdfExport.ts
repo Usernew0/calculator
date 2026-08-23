@@ -3,6 +3,7 @@ import html2canvas from 'html2canvas';
 import { CalculationResult } from '../types';
 import { formatCurrency } from '../data/currencies';
 import { Language } from '../data/translations';
+import { getCalculationGrossWeightKg } from './calculator';
 
 export interface ClientQuoteData {
   quoteRef: string;
@@ -107,6 +108,7 @@ export async function generateClientQuotePDFBlob(
               <tr style="background: #0f172a; color: #ffffff;">
                 <th style="padding: 10px; border: 1px solid #1e293b;">${isArabic ? 'الوصف والمنتج' : 'Item Description'}</th>
                 <th style="padding: 10px; border: 1px solid #1e293b; text-align: center;">${isArabic ? 'الكمية' : 'Qty'}</th>
+                <th style="padding: 10px; border: 1px solid #1e293b; text-align: center;">${isArabic ? 'الوزن' : 'Weight (kg)'}</th>
                 <th style="padding: 10px; border: 1px solid #1e293b; text-align: center;">${isArabic ? 'وسيلة الشحن' : 'Freight Mode'}</th>
                 <th style="padding: 10px; border: 1px solid #1e293b; text-align: ${isArabic ? 'left' : 'right'};">${isArabic ? 'السعر الفردي للقطعة' : 'Unit Price'}</th>
                 <th style="padding: 10px; border: 1px solid #1e293b; text-align: ${isArabic ? 'left' : 'right'};">${isArabic ? 'إجمالي قيمة العرض' : 'Total Quote Price'}</th>
@@ -120,6 +122,7 @@ export async function generateClientQuotePDFBlob(
                     <div style="font-size: 10px; font-weight: 500; color: #64748b; margin-top: 2px;">SKU: ${res.input.skuSupplier || 'GENERAL-SKU'} | Category: ${res.input.category || 'General Cargo'}</div>
                   </td>
                   <td style="padding: 10px; border: 1px solid #e2e8f0; text-align: center; font-weight: 800; font-size: 12px;">${res.input.quantity.toLocaleString()}</td>
+                  <td style="padding: 10px; border: 1px solid #e2e8f0; text-align: center; font-weight: 700; color: #0284c7;">${getCalculationGrossWeightKg(res).toFixed(1)} kg</td>
                   <td style="padding: 10px; border: 1px solid #e2e8f0; text-align: center; font-weight: 700;">${res.input.freightMethod.toUpperCase().replace('_', ' ')}</td>
                   <td style="padding: 10px; border: 1px solid #e2e8f0; font-weight: 800; text-align: ${isArabic ? 'left' : 'right'}; color: #0284c7;">
                     ${formatCurrency(res.suggestedSellingPricePerUnitTarget, targetCurr)}

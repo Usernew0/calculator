@@ -95,17 +95,25 @@ export interface FlightConsignment {
   destinationAirport: string; // Code or name, e.g. "CAI (Cairo)"
   destinationCountry?: string; // e.g. "Egypt"
   awbNumber?: string; // Air Waybill #
+  masterAwbNumber?: string; // Master Air Waybill #
   totalGrossWeightKg?: number;
+  totalWeightKg?: number;
   totalChargeableWeightKg?: number;
   totalPackagesCount?: number;
+  totalPieces?: number;
+  totalVolumeCbm?: number;
+  freightCostUSD?: number;
   totalLandedCost?: number;
+  totalLandedCostEGP?: number;
   totalRevenue?: number;
+  totalRevenueEGP?: number;
   totalProfit?: number;
+  totalProfitEGP?: number;
   targetCurrency?: string;
   documentPdfUrl?: string; // Stored PDF / image or Data URL of flight manifest / AWB
   documentFileName?: string;
   notes?: string;
-  status?: 'scheduled' | 'in_transit' | 'customs_clearance' | 'cleared' | 'delivered';
+  status?: 'scheduled' | 'in_transit' | 'customs_clearance' | 'arrived' | 'cleared' | 'delivered' | 'cancelled';
   calculationIds: string[]; // Linked calculation records
   createdAt: string;
   updatedAt?: string;

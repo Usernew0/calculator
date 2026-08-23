@@ -241,3 +241,97 @@ export function calculateTradeAndFreight(
     roiPercentage,
   };
 }
+
+/**
+ * Safely calculates the gross weight in KG for any CalculationResult record,
+ * with fallbacks for legacy records or missing fields.
+ */
+export function getCalculationGrossWeightKg(item: CalculationResult): number {
+  if (!item) return 0;
+  if (typeof item.totalGrossWeightKg === 'number' && item.totalGrossWeightKg > 0) {
+    return item.totalGrossWeightKg;
+  }
+  if (typeof item.chargeableWeightKg === 'number' && item.chargeableWeightKg > 0) {
+    return item.chargeableWeightKg;
+  }
+  const qty = Math.max(1, item.input?.quantity || 1);
+  const rawWeight = item.input?.weight || 0;
+  if (rawWeight <= 0) return 0;
+
+  const unit = item.input?.weightUnit || 'kg';
+  let unitKg = rawWeight;
+  if (unit === 'g') unitKg = rawWeight * 0.001;
+  else if (unit === 'lbs') unitKg = rawWeight * 0.453592;
+  else if (unit === 'tonnes') unitKg = rawWeight * 1000;
+
+  return unitKg * qty;
+}
+
+/**
+ * Safely calculates chargeable weight in KG (considering volumetric factor if applicable).
+ */
+export function getCalculationChargeableWeightKg(item: CalculationResult): number {
+  if (!item) return 0;
+  if (typeof item.chargeableWeightKg === 'number' && item.chargeableWeightKg > 0) {
+    return item.chargeableWeightKg;
+  }
+  const grossKg = getCalculationGrossWeightKg(item);
+  const qty = Math.max(1, item.input?.quantity || 1);
+  let lengthCm = item.input?.length || 0;
+  let widthCm = item.input?.width || 0;
+  let heightCm = item.input?.height || 0;
+  if (item.input?.dimensionUnit === 'inches') {
+    lengthCm *= 2.54;
+    widthCm *= 2.54;
+    heightCm *= 2.54;
+  }
+  const isWeightOnly = item.input?.useWeightOnly !== false && (item.input?.useWeightOnly || lengthCm === 0 || widthCm === 0 || heightCm === 0);
+  if (isWeightOnly) return grossKg;
+
+  const factor = item.input?.volumetricFactor || 5000;
+  const volumetricKg = ((lengthCm * widthCm * heightCm) / factor) * qty;
+  return Math.max(grossKg, volumetricKg);
+}
+
+/**
+ * Safely calculates volume in Cubic Meters (CBM).
+ */
+export function getCalculationVolumeCBM(item: CalculationResult): number {
+  if (!item) return 0;
+  if (typeof item.volumeCBM === 'number' && item.volumeCBM > 0) {
+    return item.volumeCBM;
+  }
+  const qty = Math.max(1, item.input?.quantity || 1);
+  let lengthCm = item.input?.length || 0;
+  let widthCm = item.input?.width || 0;
+  let heightCm = item.input?.height || 0;
+  if (item.input?.dimensionUnit === 'inches') {
+    lengthCm *= 2.54;
+    widthCm *= 2.54;
+    heightCm *= 2.54;
+  }
+  return ((lengthCm * widthCm * heightCm) / 1000000) * qty;
+}
+
+export function getCalculationPieces(item: CalculationResult): number {
+  if (!item) return 0;
+  return Math.max(1, item.input?.quantity || 1);
+}
+
+export function getCalculationLandedCost(item: CalculationResult): number {
+  if (!item) return 0;
+  return item.totalLandedCostTarget || (item as any).totalLandedCostEGP || 0;
+}
+
+export function getCalculationRevenue(item: CalculationResult): number {
+  if (!item) return 0;
+  return item.totalRevenueTarget || (item as any).totalRevenueEGP || ((item.suggestedSellingPricePerUnitTarget || 0) * (item.input?.quantity || 1));
+}
+
+export function getCalculationProfit(item: CalculationResult): number {
+  if (!item) return 0;
+  if (typeof item.totalProfitTarget === 'number') return item.totalProfitTarget;
+  if (typeof (item as any).totalProfitEGP === 'number') return (item as any).totalProfitEGP;
+  return getCalculationRevenue(item) - getCalculationLandedCost(item);
+}
+

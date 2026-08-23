@@ -189,6 +189,39 @@ Elegant FX implements a dual-engine persistent storage architecture separating c
   - **Product Calculations History Drawer**: Implemented a detailed modal dialog listing all past calculation records for a specific product, showing unit purchase costs, total purchase costs, landed costs, freight mode badges, profit margins, PDF export, and 1-click duplicate into calculator.
   - **Responsive Filtering & Search**: Includes real-time search (Title, SKU, Category, Supplier), Trade Direction filter (Import/Export), Photo availability toggle, and Freight Mode filter.
 
+- **2026-08-23**:
+  - **Flight Consignment & Calculation P&L Aggregation Engine**:
+    - **Bulk History Actions**: Enabled the "Consolidate Flight / ربط برحلة" action in the multi-select bulk toolbar of `DashboardView.tsx`. Selecting any number of product calculations and clicking the button opens the `FlightConsignmentModal` pre-populated with those items.
+    - **Single-Item Flight Linking**: Added direct flight linking/inspection buttons (`Plane` / `Link2` icons) across both desktop history table rows and mobile cards.
+    - **Flight Profit & Loss (P&L) Aggregation**:
+      - Automatically computes cumulative Total Landed Cost (EGP), Total Revenue (EGP), and Total Net Profit/Loss (EGP) across all products linked to a flight.
+      - Displays a high-contrast P&L status badge on each flight card with Profit Margin % and ROI %.
+      - Highlights profitable flights in emerald (`+ Net Profit`) and deficit flights in rose (`- Net Loss`).
+    - **Interactive Itemized Cargo Accordion & Inline Unlinking**:
+      - Added expandable accordion drawer on each flight card showing all linked products with images, quantities, landed costs, revenues, and individual profit contributions.
+      - Implemented instant **Unlink (`handleUnlinkItemFromFlight`)** action that removes a product from the flight, clears its flight ID, and dynamically recalculates the flight's gross weight, landed cost, revenue, and P&L totals in real time across Firestore and Supabase.
+      - Added "+ Add Cargo" modal flow to quickly attach additional history items to an existing flight.
+    - **AI Flight Manifest & Air Waybill PDF Parser**: Seamlessly maps parsed manifest line items or linked calculation IDs into unified flight consignments with dual-persistence.
+
+- **2026-08-23**:
+  - **Comprehensive Weight Column Integration & PDF Export Upgrades (`DashboardView.tsx`, `pdfExport.ts`, `quotePdfExport.ts`, `translations.ts`)**:
+    - **History Table & Mobile Cards**: Added dedicated Weight column to the desktop history table (`colWeight`, `thWeight`) and a 5-metric grid to mobile calculation cards displaying exact gross weight in kg and unit specifications.
+    - **Weight Sorting**: Added sorting by weight (`weight_desc` and `weight_asc`) in the history table filter toolbar.
+    - **CSV Export**: Added "Gross Weight (kg)" and "Chargeable Weight (kg)" to the exported CSV columns.
+    - **Audit & Consignment Modals**: Updated the executive audit modal and flight consignment modal to display gross weight, chargeable weight, and volumetric CBM.
+    - **PDF Exports**:
+      - `exportSingleCalculationPDF`: Updated to display total gross weight (with per-unit weight indicator), chargeable weight, and volumetric CBM.
+      - `exportHistoricalSummaryPDF`: Added dedicated "Weight (kg)" column to the tabular breakdown and added a new "Combined Total Gross Weight" KPI card.
+      - `exportFlightManifestPDF`: Updated the KPI summary card to show both Gross Weight and Chargeable Weight side-by-side with itemized line item weights.
+      - `exportQuotationPDF`: Added Weight (kg) column to client quotation items.
+  - **Standardized Flight Cargo & Weight Calculation Engine (`calculator.ts`, `FlightConsignmentModal.tsx`, `DashboardView.tsx`, `pdfExport.ts`)**:
+    - Centralized physical weight, volumetric CBM, piece count, landed cost, revenue, and profit aggregation functions in `src/utils/calculator.ts` (`getCalculationGrossWeightKg`, `getCalculationChargeableWeightKg`, `getCalculationVolumeCBM`, `getCalculationPieces`, `getCalculationLandedCost`, `getCalculationRevenue`, `getCalculationProfit`).
+    - Standardized unit weight normalizations across `kg`, `g`, `lb`, and `ton` ensuring exact gross weight and chargeable weight sums when linking calculations to flights.
+    - Updated `FlightConsignmentModal.tsx` to automatically calculate and persist `totalWeightKg`, `totalChargeableWeightKg`, `totalVolumeCbm`, `totalPieces`, and full P&L financial metrics on both new flight creation and linking to existing flights.
+    - Updated `DashboardView.tsx` flight cards and KPI overview metrics with dynamic fallbacks to linked calculation items so flights immediately display accurate gross weights, packages, and P&L even with historical records.
+    - Added Weight (KG) column and chargeable weight indicators to the itemized cargo breakdown table inside flight cards.
+    - Standardized `pdfExport.ts` flight manifest PDF generation using the unified calculation helpers.
+
 - **2026-08-21**:
   - **Google Gemini AI API Key Management Panel (`AdminPanel.tsx`)**:
     - Built an administrative interface to enter, view (with reveal toggle), test, and persist custom Google Gemini API Keys.

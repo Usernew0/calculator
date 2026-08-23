@@ -345,6 +345,8 @@ export async function saveFlightApi(flight: FlightConsignment): Promise<FlightCo
   return flight;
 }
 
+export const saveFlightConsignmentApi = saveFlightApi;
+
 export async function deleteFlightApi(id: string): Promise<boolean> {
   try {
     await apiFetch(`/api/flights/${encodeURIComponent(id)}`, {

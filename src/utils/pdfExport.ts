@@ -3,6 +3,15 @@ import html2canvas from 'html2canvas';
 import { CalculationResult, FlightConsignment } from '../types';
 import { formatCurrency } from '../data/currencies';
 import { Language } from '../data/translations';
+import {
+  getCalculationGrossWeightKg,
+  getCalculationChargeableWeightKg,
+  getCalculationVolumeCBM,
+  getCalculationPieces,
+  getCalculationLandedCost,
+  getCalculationRevenue,
+  getCalculationProfit,
+} from './calculator';
 
 export async function exportSingleCalculationPDF(result: CalculationResult, lang: Language = 'en'): Promise<void> {
   const isArabic = lang === 'ar';
@@ -60,8 +69,9 @@ export async function exportSingleCalculationPDF(result: CalculationResult, lang
             <div><strong>${isArabic ? 'نوع العملية التجارية:' : 'Trade Operation:'}</strong> ${input.tradeDirection === 'export' ? (isArabic ? 'شحنة تصدير (Export)' : 'Export Shipment') : (isArabic ? 'شحنة استيراد (Import)' : 'Import Shipment')}</div>
             <div><strong>${isArabic ? 'طريقة الشحن:' : 'Freight Mode:'}</strong> ${input.freightMethod.toUpperCase().replace('_', ' ')}</div>
             <div><strong>${isArabic ? 'الكمية الإجمالية:' : 'Total Quantity:'}</strong> ${input.quantity.toLocaleString()} ${isArabic ? 'وحدة' : 'units'}</div>
-            <div><strong>${isArabic ? 'الوزن القابل للخصم:' : 'Chargeable Weight:'}</strong> ${result.chargeableWeightKg.toFixed(1)} kg</div>
-            <div><strong>${isArabic ? 'الحجم التكعيبي:' : 'Volumetric CBM:'}</strong> ${result.volumeCBM.toFixed(3)} CBM</div>
+            <div><strong>${isArabic ? 'الوزن الإجمالي القائم:' : 'Gross Weight:'}</strong> ${getCalculationGrossWeightKg(result).toFixed(1)} kg (${input.weight} ${input.weightUnit}/${isArabic ? 'قطعة' : 'pc'})</div>
+            <div><strong>${isArabic ? 'الوزن القابل للاحتساب:' : 'Chargeable Weight:'}</strong> ${getCalculationChargeableWeightKg(result).toFixed(1)} kg</div>
+            <div><strong>${isArabic ? 'الحجم التكعيبي:' : 'Volumetric CBM:'}</strong> ${getCalculationVolumeCBM(result).toFixed(3)} CBM</div>
           </div>
 
           ${input.invoiceImage ? `
@@ -238,12 +248,14 @@ export async function exportHistoricalSummaryPDF(results: CalculationResult[], l
   const titleText = isArabic ? 'تقرير سجل حسابات التكاليف والشحنات التاريخية' : 'HISTORICAL SHIPMENT & LANDED COST SUMMARY REPORT';
   const totalLandedSum = results.reduce((acc, curr) => acc + curr.totalLandedCostTarget, 0);
   const totalProfitSum = results.reduce((acc, curr) => acc + curr.totalProfitTarget, 0);
+  const totalGrossWeightSum = results.reduce((acc, curr) => acc + getCalculationGrossWeightKg(curr), 0);
 
   const tableRowsHtml = results
     .map((r, idx) => {
       const title = r.input.title || (isArabic ? 'شحنة' : 'Shipment');
       const curr = r.input.targetCurrency || defaultCurrency;
       const qty = r.input.quantity;
+      const weightKg = getCalculationGrossWeightKg(r).toFixed(1);
       const landedCost = formatCurrency(r.totalLandedCostTarget, curr);
       const revenue = formatCurrency(r.totalRevenueTarget, curr);
       const profit = formatCurrency(r.totalProfitTarget, curr);
@@ -258,6 +270,7 @@ export async function exportHistoricalSummaryPDF(results: CalculationResult[], l
         <td style="padding: 8px 10px; border: 1px solid #e2e8f0; font-weight: 700;">${title}</td>
         <td style="padding: 8px 10px; border: 1px solid #e2e8f0;">${mode}</td>
         <td style="padding: 8px 10px; border: 1px solid #e2e8f0; text-align: center;">${qty}</td>
+        <td style="padding: 8px 10px; border: 1px solid #e2e8f0; text-align: center; font-weight: 700; color: #0284c7;">${weightKg} kg</td>
         <td style="padding: 8px 10px; border: 1px solid #e2e8f0; font-weight: 700; text-align: ${isArabic ? 'left' : 'right'};">${landedCost}</td>
         <td style="padding: 8px 10px; border: 1px solid #e2e8f0; color: #059669; font-weight: 700; text-align: ${isArabic ? 'left' : 'right'};">${revenue}</td>
         <td style="padding: 8px 10px; border: 1px solid #e2e8f0; color: #16a34a; font-weight: 800; text-align: ${isArabic ? 'left' : 'right'};">${profit}</td>
@@ -284,10 +297,14 @@ export async function exportHistoricalSummaryPDF(results: CalculationResult[], l
       </div>
 
       <div style="padding: 24px;">
-        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 20px;">
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px;">
           <div style="background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px 16px; border-radius: 10px;">
             <div style="font-size: 11px; color: #64748b; font-weight: 700; text-transform: uppercase;">${isArabic ? 'إجمالي قيمة الشحنات التراكمية' : 'Combined Total Landed Cost'}</div>
             <div style="font-size: 18px; font-weight: 800; color: #0f172a; margin-top: 2px;">${formatCurrency(totalLandedSum, defaultCurrency)}</div>
+          </div>
+          <div style="background: #f0f9ff; border: 1px solid #bae6fd; padding: 12px 16px; border-radius: 10px;">
+            <div style="font-size: 11px; color: #0284c7; font-weight: 700; text-transform: uppercase;">${isArabic ? 'إجمالي الوزن القائم التراكمي' : 'Combined Total Gross Weight'}</div>
+            <div style="font-size: 18px; font-weight: 800; color: #0369a1; margin-top: 2px;">${totalGrossWeightSum.toFixed(1)} KG</div>
           </div>
           <div style="background: #ecfdf5; border: 1px solid #a7f3d0; padding: 12px 16px; border-radius: 10px;">
             <div style="font-size: 11px; color: #047857; font-weight: 700; text-transform: uppercase;">${isArabic ? 'إجمالي الأرباح الصافية المحققة' : 'Combined Net Projected Profit'}</div>
@@ -303,6 +320,7 @@ export async function exportHistoricalSummaryPDF(results: CalculationResult[], l
               <th style="padding: 10px 8px; border: 1px solid #334155;">${isArabic ? 'اسم الشحنة / المنتج' : 'Product / Shipment Title'}</th>
               <th style="padding: 10px 8px; border: 1px solid #334155;">${isArabic ? 'طريقة الشحن' : 'Freight Mode'}</th>
               <th style="padding: 10px 8px; border: 1px solid #334155; text-align: center;">${isArabic ? 'الكمية' : 'Qty'}</th>
+              <th style="padding: 10px 8px; border: 1px solid #334155; text-align: center;">${isArabic ? 'الوزن (كجم)' : 'Weight (kg)'}</th>
               <th style="padding: 10px 8px; border: 1px solid #334155; text-align: ${isArabic ? 'left' : 'right'};">${isArabic ? 'التكلفة الإجمالية' : 'Total Landed Cost'}</th>
               <th style="padding: 10px 8px; border: 1px solid #334155; text-align: ${isArabic ? 'left' : 'right'};">${isArabic ? 'الإيراد المتوقع' : 'Total Revenue'}</th>
               <th style="padding: 10px 8px; border: 1px solid #334155; text-align: ${isArabic ? 'left' : 'right'};">${isArabic ? 'صافي الربح' : 'Net Profit'}</th>
@@ -357,22 +375,38 @@ export async function exportFlightManifestPDF(
   const isArabic = lang === 'ar';
   const targetCurr = flight.targetCurrency || items[0]?.input.targetCurrency || 'USD';
 
-  // Calculate aggregates
-  let totalCost = 0;
-  let totalRevenue = 0;
-  let totalProfit = 0;
-  let totalQty = 0;
-  let totalChargeableWeight = flight.totalChargeableWeightKg || 0;
-  let totalGrossWeight = flight.totalGrossWeightKg || 0;
+  // Calculate aggregates using standardized helpers
+  const totalCost = (flight.totalLandedCostEGP && flight.totalLandedCostEGP > 0)
+    ? flight.totalLandedCostEGP
+    : (flight.totalLandedCost && flight.totalLandedCost > 0)
+    ? flight.totalLandedCost
+    : items.reduce((sum, item) => sum + getCalculationLandedCost(item), 0);
 
-  items.forEach((item) => {
-    totalCost += item.totalLandedCostTarget || 0;
-    totalRevenue += item.totalRevenueTarget || 0;
-    totalProfit += item.totalProfitTarget || 0;
-    totalQty += item.input.quantity || 0;
-    if (!flight.totalChargeableWeightKg) totalChargeableWeight += item.chargeableWeightKg || 0;
-    if (!flight.totalGrossWeightKg) totalGrossWeight += (item.input.weight || 0) * (item.input.quantity || 1);
-  });
+  const totalRevenue = (flight.totalRevenueEGP && flight.totalRevenueEGP > 0)
+    ? flight.totalRevenueEGP
+    : (flight.totalRevenue && flight.totalRevenue > 0)
+    ? flight.totalRevenue
+    : items.reduce((sum, item) => sum + getCalculationRevenue(item), 0);
+
+  const totalProfit = (flight.totalProfitEGP !== undefined && flight.totalProfitEGP !== 0)
+    ? flight.totalProfitEGP
+    : (flight.totalProfit !== undefined && flight.totalProfit !== 0)
+    ? flight.totalProfit
+    : totalRevenue - totalCost;
+
+  const totalGrossWeight = (flight.totalWeightKg && flight.totalWeightKg > 0)
+    ? flight.totalWeightKg
+    : (flight.totalGrossWeightKg && flight.totalGrossWeightKg > 0)
+    ? flight.totalGrossWeightKg
+    : items.reduce((sum, item) => sum + getCalculationGrossWeightKg(item), 0);
+
+  const totalChargeableWeight = (flight.totalChargeableWeightKg && flight.totalChargeableWeightKg > 0)
+    ? flight.totalChargeableWeightKg
+    : items.reduce((sum, item) => sum + getCalculationChargeableWeightKg(item), 0);
+
+  const totalQty = (flight.totalPieces && flight.totalPieces > 0)
+    ? flight.totalPieces
+    : items.reduce((sum, item) => sum + getCalculationPieces(item), 0);
 
   const overallMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
   const flightCode = flight.flightNumber || 'FLIGHT';
@@ -394,7 +428,13 @@ export async function exportFlightManifestPDF(
     .map((item, idx) => {
       const input = item.input;
       const rowCurr = input.targetCurrency || targetCurr;
-      const profitColor = item.totalProfitTarget >= 0 ? '#16a34a' : '#dc2626';
+      const itemGrossWeight = getCalculationGrossWeightKg(item);
+      const itemChargeable = getCalculationChargeableWeightKg(item);
+      const itemLanded = getCalculationLandedCost(item);
+      const itemRev = getCalculationRevenue(item);
+      const itemProf = getCalculationProfit(item);
+      const profitColor = itemProf >= 0 ? '#16a34a' : '#dc2626';
+      const marginPct = itemRev > 0 ? ((itemProf / itemRev) * 100).toFixed(1) : '0.0';
 
       return `
         <tr style="border-bottom: 1px solid #e2e8f0; background: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
@@ -404,18 +444,18 @@ export async function exportFlightManifestPDF(
             <div style="font-size: 10px; color: #64748b;">SKU: ${input.skuSupplier || 'N/A'} | ${input.category || 'General Cargo'}</div>
           </td>
           <td style="padding: 10px 8px; text-align: center; font-weight: 600;">${input.quantity.toLocaleString()}</td>
-          <td style="padding: 10px 8px; text-align: center; font-weight: 600;">${(item.chargeableWeightKg || 0).toFixed(1)} kg</td>
+          <td style="padding: 10px 8px; text-align: center; font-weight: 600;">${itemGrossWeight.toFixed(1)} kg</td>
           <td style="padding: 10px 8px; text-align: ${isArabic ? 'left' : 'right'}; font-weight: 700; color: #334155;">
-            ${formatCurrency(item.totalLandedCostTarget, rowCurr)}
+            ${formatCurrency(itemLanded, rowCurr)}
           </td>
           <td style="padding: 10px 8px; text-align: ${isArabic ? 'left' : 'right'}; font-weight: 700; color: #059669;">
-            ${formatCurrency(item.totalRevenueTarget, rowCurr)}
+            ${formatCurrency(itemRev, rowCurr)}
           </td>
           <td style="padding: 10px 8px; text-align: ${isArabic ? 'left' : 'right'}; font-weight: 800; color: ${profitColor};">
-            ${formatCurrency(item.totalProfitTarget, rowCurr)}
+            ${formatCurrency(itemProf, rowCurr)}
           </td>
           <td style="padding: 10px 8px; text-align: center; font-weight: 700; color: #2563eb;">
-            ${item.actualMarginPercentage.toFixed(1)}%
+            ${marginPct}%
           </td>
         </tr>
       `;
@@ -453,8 +493,9 @@ export async function exportFlightManifestPDF(
             <div style="font-size: 16px; font-weight: 800; color: #0f172a; margin-top: 4px;">${items.length} ${isArabic ? 'بند' : 'SKUs'} (${totalQty.toLocaleString()} pcs)</div>
           </div>
           <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; text-align: center;">
-            <div style="font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase;">${isArabic ? 'الوزن القابل للاحتساب' : 'Chargeable Weight'}</div>
-            <div style="font-size: 16px; font-weight: 800; color: #0284c7; margin-top: 4px;">${totalChargeableWeight.toFixed(1)} kg</div>
+            <div style="font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase;">${isArabic ? 'الوزن (قائم / قابل للاحتساب)' : 'Gross / Chargeable Weight'}</div>
+            <div style="font-size: 15px; font-weight: 800; color: #0284c7; margin-top: 4px;">${totalGrossWeight.toFixed(1)} kg / ${totalChargeableWeight.toFixed(1)} kg</div>
+            <div style="font-size: 9px; color: #64748b; margin-top: 2px;">${isArabic ? 'إجمالي الأوزان المحسوبة' : 'Calculated Manifest Weights'}</div>
           </div>
           <div style="background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 10px; padding: 12px; text-align: center;">
             <div style="font-size: 10px; font-weight: 700; color: #475569; text-transform: uppercase;">${isArabic ? 'إجمالي تكلفة الوصول' : 'Total Landed Cost'}</div>

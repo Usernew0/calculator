@@ -50,13 +50,27 @@ import {
   Globe,
   Scale,
   Upload,
+  ChevronDown,
+  ChevronUp,
+  TrendingDown,
+  Link2,
+  Unlink2,
 } from 'lucide-react';
 import { ClientQuoteModal } from './ClientQuoteModal';
 import { EditTransactionModal } from './EditTransactionModal';
 import { MultiHistoryAnalysisModal } from './MultiHistoryAnalysisModal';
 import { FlightConsignmentModal } from './FlightConsignmentModal';
-import { getFlightsApi, deleteFlightApi } from '../lib/api';
-import { subscribeToFlightConsignments } from '../lib/firebase';
+import { getFlightsApi, deleteFlightApi, saveFlightConsignmentApi, saveCalculationApi } from '../lib/api';
+import { subscribeToFlightConsignments, saveFlightConsignmentToFirestore, saveCalculationToFirestore } from '../lib/firebase';
+import {
+  getCalculationGrossWeightKg,
+  getCalculationChargeableWeightKg,
+  getCalculationVolumeCBM,
+  getCalculationPieces,
+  getCalculationLandedCost,
+  getCalculationRevenue,
+  getCalculationProfit,
+} from '../utils/calculator';
 
 interface DashboardViewProps {
   history: CalculationResult[];
@@ -105,9 +119,109 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [flights, setFlights] = useState<FlightConsignment[]>([]);
   const [isLoadingFlights, setIsLoadingFlights] = useState<boolean>(false);
   const [showFlightConsignmentModal, setShowFlightConsignmentModal] = useState<boolean>(false);
+  const [flightModalInitialFlight, setFlightModalInitialFlight] = useState<FlightConsignment | null>(null);
+  const [flightModalCustomSelectedItems, setFlightModalCustomSelectedItems] = useState<CalculationResult[] | null>(null);
+  const [expandedFlightCargoIds, setExpandedFlightCargoIds] = useState<string[]>([]);
   const [selectedFlightForView, setSelectedFlightForView] = useState<FlightConsignment | null>(null);
   const [flightToDelete, setFlightToDelete] = useState<FlightConsignment | null>(null);
   const [isExportingFlightPdf, setIsExportingFlightPdf] = useState<string | null>(null);
+
+  const handleToggleExpandFlightCargo = (flightId: string) => {
+    setExpandedFlightCargoIds((prev) =>
+      prev.includes(flightId) ? prev.filter((id) => id !== flightId) : [...prev, flightId]
+    );
+  };
+
+  const handleOpenFlightModalForSingleItem = (item: CalculationResult) => {
+    setFlightModalInitialFlight(null);
+    setFlightModalCustomSelectedItems([item]);
+    setShowFlightConsignmentModal(true);
+  };
+
+  const handleOpenAddCargoToFlight = (flight: FlightConsignment) => {
+    setFlightModalInitialFlight(flight);
+    setFlightModalCustomSelectedItems(null);
+    setShowFlightConsignmentModal(true);
+  };
+
+  const handleUnlinkItemFromFlight = async (flight: FlightConsignment, calcId: string) => {
+    try {
+      const remainingCalcIds = (flight.calculationIds || []).filter((id) => id !== calcId);
+      const remainingItems = history.filter((h) => remainingCalcIds.includes(h.id));
+
+      const totalLandedCost = remainingItems.reduce((sum, item) => sum + getCalculationLandedCost(item), 0);
+      const totalRevenue = remainingItems.reduce((sum, item) => sum + getCalculationRevenue(item), 0);
+      const totalProfit = totalRevenue - totalLandedCost;
+      const totalGrossWeightKg = remainingItems.reduce((sum, item) => sum + getCalculationGrossWeightKg(item), 0);
+      const totalChargeableWeightKg = remainingItems.reduce((sum, item) => sum + getCalculationChargeableWeightKg(item), 0);
+      const totalVolumeCbm = remainingItems.reduce((sum, item) => sum + getCalculationVolumeCBM(item), 0);
+      const totalPackagesCount = remainingItems.reduce((sum, item) => sum + getCalculationPieces(item), 0);
+
+      const updatedFlight: FlightConsignment = {
+        ...flight,
+        calculationIds: remainingCalcIds,
+        totalLandedCost,
+        totalLandedCostEGP: totalLandedCost,
+        totalRevenue,
+        totalRevenueEGP: totalRevenue,
+        totalProfit,
+        totalProfitEGP: totalProfit,
+        totalGrossWeightKg,
+        totalWeightKg: totalGrossWeightKg,
+        totalChargeableWeightKg,
+        totalVolumeCbm,
+        totalPackagesCount,
+        totalPieces: totalPackagesCount,
+        updatedAt: new Date().toISOString(),
+      };
+
+      // 1. Save updated flight to API and Firestore
+      try {
+        await saveFlightConsignmentApi(updatedFlight);
+      } catch (e) {
+        console.info('API flight update notice:', e);
+      }
+      try {
+        await saveFlightConsignmentToFirestore(updatedFlight);
+      } catch (e) {
+        console.info('Firestore flight update notice:', e);
+      }
+
+      // 2. Update calculation record to remove flight link
+      const unlinkedItem = history.find((h) => h.id === calcId);
+      if (unlinkedItem) {
+        const updatedCalc: CalculationResult = {
+          ...unlinkedItem,
+          flightConsignmentId: undefined,
+          flightNumber: undefined,
+        };
+        try {
+          await saveCalculationApi(updatedCalc);
+        } catch (e) {
+          console.info('API calc update notice:', e);
+        }
+        try {
+          await saveCalculationToFirestore(updatedCalc);
+        } catch (e) {
+          console.info('Firestore calc update notice:', e);
+        }
+        if (onSaveRecord) {
+          onSaveRecord(updatedCalc);
+        }
+      }
+
+      // 3. Update local flight state
+      setFlights((prev) =>
+        prev.map((f) => (f.id === updatedFlight.id ? updatedFlight : f))
+      );
+      if (selectedFlightForView?.id === updatedFlight.id) {
+        setSelectedFlightForView(updatedFlight);
+      }
+    } catch (err: any) {
+      console.error('Failed to unlink item from flight:', err);
+      alert(lang === 'ar' ? 'فشل إلغاء ربط المنتج بالرحلة' : 'Failed to unlink item from flight');
+    }
+  };
 
   // Load and Subscribe to Flights
   useEffect(() => {
@@ -251,6 +365,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       if (sortBy === 'date_asc') return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
       if (sortBy === 'landed_desc') return b.totalLandedCostTarget - a.totalLandedCostTarget;
       if (sortBy === 'profit_desc') return b.totalProfitTarget - a.totalProfitTarget;
+      if (sortBy === 'weight_desc') return getCalculationGrossWeightKg(b) - getCalculationGrossWeightKg(a);
+      if (sortBy === 'weight_asc') return getCalculationGrossWeightKg(a) - getCalculationGrossWeightKg(b);
       return 0;
     });
   }, [history, searchQuery, selectedMethodFilter, selectedDirectionFilter, selectedCurrencyFilter, sortBy]);
@@ -419,6 +535,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       'Title',
       'Category',
       'Quantity',
+      'Gross Weight (kg)',
+      'Chargeable Weight (kg)',
       'Original Currency',
       'Original Price',
       'Target Currency',
@@ -436,6 +554,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       `"${r.input.title.replace(/"/g, '""')}"`,
       `"${r.input.category || ''}"`,
       r.input.quantity,
+      getCalculationGrossWeightKg(r).toFixed(2),
+      getCalculationChargeableWeightKg(r).toFixed(2),
       r.input.originalCurrency,
       r.input.originalPrice,
       r.input.targetCurrency,
@@ -1018,12 +1138,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     </span>
                   </div>
 
-                  {/* 4-Metric Grid */}
-                  <div className="grid grid-cols-2 gap-2 my-3 p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-200/80 dark:border-slate-800 text-xs">
+                  {/* 5-Metric Grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 my-3 p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-200/80 dark:border-slate-800 text-xs">
                     <div>
                       <div className="text-[10px] text-slate-400 uppercase font-bold">{t.thQty}</div>
                       <div className="font-bold text-slate-800 dark:text-slate-200">
                         {item.input.quantity.toLocaleString()} {lang === 'ar' ? 'قطع' : 'pcs'}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-[10px] text-sky-600 dark:text-sky-400 uppercase font-bold">{t.thWeight || (lang === 'ar' ? 'الوزن' : 'Weight')}</div>
+                      <div className="font-bold text-sky-600 dark:text-sky-400">
+                        {getCalculationGrossWeightKg(item).toFixed(1)} <span className="text-[10px] font-normal text-slate-500">KG</span>
                       </div>
                     </div>
 
@@ -1041,7 +1168,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       </div>
                     </div>
 
-                    <div>
+                    <div className="col-span-2 sm:col-span-2">
                       <div className="text-[10px] text-teal-600 dark:text-teal-400 uppercase font-bold">{t.thNetProfit} ({item.actualMarginPercentage.toFixed(1)}%)</div>
                       <div className="font-bold text-teal-600 dark:text-teal-400">
                         {formatCurrency(item.totalProfitTarget, curr)}
@@ -1057,6 +1184,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     >
                       <FileText className="w-4 h-4 text-blue-500 shrink-0" />
                       <span>{lang === 'ar' ? 'عرض سعر' : 'Offer'}</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        const linkedFlight = flightMapByCalcId[item.id];
+                        if (linkedFlight) {
+                          setSelectedFlightForView(linkedFlight);
+                        } else {
+                          handleOpenFlightModalForSingleItem(item);
+                        }
+                      }}
+                      className={`p-2.5 rounded-xl min-h-[44px] min-w-[44px] flex items-center justify-center transition-all active:scale-95 border ${
+                        flightMapByCalcId[item.id]
+                          ? 'text-sky-600 dark:text-sky-400 bg-sky-500/10 border-sky-500/30'
+                          : 'text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700'
+                      }`}
+                      title={flightMapByCalcId[item.id] ? (lang === 'ar' ? 'معاينة بوليصة الرحلة والأرباح' : 'Inspect Flight Consignment & P&L') : (lang === 'ar' ? 'ربط برحلة طيران' : 'Link to Flight')}
+                    >
+                      <Plane className="w-4 h-4 shrink-0 text-sky-500" />
                     </button>
 
                     <button
@@ -1145,6 +1291,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <th className="py-3.5 px-4 text-right rtl:text-left text-slate-300">
                   <button
                     type="button"
+                    onClick={() => setSortBy(sortBy === 'weight_desc' ? 'weight_asc' : 'weight_desc')}
+                    className="flex items-center gap-1.5 justify-end rtl:justify-start hover:text-sky-400 transition-colors cursor-pointer w-full"
+                    title={lang === 'ar' ? 'ترتيب حسب الوزن' : 'Sort by weight'}
+                  >
+                    <span>{t.thWeight || (lang === 'ar' ? 'الوزن (كجم)' : 'Weight (kg)')}</span>
+                    <ArrowUpDown className={`w-3 h-3 ${sortBy.startsWith('weight') ? 'text-sky-400 font-bold' : 'text-slate-500'}`} />
+                  </button>
+                </th>
+
+                <th className="py-3.5 px-4 text-right rtl:text-left text-slate-300">
+                  <button
+                    type="button"
                     onClick={() => setSortBy('landed_desc')}
                     className="flex items-center gap-1.5 justify-end rtl:justify-start hover:text-emerald-400 transition-colors cursor-pointer w-full"
                   >
@@ -1174,7 +1332,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-medium">
               {filteredHistory.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-10 text-center text-slate-400">
+                  <td colSpan={11} className="py-10 text-center text-slate-400">
                     {history.length === 0 ? t.noRecordsSaved : t.noFilteredRecords}
                   </td>
                 </tr>
@@ -1182,6 +1340,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 filteredHistory.map((item) => {
                   const curr = item.input.targetCurrency;
                   const isSelected = selectedIds.includes(item.id);
+                  const grossWeight = getCalculationGrossWeightKg(item);
+                  const chargeableWeight = getCalculationChargeableWeightKg(item);
                   return (
                     <tr
                       key={item.id}
@@ -1262,6 +1422,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       <td className="py-3 px-4 text-right rtl:text-left font-semibold text-slate-900 dark:text-slate-100">
                         {item.input.quantity.toLocaleString()}
                       </td>
+                      <td className="py-3 px-4 text-right rtl:text-left font-mono">
+                        <div className="font-bold text-slate-800 dark:text-slate-200">
+                          {grossWeight.toFixed(1)} <span className="text-[10px] text-slate-400">kg</span>
+                        </div>
+                        {Math.abs(chargeableWeight - grossWeight) > 0.05 && (
+                          <div className="text-[10px] text-sky-600 dark:text-sky-400" title="Chargeable Weight">
+                            {chargeableWeight.toFixed(1)} chg
+                          </div>
+                        )}
+                      </td>
                       <td className="py-3 px-4 text-right rtl:text-left font-extrabold text-slate-900 dark:text-slate-100">
                         {formatCurrency(item.totalLandedCostTarget, curr)}
                       </td>
@@ -1284,6 +1454,26 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                           >
                             <FileText className="w-3.5 h-3.5 text-blue-500 shrink-0" />
                             <span>{lang === 'ar' ? 'عرض سعر' : 'Offer'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const linkedFlight = flightMapByCalcId[item.id];
+                              if (linkedFlight) {
+                                setSelectedFlightForView(linkedFlight);
+                              } else {
+                                handleOpenFlightModalForSingleItem(item);
+                              }
+                            }}
+                            title={flightMapByCalcId[item.id] ? (lang === 'ar' ? 'معاينة بوليصة الرحلة والأرباح' : 'Inspect Flight Consignment & P&L') : (lang === 'ar' ? 'ربط برحلة طيران' : 'Link to Flight')}
+                            className={`p-1.5 rounded-lg font-bold cursor-pointer text-xs flex items-center justify-center transition-all shadow-2xs hover:scale-105 active:scale-95 border ${
+                              flightMapByCalcId[item.id]
+                                ? 'bg-sky-500/10 hover:bg-sky-500/25 text-sky-600 dark:text-sky-400 border-sky-500/30'
+                                : 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400 border-slate-300 dark:border-slate-700'
+                            }`}
+                          >
+                            <Plane className="w-3.5 h-3.5 text-sky-500 shrink-0" />
                           </button>
 
                           <button
@@ -1371,10 +1561,26 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <Scale className="w-4 h-4 text-amber-500" />
               </div>
               <div className="text-xl sm:text-2xl font-black text-amber-600 dark:text-amber-400">
-                {flights.reduce((sum, f) => sum + (f.totalWeightKg || 0), 0).toLocaleString()} <span className="text-xs">KG</span>
+                {flights.reduce((sum, f) => {
+                  const linked = history.filter((h) => (f.calculationIds || []).includes(h.id));
+                  const w = (f.totalWeightKg && f.totalWeightKg > 0)
+                    ? f.totalWeightKg
+                    : (f.totalGrossWeightKg && f.totalGrossWeightKg > 0)
+                    ? f.totalGrossWeightKg
+                    : linked.reduce((s, item) => s + getCalculationGrossWeightKg(item), 0);
+                  return sum + w;
+                }, 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} <span className="text-xs">KG</span>
               </div>
               <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                {flights.reduce((sum, f) => sum + (f.totalPieces || 0), 0).toLocaleString()} {lang === 'ar' ? 'طرد / كرتونة' : 'packages'}
+                {flights.reduce((sum, f) => {
+                  const linked = history.filter((h) => (f.calculationIds || []).includes(h.id));
+                  const p = (f.totalPieces && f.totalPieces > 0)
+                    ? f.totalPieces
+                    : (f.totalPackagesCount && f.totalPackagesCount > 0)
+                    ? f.totalPackagesCount
+                    : linked.reduce((s, item) => s + getCalculationPieces(item), 0);
+                  return sum + p;
+                }, 0).toLocaleString()} {lang === 'ar' ? 'طرد / كرتونة' : 'packages'}
               </div>
             </div>
 
@@ -1386,7 +1592,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <Layers className="w-4 h-4 text-indigo-500" />
               </div>
               <div className="text-xl sm:text-2xl font-black text-indigo-600 dark:text-indigo-400">
-                {flights.reduce((sum, f) => sum + (f.totalVolumeCbm || 0), 0).toFixed(2)} <span className="text-xs">CBM</span>
+                {flights.reduce((sum, f) => {
+                  const linked = history.filter((h) => (f.calculationIds || []).includes(h.id));
+                  const v = (f.totalVolumeCbm && f.totalVolumeCbm > 0)
+                    ? f.totalVolumeCbm
+                    : linked.reduce((s, item) => s + getCalculationVolumeCBM(item), 0);
+                  return sum + v;
+                }, 0).toFixed(2)} <span className="text-xs">CBM</span>
               </div>
               <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
                 {lang === 'ar' ? 'حجم البضائع الجوية' : 'Cubic meter volume'}
@@ -1401,7 +1613,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <DollarSign className="w-4 h-4 text-rose-500" />
               </div>
               <div className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-                {formatCurrency(flights.reduce((sum, f) => sum + (f.totalLandedCostEGP || 0), 0), 'EGP')}
+                {formatCurrency(
+                  flights.reduce((sum, f) => {
+                    const linked = history.filter((h) => (f.calculationIds || []).includes(h.id));
+                    const c = (f.totalLandedCostEGP && f.totalLandedCostEGP > 0)
+                      ? f.totalLandedCostEGP
+                      : (f.totalLandedCost && f.totalLandedCost > 0)
+                      ? f.totalLandedCost
+                      : linked.reduce((s, item) => s + getCalculationLandedCost(item), 0);
+                    return sum + c;
+                  }, 0),
+                  'EGP'
+                )}
               </div>
               <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
                 {lang === 'ar' ? 'تكلفة البضائع المجمعة' : 'Consolidated cost'}
@@ -1416,7 +1639,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <TrendingUp className="w-4 h-4 text-emerald-500" />
               </div>
               <div className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400">
-                {formatCurrency(flights.reduce((sum, f) => sum + (f.totalProfitEGP || 0), 0), 'EGP')}
+                {formatCurrency(
+                  flights.reduce((sum, f) => {
+                    const linked = history.filter((h) => (f.calculationIds || []).includes(h.id));
+                    const p = (f.totalProfitEGP !== undefined && f.totalProfitEGP !== 0)
+                      ? f.totalProfitEGP
+                      : (f.totalProfit !== undefined && f.totalProfit !== 0)
+                      ? f.totalProfit
+                      : linked.reduce((s, item) => s + getCalculationProfit(item), 0);
+                    return sum + p;
+                  }, 0),
+                  'EGP'
+                )}
               </div>
               <div className="text-[11px] text-emerald-500/80 font-bold mt-1">
                 {lang === 'ar' ? 'أرباح الشحنات المربوطة' : 'Expected net margin'}
@@ -1528,6 +1762,50 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <div className="grid grid-cols-1 gap-4">
               {filteredFlights.map((flight) => {
                 const linkedItems = history.filter((h) => (flight.calculationIds || []).includes(h.id));
+                const isExpanded = expandedFlightCargoIds.includes(flight.id);
+
+                const flightGrossWeight = (flight.totalWeightKg && flight.totalWeightKg > 0)
+                  ? flight.totalWeightKg
+                  : (flight.totalGrossWeightKg && flight.totalGrossWeightKg > 0)
+                  ? flight.totalGrossWeightKg
+                  : linkedItems.reduce((sum, item) => sum + getCalculationGrossWeightKg(item), 0);
+
+                const flightChargeableWeight = (flight.totalChargeableWeightKg && flight.totalChargeableWeightKg > 0)
+                  ? flight.totalChargeableWeightKg
+                  : linkedItems.reduce((sum, item) => sum + getCalculationChargeableWeightKg(item), 0);
+
+                const flightVolume = (flight.totalVolumeCbm && flight.totalVolumeCbm > 0)
+                  ? flight.totalVolumeCbm
+                  : linkedItems.reduce((sum, item) => sum + getCalculationVolumeCBM(item), 0);
+
+                const flightPieces = (flight.totalPieces && flight.totalPieces > 0)
+                  ? flight.totalPieces
+                  : (flight.totalPackagesCount && flight.totalPackagesCount > 0)
+                  ? flight.totalPackagesCount
+                  : linkedItems.reduce((sum, item) => sum + getCalculationPieces(item), 0);
+
+                const flightLandedCost = (flight.totalLandedCostEGP && flight.totalLandedCostEGP > 0)
+                  ? flight.totalLandedCostEGP
+                  : (flight.totalLandedCost && flight.totalLandedCost > 0)
+                  ? flight.totalLandedCost
+                  : linkedItems.reduce((sum, item) => sum + getCalculationLandedCost(item), 0);
+
+                const flightRevenue = (flight.totalRevenueEGP && flight.totalRevenueEGP > 0)
+                  ? flight.totalRevenueEGP
+                  : (flight.totalRevenue && flight.totalRevenue > 0)
+                  ? flight.totalRevenue
+                  : linkedItems.reduce((sum, item) => sum + getCalculationRevenue(item), 0);
+
+                const flightProfit = (flight.totalProfitEGP !== undefined && flight.totalProfitEGP !== 0)
+                  ? flight.totalProfitEGP
+                  : (flight.totalProfit !== undefined && flight.totalProfit !== 0)
+                  ? flight.totalProfit
+                  : flightRevenue - flightLandedCost;
+
+                const isProfitable = flightProfit >= 0;
+                const profitMargin = flightRevenue > 0 ? (flightProfit / flightRevenue) * 100 : 0;
+                const roiPercent = flightLandedCost > 0 ? (flightProfit / flightLandedCost) * 100 : 0;
+
                 const statusBadgeStyle = {
                   scheduled: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/30',
                   in_transit: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30',
@@ -1610,6 +1888,51 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       </div>
                     </div>
 
+                    {/* Flight P&L Highlight Banner */}
+                    <div
+                      className={`p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                        isProfitable
+                          ? 'bg-emerald-500/10 dark:bg-emerald-950/30 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
+                          : 'bg-rose-500/10 dark:bg-rose-950/30 border-rose-500/30 text-rose-700 dark:text-rose-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        {isProfitable ? (
+                          <TrendingUp className="w-5 h-5 text-emerald-500 shrink-0" />
+                        ) : (
+                          <TrendingDown className="w-5 h-5 text-rose-500 shrink-0" />
+                        )}
+                        <div>
+                          <div className="text-xs font-black uppercase tracking-wider">
+                            {isProfitable
+                              ? (lang === 'ar' ? 'صافي أرباح الرحلة (Net Profit)' : 'Flight Net Profit Status')
+                              : (lang === 'ar' ? 'صافي خسائر الرحلة (Net Loss)' : 'Flight Net Deficit / Loss Status')}
+                          </div>
+                          <div className="text-lg sm:text-xl font-black">
+                            {isProfitable ? '+' : ''}
+                            {formatCurrency(flightProfit, 'EGP')}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 text-xs font-bold">
+                        <span className={`px-2.5 py-1 rounded-lg border ${
+                          isProfitable
+                            ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
+                            : 'bg-rose-500/20 text-rose-600 dark:text-rose-400 border-rose-500/30'
+                        }`}>
+                          {lang === 'ar' ? 'هامش الربح' : 'Margin'}: {profitMargin.toFixed(1)}%
+                        </span>
+                        <span className={`px-2.5 py-1 rounded-lg border ${
+                          isProfitable
+                            ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
+                            : 'bg-rose-500/20 text-rose-600 dark:text-rose-400 border-rose-500/30'
+                        }`}>
+                          ROI: {roiPercent.toFixed(1)}%
+                        </span>
+                      </div>
+                    </div>
+
                     {/* Cargo & Financial 4-Box Matrix */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                       <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/70 dark:border-slate-800">
@@ -1617,10 +1940,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                           {lang === 'ar' ? 'الوزن الإجمالي' : 'Gross Weight'}
                         </div>
                         <div className="text-sm sm:text-base font-black text-slate-900 dark:text-white mt-0.5">
-                          {flight.totalWeightKg?.toLocaleString() || 0} <span className="text-xs">KG</span>
+                          {flightGrossWeight.toLocaleString(undefined, { maximumFractionDigits: 1 })} <span className="text-xs">KG</span>
                         </div>
                         <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                          {flight.totalPieces || 0} {lang === 'ar' ? 'طرد' : 'pcs'} • {flight.totalVolumeCbm?.toFixed(2) || 0} CBM
+                          {flightPieces} {lang === 'ar' ? 'طرد' : 'pcs'} • {flightVolume.toFixed(2)} CBM
                         </div>
                       </div>
 
@@ -1641,26 +1964,158 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                           {lang === 'ar' ? 'تكلفة الشحنة' : 'Total Landed Cost'}
                         </div>
                         <div className="text-sm sm:text-base font-black text-slate-900 dark:text-white mt-0.5">
-                          {formatCurrency(flight.totalLandedCostEGP || 0, 'EGP')}
+                          {formatCurrency(flightLandedCost, 'EGP')}
                         </div>
                         <div className="text-[10px] text-slate-500 dark:text-slate-400">
                           {flight.freightCostUSD ? `$${flight.freightCostUSD.toLocaleString()} Air Freight` : 'Total Landed'}
                         </div>
                       </div>
 
-                      <div className="p-3 bg-emerald-500/10 dark:bg-emerald-950/20 rounded-xl border border-emerald-500/20">
-                        <div className="text-[10px] text-emerald-600 dark:text-emerald-400 uppercase font-black tracking-wider">
-                          {lang === 'ar' ? 'صافي الربح المتوقع' : 'Net Projected Profit'}
+                      <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/70 dark:border-slate-800">
+                        <div className="text-[10px] text-slate-400 uppercase font-black tracking-wider">
+                          {lang === 'ar' ? 'إجمالي المبيعات' : 'Expected Revenue'}
                         </div>
-                        <div className="text-sm sm:text-base font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
-                          {formatCurrency(flight.totalProfitEGP || 0, 'EGP')}
+                        <div className="text-sm sm:text-base font-black text-slate-900 dark:text-white mt-0.5">
+                          {formatCurrency(flightRevenue, 'EGP')}
                         </div>
-                        <div className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 font-bold">
-                          {flight.totalRevenueEGP && flight.totalRevenueEGP > 0
-                            ? `${(((flight.totalProfitEGP || 0) / flight.totalRevenueEGP) * 100).toFixed(1)}% margin`
-                            : 'Profit estimate'}
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400 font-bold">
+                          {formatCurrency(flightProfit, 'EGP')} {lang === 'ar' ? 'صافي' : 'Net'}
                         </div>
                       </div>
+                    </div>
+
+                    {/* Expandable Itemized Cargo Breakdown Accordion */}
+                    <div className="border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-hidden bg-slate-50/50 dark:bg-slate-800/30">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleExpandFlightCargo(flight.id)}
+                        className="w-full px-4 py-3 flex items-center justify-between gap-3 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100/70 dark:hover:bg-slate-800/60 transition-colors cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Package className="w-4 h-4 text-sky-500 shrink-0" />
+                          <span>
+                            {lang === 'ar'
+                              ? `تفاصيل البضائع والمنتجات المربوطة بالرحلة (${linkedItems.length})`
+                              : `Itemized Cargo & Linked Products (${linkedItems.length})`}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-slate-400">
+                          <span className="text-[11px] font-medium">
+                            {isExpanded ? (lang === 'ar' ? 'إخفاء' : 'Collapse') : (lang === 'ar' ? 'عرض التفاصيل' : 'Expand')}
+                          </span>
+                          {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                        </div>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="p-4 space-y-3 border-t border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900">
+                          {linkedItems.length === 0 ? (
+                            <div className="py-6 text-center text-xs text-slate-400 space-y-2">
+                              <div>{lang === 'ar' ? 'لا توجد منتجات مربوطة بهذه الرحلة بعد.' : 'No products linked to this flight yet.'}</div>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenAddCargoToFlight(flight)}
+                                className="px-3 py-1.5 bg-sky-500/10 hover:bg-sky-500/20 text-sky-600 dark:text-sky-400 border border-sky-500/30 rounded-lg text-xs font-bold inline-flex items-center gap-1 cursor-pointer transition-colors"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                <span>{lang === 'ar' ? 'ربط منتجات من سجل الحسابات' : 'Link Products from History'}</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-left rtl:text-right text-xs">
+                                  <thead>
+                                    <tr className="border-b border-slate-200 dark:border-slate-800 text-[10px] text-slate-400 uppercase font-black">
+                                      <th className="py-2 px-2">{lang === 'ar' ? 'المنتج' : 'Product'}</th>
+                                      <th className="py-2 px-2 text-right rtl:text-left">{lang === 'ar' ? 'الكمية' : 'Qty'}</th>
+                                      <th className="py-2 px-2 text-right rtl:text-left">{lang === 'ar' ? 'الوزن (KG)' : 'Weight (KG)'}</th>
+                                      <th className="py-2 px-2 text-right rtl:text-left">{lang === 'ar' ? 'التكلفة' : 'Landed'}</th>
+                                      <th className="py-2 px-2 text-right rtl:text-left">{lang === 'ar' ? 'المبيعات' : 'Revenue'}</th>
+                                      <th className="py-2 px-2 text-right rtl:text-left">{lang === 'ar' ? 'الربح' : 'Profit'}</th>
+                                      <th className="py-2 px-2 text-center w-16">{lang === 'ar' ? 'إجراء' : 'Action'}</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                                    {linkedItems.map((item) => {
+                                      const itemGrossWeight = getCalculationGrossWeightKg(item);
+                                      const itemChargeable = getCalculationChargeableWeightKg(item);
+                                      const itemLanded = getCalculationLandedCost(item);
+                                      const itemRev = getCalculationRevenue(item);
+                                      const itemProfit = getCalculationProfit(item);
+                                      const itemIsProfit = itemProfit >= 0;
+                                      return (
+                                        <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+                                          <td className="py-2.5 px-2">
+                                            <div className="flex items-center gap-2">
+                                              {item.input.invoiceImage ? (
+                                                <img
+                                                  src={item.input.invoiceImage}
+                                                  alt={item.input.title}
+                                                  className="w-8 h-8 rounded-lg object-cover border border-slate-200 dark:border-slate-700"
+                                                />
+                                              ) : (
+                                                <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400">
+                                                  <Package className="w-4 h-4" />
+                                                </div>
+                                              )}
+                                              <div>
+                                                <div className="font-bold text-slate-900 dark:text-white line-clamp-1">{item.input.title}</div>
+                                                <div className="text-[10px] text-slate-400 font-mono">{item.input.skuSupplier || 'N/A'}</div>
+                                              </div>
+                                            </div>
+                                          </td>
+                                          <td className="py-2.5 px-2 text-right rtl:text-left font-semibold">
+                                            {item.input.quantity.toLocaleString()}
+                                          </td>
+                                          <td className="py-2.5 px-2 text-right rtl:text-left font-mono font-bold text-slate-700 dark:text-slate-300">
+                                            <div>{itemGrossWeight.toFixed(1)} kg</div>
+                                            {itemChargeable !== itemGrossWeight && itemChargeable > 0 && (
+                                              <div className="text-[10px] text-slate-400 font-normal">chg: {itemChargeable.toFixed(1)} kg</div>
+                                            )}
+                                          </td>
+                                          <td className="py-2.5 px-2 text-right rtl:text-left font-bold text-slate-800 dark:text-slate-200">
+                                            {formatCurrency(itemLanded, item.input.targetCurrency)}
+                                          </td>
+                                          <td className="py-2.5 px-2 text-right rtl:text-left font-bold text-slate-800 dark:text-slate-200">
+                                            {formatCurrency(itemRev, item.input.targetCurrency)}
+                                          </td>
+                                          <td className="py-2.5 px-2 text-right rtl:text-left font-bold">
+                                            <span className={itemIsProfit ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
+                                              {itemIsProfit ? '+' : ''}{formatCurrency(itemProfit, item.input.targetCurrency)}
+                                            </span>
+                                          </td>
+                                          <td className="py-2.5 px-2 text-center">
+                                            <button
+                                              type="button"
+                                              onClick={() => handleUnlinkItemFromFlight(flight, item.id)}
+                                              className="p-1.5 text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
+                                              title={lang === 'ar' ? 'إلغاء ربط المنتج بالرحلة' : 'Unlink from Flight'}
+                                            >
+                                              <Unlink2 className="w-3.5 h-3.5" />
+                                            </button>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+
+                              <div className="pt-2 flex justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenAddCargoToFlight(flight)}
+                                  className="px-3 py-1.5 bg-sky-500/10 hover:bg-sky-500/20 text-sky-600 dark:text-sky-400 border border-sky-500/30 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  <span>{lang === 'ar' ? 'إضافة / ربط منتجات أخرى للرحلة' : 'Add / Link More Cargo'}</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {/* Action Bar */}
@@ -1670,6 +2125,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2">
+                        {/* Edit Flight */}
+                        <button
+                          type="button"
+                          onClick={() => handleOpenAddCargoToFlight(flight)}
+                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer min-h-[34px]"
+                          title={lang === 'ar' ? 'تعديل بيانات الرحلة والربط' : 'Edit Flight Details & Linked Cargo'}
+                        >
+                          <Edit3 className="w-3.5 h-3.5 text-slate-500" />
+                          <span>{lang === 'ar' ? 'تعديل' : 'Edit'}</span>
+                        </button>
+
                         {/* View / Inspect Manifest */}
                         <button
                           type="button"
@@ -1814,20 +2280,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     <span className="font-extrabold text-slate-800 dark:text-slate-200">{selectedDetailModal.input.quantity.toLocaleString()}</span>
                   </div>
                   <div>
+                    <span className="text-slate-400 text-[11px] block">{lang === 'ar' ? 'الوزن الإجمالي القائم' : 'Total Gross Weight'}</span>
+                    <span className="font-extrabold text-sky-600 dark:text-sky-400">{getCalculationGrossWeightKg(selectedDetailModal).toFixed(1)} kg ({selectedDetailModal.input.weight} {selectedDetailModal.input.weightUnit}/pc)</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[11px] block">{t.modalChargeableWeight}</span>
+                    <span className="font-extrabold text-slate-800 dark:text-slate-200">{getCalculationChargeableWeightKg(selectedDetailModal).toFixed(1)} kg</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[11px] block">{t.modalVolumetricCbm}</span>
+                    <span className="font-extrabold text-slate-800 dark:text-slate-200">{getCalculationVolumeCBM(selectedDetailModal).toFixed(3)} CBM</span>
+                  </div>
+                  <div>
                     <span className="text-slate-400 text-[11px] block">{t.modalOrigPrice}</span>
                     <span className="font-extrabold text-slate-800 dark:text-slate-200">{selectedDetailModal.input.originalPrice} {selectedDetailModal.input.originalCurrency}</span>
                   </div>
                   <div>
                     <span className="text-slate-400 text-[11px] block">{t.modalExchangeRate || 'Applied FX Rate'}</span>
                     <span className="font-extrabold text-slate-800 dark:text-slate-200">1 {selectedDetailModal.input.originalCurrency} = {selectedDetailModal.input.exchangeRate} {selectedDetailModal.input.targetCurrency}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 text-[11px] block">{t.modalChargeableWeight}</span>
-                    <span className="font-extrabold text-slate-800 dark:text-slate-200">{selectedDetailModal.chargeableWeightKg.toFixed(1)} kg</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 text-[11px] block">{t.modalVolumetricCbm}</span>
-                    <span className="font-extrabold text-slate-800 dark:text-slate-200">{selectedDetailModal.volumeCBM.toFixed(3)} CBM</span>
                   </div>
                   <div>
                     <span className="text-slate-400 text-[11px] block">{t.modalFreightMethod}</span>
@@ -1839,6 +2309,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       {selectedDetailModal.input.tradeDirection === 'export' ? (lang === 'ar' ? 'تصدير (Export)' : 'Export Shipment') : (lang === 'ar' ? 'استيراد (Import)' : 'Import Shipment')}
                     </span>
                   </div>
+                  {flightMapByCalcId[selectedDetailModal.id] && (
+                    <div>
+                      <span className="text-sky-500 text-[11px] block font-bold">{lang === 'ar' ? 'رحلة الطيران المربوطة' : 'Linked Air Flight'}</span>
+                      <span className="font-extrabold text-sky-600 dark:text-sky-400">
+                        {flightMapByCalcId[selectedDetailModal.id].flightNumber} ({flightMapByCalcId[selectedDetailModal.id].airline})
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Cargo / Invoice Picture Attachment if present */}
@@ -2234,11 +2712,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {showFlightConsignmentModal && (
         <FlightConsignmentModal
           isOpen={showFlightConsignmentModal}
-          onClose={() => setShowFlightConsignmentModal(false)}
-          selectedItems={selectedItemsList}
+          onClose={() => {
+            setShowFlightConsignmentModal(false);
+            setFlightModalInitialFlight(null);
+            setFlightModalCustomSelectedItems(null);
+          }}
+          selectedItems={flightModalCustomSelectedItems || selectedItemsList}
+          existingFlights={flights}
+          allHistoryCalculations={history}
+          initialFlight={flightModalInitialFlight}
           currentUser={currentUser}
           lang={lang}
-          onFlightSaved={(newFlight) => {
+          onFlightSaved={(newFlight, updatedCalculations) => {
             setFlights((prev) => {
               const existingIdx = prev.findIndex((f) => f.id === newFlight.id);
               if (existingIdx >= 0) {
@@ -2248,7 +2733,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               }
               return [newFlight, ...prev];
             });
+            if (updatedCalculations && updatedCalculations.length > 0 && onSaveRecord) {
+              updatedCalculations.forEach((calc) => onSaveRecord(calc));
+            }
             setShowFlightConsignmentModal(false);
+            setFlightModalInitialFlight(null);
+            setFlightModalCustomSelectedItems(null);
             setDashboardSubTab('flights');
           }}
         />
@@ -2296,57 +2786,101 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {/* Modal Body */}
             <div className="p-5 sm:p-6 space-y-6">
               {/* 4-KPI Overview Box */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="p-3.5 bg-slate-50 dark:bg-slate-800/70 rounded-2xl border border-slate-200/80 dark:border-slate-800">
-                  <div className="text-[10px] text-slate-400 uppercase font-black tracking-wider mb-1">
-                    {lang === 'ar' ? 'الوزن الإجمالي' : 'Gross Weight'}
-                  </div>
-                  <div className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
-                    {selectedFlightForView.totalWeightKg?.toLocaleString() || 0} <span className="text-xs">KG</span>
-                  </div>
-                  <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
-                    {selectedFlightForView.totalVolumeCbm?.toFixed(2) || 0} CBM Volume
-                  </div>
-                </div>
+              {(() => {
+                const linkedCalcItems = (selectedFlightForView.calculationIds || [])
+                  .map((calcId) => history.find((h) => h.id === calcId))
+                  .filter((x): x is CalculationResult => Boolean(x));
 
-                <div className="p-3.5 bg-slate-50 dark:bg-slate-800/70 rounded-2xl border border-slate-200/80 dark:border-slate-800">
-                  <div className="text-[10px] text-slate-400 uppercase font-black tracking-wider mb-1">
-                    {lang === 'ar' ? 'عدد الطرود' : 'Total Packages'}
-                  </div>
-                  <div className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
-                    {selectedFlightForView.totalPieces?.toLocaleString() || 0} <span className="text-xs">{lang === 'ar' ? 'طرد' : 'pcs'}</span>
-                  </div>
-                  <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
-                    {selectedFlightForView.calculationIds?.length || 0} {lang === 'ar' ? 'حسبات مربوطة' : 'Linked Records'}
-                  </div>
-                </div>
+                const modalGrossWeightKg = (selectedFlightForView.totalWeightKg && selectedFlightForView.totalWeightKg > 0)
+                  ? selectedFlightForView.totalWeightKg
+                  : (selectedFlightForView.totalGrossWeightKg && selectedFlightForView.totalGrossWeightKg > 0)
+                  ? selectedFlightForView.totalGrossWeightKg
+                  : linkedCalcItems.reduce((acc, curr) => acc + getCalculationGrossWeightKg(curr), 0);
 
-                <div className="p-3.5 bg-slate-50 dark:bg-slate-800/70 rounded-2xl border border-slate-200/80 dark:border-slate-800">
-                  <div className="text-[10px] text-slate-400 uppercase font-black tracking-wider mb-1">
-                    {lang === 'ar' ? 'تكلفة الشحنة الإجمالية' : 'Total Landed Cost'}
-                  </div>
-                  <div className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
-                    {formatCurrency(selectedFlightForView.totalLandedCostEGP || 0, 'EGP')}
-                  </div>
-                  <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
-                    {selectedFlightForView.freightCostUSD ? `$${selectedFlightForView.freightCostUSD.toLocaleString()} Freight` : 'Total In EGP'}
-                  </div>
-                </div>
+                const modalChargeableWeightKg = (selectedFlightForView.totalChargeableWeightKg && selectedFlightForView.totalChargeableWeightKg > 0)
+                  ? selectedFlightForView.totalChargeableWeightKg
+                  : linkedCalcItems.reduce((acc, curr) => acc + getCalculationChargeableWeightKg(curr), 0);
 
-                <div className="p-3.5 bg-emerald-500/10 dark:bg-emerald-950/30 rounded-2xl border border-emerald-500/25">
-                  <div className="text-[10px] text-emerald-600 dark:text-emerald-400 uppercase font-black tracking-wider mb-1">
-                    {lang === 'ar' ? 'صافي الربح المتوقع' : 'Projected Profit'}
+                const modalPieces = (selectedFlightForView.totalPieces && selectedFlightForView.totalPieces > 0)
+                  ? selectedFlightForView.totalPieces
+                  : linkedCalcItems.reduce((acc, curr) => acc + getCalculationPieces(curr), 0);
+
+                const modalVolumeCbm = (selectedFlightForView.totalVolumeCbm && selectedFlightForView.totalVolumeCbm > 0)
+                  ? selectedFlightForView.totalVolumeCbm
+                  : linkedCalcItems.reduce((acc, curr) => acc + getCalculationVolumeCBM(curr), 0);
+
+                const modalCostEGP = (selectedFlightForView.totalLandedCostEGP && selectedFlightForView.totalLandedCostEGP > 0)
+                  ? selectedFlightForView.totalLandedCostEGP
+                  : (selectedFlightForView.totalLandedCost && selectedFlightForView.totalLandedCost > 0)
+                  ? selectedFlightForView.totalLandedCost
+                  : linkedCalcItems.reduce((acc, curr) => acc + getCalculationLandedCost(curr), 0);
+
+                const modalRevenueEGP = (selectedFlightForView.totalRevenueEGP && selectedFlightForView.totalRevenueEGP > 0)
+                  ? selectedFlightForView.totalRevenueEGP
+                  : (selectedFlightForView.totalRevenue && selectedFlightForView.totalRevenue > 0)
+                  ? selectedFlightForView.totalRevenue
+                  : linkedCalcItems.reduce((acc, curr) => acc + getCalculationRevenue(curr), 0);
+
+                const modalProfitEGP = (selectedFlightForView.totalProfitEGP !== undefined && selectedFlightForView.totalProfitEGP !== 0)
+                  ? selectedFlightForView.totalProfitEGP
+                  : (selectedFlightForView.totalProfit !== undefined && selectedFlightForView.totalProfit !== 0)
+                  ? selectedFlightForView.totalProfit
+                  : modalRevenueEGP - modalCostEGP;
+
+                return (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="p-3.5 bg-slate-50 dark:bg-slate-800/70 rounded-2xl border border-slate-200/80 dark:border-slate-800">
+                      <div className="text-[10px] text-sky-600 dark:text-sky-400 uppercase font-black tracking-wider mb-1">
+                        {lang === 'ar' ? 'الوزن الإجمالي (Gross)' : 'Gross Weight'}
+                      </div>
+                      <div className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                        {modalGrossWeightKg.toFixed(1)} <span className="text-xs">KG</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        {modalChargeableWeightKg.toFixed(1)} KG Chg • {modalVolumeCbm.toFixed(2)} CBM
+                      </div>
+                    </div>
+
+                    <div className="p-3.5 bg-slate-50 dark:bg-slate-800/70 rounded-2xl border border-slate-200/80 dark:border-slate-800">
+                      <div className="text-[10px] text-slate-400 uppercase font-black tracking-wider mb-1">
+                        {lang === 'ar' ? 'عدد القطع / الطرود' : 'Total Packages'}
+                      </div>
+                      <div className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                        {modalPieces.toLocaleString()} <span className="text-xs">{lang === 'ar' ? 'طرد' : 'pcs'}</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        {linkedCalcItems.length} {lang === 'ar' ? 'حسبات مربوطة' : 'Linked Records'}
+                      </div>
+                    </div>
+
+                    <div className="p-3.5 bg-slate-50 dark:bg-slate-800/70 rounded-2xl border border-slate-200/80 dark:border-slate-800">
+                      <div className="text-[10px] text-slate-400 uppercase font-black tracking-wider mb-1">
+                        {lang === 'ar' ? 'تكلفة الشحنة الإجمالية' : 'Total Landed Cost'}
+                      </div>
+                      <div className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                        {formatCurrency(modalCostEGP, 'EGP')}
+                      </div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        {selectedFlightForView.freightCostUSD ? `$${selectedFlightForView.freightCostUSD.toLocaleString()} Freight` : 'Total In EGP'}
+                      </div>
+                    </div>
+
+                    <div className="p-3.5 bg-emerald-500/10 dark:bg-emerald-950/30 rounded-2xl border border-emerald-500/25">
+                      <div className="text-[10px] text-emerald-600 dark:text-emerald-400 uppercase font-black tracking-wider mb-1">
+                        {lang === 'ar' ? 'صافي الربح المتوقع' : 'Projected Profit'}
+                      </div>
+                      <div className="text-base sm:text-lg font-black text-emerald-600 dark:text-emerald-400">
+                        {formatCurrency(modalProfitEGP, 'EGP')}
+                      </div>
+                      <div className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 font-bold mt-0.5">
+                        {modalRevenueEGP > 0
+                          ? `${((modalProfitEGP / modalRevenueEGP) * 100).toFixed(1)}% margin`
+                          : 'Margin'}
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-base sm:text-lg font-black text-emerald-600 dark:text-emerald-400">
-                    {formatCurrency(selectedFlightForView.totalProfitEGP || 0, 'EGP')}
-                  </div>
-                  <div className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 font-bold mt-0.5">
-                    {selectedFlightForView.totalRevenueEGP && selectedFlightForView.totalRevenueEGP > 0
-                      ? `${(((selectedFlightForView.totalProfitEGP || 0) / selectedFlightForView.totalRevenueEGP) * 100).toFixed(1)}% margin`
-                      : 'Margin'}
-                  </div>
-                </div>
-              </div>
+                );
+              })()}
 
               {/* Linked Shipments List */}
               <div className="space-y-3">
@@ -2372,26 +2906,45 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                           </div>
                         );
                       }
+                      const grossWeight = getCalculationGrossWeightKg(item);
+                      const chargeableWeight = getCalculationChargeableWeightKg(item);
+                      const volumeCbm = getCalculationVolumeCBM(item);
+
                       return (
-                        <div key={item.id} className="p-3.5 flex items-center justify-between gap-3 text-xs hover:bg-white dark:hover:bg-slate-800 transition-colors">
+                        <div key={item.id} className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:bg-white dark:hover:bg-slate-800 transition-colors">
                           <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-xl bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-slate-500 font-bold shrink-0">
-                              <Package className="w-4 h-4" />
-                            </div>
+                            {item.input.invoiceImage ? (
+                              <img
+                                src={item.input.invoiceImage}
+                                alt={item.input.title}
+                                className="w-9 h-9 rounded-xl object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                              />
+                            ) : (
+                              <div className="w-9 h-9 rounded-xl bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-slate-500 font-bold shrink-0">
+                                <Package className="w-4 h-4" />
+                              </div>
+                            )}
                             <div>
                               <div className="font-bold text-slate-900 dark:text-slate-100">{item.input.title}</div>
-                              <div className="text-[10px] text-slate-400 font-mono">
-                                {item.input.skuSupplier || 'N/A'} • {item.input.quantity.toLocaleString()} pcs • {item.chargeableWeightKg || item.grossWeightKg || 0} KG
+                              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-400 font-mono mt-0.5">
+                                <span>SKU: {item.input.skuSupplier || 'N/A'}</span>
+                                <span>•</span>
+                                <span>{item.input.quantity.toLocaleString()} pcs</span>
+                                <span>•</span>
+                                <span className="font-bold text-sky-600 dark:text-sky-400">{grossWeight.toFixed(1)} KG gross</span>
+                                <span>({chargeableWeight.toFixed(1)} KG chg)</span>
+                                <span>•</span>
+                                <span>{volumeCbm.toFixed(3)} CBM</span>
                               </div>
                             </div>
                           </div>
 
-                          <div className="text-right rtl:text-left">
+                          <div className="text-right rtl:text-left flex sm:flex-col items-center sm:items-end justify-between border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-100 dark:border-slate-800">
                             <div className="font-black text-slate-900 dark:text-white">
                               {formatCurrency(item.totalLandedCostTarget, item.input.targetCurrency)}
                             </div>
                             <div className="text-[10px] font-bold text-emerald-500">
-                              +{formatCurrency(item.totalProfitTarget, item.input.targetCurrency)} ({item.netProfitMarginPercent?.toFixed(1)}%)
+                              +{formatCurrency(item.totalProfitTarget, item.input.targetCurrency)} ({item.actualMarginPercentage?.toFixed(1)}%)
                             </div>
                           </div>
                         </div>
