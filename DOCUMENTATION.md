@@ -81,9 +81,15 @@ Elegant FX incorporates an enterprise-grade **Time-Based One-Time Password (TOTP
 ## 📝 Modification & Update Log (Auto-Updated)
 
 - **2026-08-24**:
-  - **Streamlined 2FA Management in Admin Panel (`AdminPanel.tsx`)**:
-    - Removed the redundant Admin 2FA Security card to eliminate visual clutter and ensure unified workflow.
-    - Full 2FA lifecycle (enable, QR code setup, manual key, backup codes, disable, reset) is streamlined directly from the **User Accounts Table** for all accounts (both admin and users) and via the top-bar status toggle.
+  - **Streamlined 2FA Management in Admin Panel (`AdminPanel.tsx`, `api.ts`, `server.ts`)**:
+    - Deduplicated the 2FA UI by removing redundant standalone admin cards and unifying 2FA management directly inside the **User Accounts & Admins Table** and top-bar status indicator.
+    - **Smart Conditional 2FA Modal Flow**:
+      - **When 2FA is Inactive**: Modal displays QR Code scan & Manual Key setup tabs with a 6-digit verification code input to confirm and activate.
+      - **When 2FA is Active**: Modal immediately opens the **Emergency Backup Codes** tab (displaying all single-use recovery codes with 1-click clipboard copy and code regeneration), with options to view key details or re-pair a new device.
+    - **Interactive Table Actions for 2FA**:
+      - Separate action buttons per user row: Green `ShieldCheck` (View Backup Codes & Manage) and Red `ShieldOff` (Trigger explicit Disable & Reset confirmation modal).
+      - Setup button with `QrCode` icon for inactive accounts to initiate instant QR scan flow.
+      - Added dedicated in-app confirmation modal for disabling and resetting 2FA to prevent accidental account lockout.
   - **Consolidated Session Inactivity Timeout Control (`AdminPanel.tsx`)**:
     - Unified duplicate session timeout cards into a single comprehensive **Session Inactivity & Auto-Logout Security Policy** control card in the Admin Panel.
     - Features 5 recommended preset chips (5m High Security, 15m Default, 30m Standard, 60m 1-Hour, 120m 2-Hours), an interactive slider and numeric duration input up to 180 minutes, and direct Firestore `site_settings` synchronization.
