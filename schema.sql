@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS public.users (
   role TEXT DEFAULT 'user',
   status TEXT DEFAULT 'active',
   password TEXT,
+  two_factor_enabled BOOLEAN DEFAULT FALSE,
   profile_data JSONB, -- Stores full UserProfile object
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()

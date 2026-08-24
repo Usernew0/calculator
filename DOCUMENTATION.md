@@ -57,7 +57,60 @@ Elegant FX implements a dual-engine persistent storage architecture separating c
 
 ---
 
+## 🔐 TOTP Two-Factor Authentication (2FA) Architecture
+
+Elegant FX incorporates an enterprise-grade **Time-Based One-Time Password (TOTP, RFC 6238)** two-factor authentication engine securing user logins, admin access, and credential modifications.
+
+### 1. Architectural Highlights & Security Protocol
+- **RFC 6238 Standard Compliance**: Supports all standard authenticator applications (Google Authenticator, Microsoft Authenticator, Authy, 1Password, Apple Passwords).
+- **HMAC-SHA1 & Base32 Engine (`src/lib/totp.ts`)**: Generates 160-bit cryptographically secure Base32 secrets (`JBSWY3DPEHPK3PXP...`), computes HMAC-SHA1 30-second time-step windows, and verifies 6-digit one-time codes with $\pm 1$ time-step ($\pm 30\text{s}$) clock drift tolerance.
+- **Visual QR Code Setup**: Automatically renders client-ready QR codes via the `qrcode` library using standard `otpauth://totp/ElegantFX:user@company.com?secret=...&issuer=ElegantFX&algorithm=SHA1&digits=6&period=30` URIs.
+- **Single-Use Emergency Backup Recovery Codes**: Generates 8 cryptographic 8-character single-use alphanumeric backup codes (`XXXX-XXXX`) allowing account recovery if an authentication device is unavailable or lost.
+- **Two-Step Login Handshake (`LoginScreen.tsx`, `server.ts`)**:
+  1. **Step 1 (Credential Validation)**: Submits `Username OR Email` and password. If credentials match and 2FA is enabled, the backend creates a temporary pending challenge token (`challengeId`) valid for 5 minutes and returns `{ requires2FA: true, challengeId, userMasked }`.
+  2. **Step 2 (TOTP Verification)**: The client presents the dedicated `TwoFactorAuthStep` screen where the user enters their 6-digit TOTP code or an 8-character emergency backup recovery code. The backend validates the code and issues the full authentication session.
+- **Admin Self-Service 2FA Management (`AdminPanel.tsx`)**:
+  - **Quick Header 2FA Status & Action**: Live badge in the admin navigation header displaying the admin account's current 2FA status with 1-click toggle action to configure or disable 2FA.
+  - **Dedicated Admin Security & 2FA Card**: Comprehensive control card in the Admin Panel explaining security benefits, showing active status, offering 1-click enable/disable, and reconfiguring QR codes.
+  - **Multi-Tab 2FA Setup Modal**: Seamless 3-tab modal for administrators with dynamic QR code scanning, manual Base32 key copying, and emergency recovery codes backup.
+- **User Profile Management (`LoginModal.tsx`)**: Logged-in users can view their 2FA protection status, initiate 2FA activation (scan QR code, copy secret, verify test code), regenerate emergency recovery codes, or disable 2FA.
+- **Administrator Safety Override (`AdminPanel.tsx`)**: System administrators can view 2FA status across all accounts in the User Management table and execute a secure "Reset 2FA" action to assist locked-out employees.
+
+---
+
 ## 📝 Modification & Update Log (Auto-Updated)
+
+- **2026-08-24**:
+  - **Streamlined 2FA Management in Admin Panel (`AdminPanel.tsx`)**:
+    - Removed the redundant Admin 2FA Security card to eliminate visual clutter and ensure unified workflow.
+    - Full 2FA lifecycle (enable, QR code setup, manual key, backup codes, disable, reset) is streamlined directly from the **User Accounts Table** for all accounts (both admin and users) and via the top-bar status toggle.
+  - **Consolidated Session Inactivity Timeout Control (`AdminPanel.tsx`)**:
+    - Unified duplicate session timeout cards into a single comprehensive **Session Inactivity & Auto-Logout Security Policy** control card in the Admin Panel.
+    - Features 5 recommended preset chips (5m High Security, 15m Default, 30m Standard, 60m 1-Hour, 120m 2-Hours), an interactive slider and numeric duration input up to 180 minutes, and direct Firestore `site_settings` synchronization.
+  - **Administrator 2FA Self-Service Management & Security Card (`AdminPanel.tsx`, `server.ts`, `Header.tsx`)**:
+    - Built comprehensive **Admin 2FA Enable/Disable & Security Suite** directly in `AdminPanel.tsx`:
+      - **Header 2FA Quick Status Button**: Visual indicator with 1-click trigger to manage or toggle 2FA.
+      - **Admin Security & 2FA Management Card**: Dedicated control module showcasing active protection status, universal TOTP RFC 6238 compatibility, and 1-click setup / disable buttons.
+      - **Interactive 2FA Modal**: Features QR Code scanning, manual Base32 key copying, and 6 single-use emergency backup recovery codes with 1-click clipboard actions.
+      - **Table Action Enhancements**: 2FA column in the user table allows the admin to configure or reset 2FA directly per row.
+    - Updated `/api/auth/2fa/disable` endpoint in `server.ts` to allow active authenticated sessions to disable their own 2FA cleanly without re-prompting.
+  - **Dual Identifier Login (`Username OR Email + Password`)**:
+    - Updated `LoginScreen.tsx`, `translations.ts`, and `/api/auth/login` to seamlessly accept either username or email address across Supabase and Firestore repositories.
+    - Zero session premature granting: authentications with 2FA enabled require successful TOTP code or backup code verification before JWT token issuance.
+
+- **2026-08-23**:
+  - **TOTP Two-Factor Authentication (2FA) Enterprise Engine (`totp.ts`, `server.ts`, `api.ts`, `LoginScreen.tsx`, `TwoFactorAuthStep.tsx`, `LoginModal.tsx`, `AdminPanel.tsx`, `translations.ts`)**:
+    - Implemented full RFC 6238 TOTP cryptographic suite (`generateTotpSecret`, `generateTotpCode`, `verifyTotpCode`, `generateOtpAuthUri`, `generateQrCodeDataUrl`, `generateBackupCodes`).
+    - Added Express backend 2FA endpoints (`/api/auth/2fa/setup`, `/api/auth/2fa/enable`, `/api/auth/2fa/verify`, `/api/auth/2fa/disable`, `/api/auth/2fa/regenerate-backup`) with in-memory challenge store (`twoFactorPendingStore`) and Firestore synchronization.
+    - Built dedicated `TwoFactorAuthStep` UI component featuring 6-digit segmented inputs, backup recovery code mode, QR code setup for first-time activation, secret copying, and error state transitions.
+    - Integrated 2FA activation, QR code scanning, and emergency backup codes generator into `LoginModal.tsx` for self-service profile security management.
+    - Added 2FA status badge and "Reset & Disable 2FA" administrative action to the User Management table in `AdminPanel.tsx`.
+    - Added `sec_totp_2fa` diagnostic test module to the Automated System Test Suite in `AdminPanel.tsx`.
+  - **Comprehensive Weight Column Integration & PDF Export Upgrades (`DashboardView.tsx`, `pdfExport.ts`, `quotePdfExport.ts`, `translations.ts`)**:
+    - Added dedicated Weight column to the desktop history table (`colWeight`, `thWeight`) and a 5-metric grid to mobile calculation cards displaying exact gross weight in kg and unit specifications.
+    - Added weight sorting (`weight_desc` and `weight_asc`) in the history table filter toolbar.
+    - Added "Gross Weight (kg)" and "Chargeable Weight (kg)" to exported CSV columns.
+    - Updated `exportSingleCalculationPDF`, `exportHistoricalSummaryPDF`, `exportFlightManifestPDF`, and `exportQuotationPDF` with total gross weight, chargeable weight, and volumetric CBM.
 
 - **2026-08-21**:
   - **Air Freight & Flight Consignment Manifest Management System (`FlightConsignmentModal.tsx` & `DashboardView.tsx`)**:

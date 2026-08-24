@@ -205,6 +205,23 @@ export interface UserProfile {
   company?: string;
   createdAt: string;
   lastLoginAt: string;
+  twoFactorEnabled?: boolean; // TOTP Two-Factor Authentication flag
+  twoFactorSecret?: string; // Base32 encoded TOTP Secret
+  twoFactorBackupCodes?: string[]; // Single-use emergency backup recovery codes
+  twoFactorConfirmedAt?: string; // ISO date when 2FA was activated
+  two_factor_enabled?: boolean;
+  two_factor_secret?: string;
+  two_factor_enabled_at?: string;
+}
+
+export interface TwoFactorChallengeData {
+  requires2FA: true;
+  twoFactorToken: string;
+  username: string;
+  userId: string;
+  isFirstSetup?: boolean;
+  twoFactorSecret?: string;
+  twoFactorUri?: string;
 }
 
 export interface RatesResponse {

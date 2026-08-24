@@ -122,6 +122,13 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 ---
 
 ### 6. Admin Control Panel & Website Settings
+- **TOTP 2FA Enterprise Protection & Table-Based Management**:
+  - **Quick Header 2FA Status & Action**: Live badge in the admin navigation header displaying the admin account's current 2FA status with 1-click toggle action to configure or disable 2FA.
+  - **User & Admin Table 2FA Actions**: Manage, enable (with QR code and manual key setup), disable, or reset 2FA directly per user/admin row in the User Accounts table.
+  - **Interactive 2FA Modal**: Features QR Code scanning, manual Base32 key copying, and 6 single-use emergency backup recovery codes with 1-click clipboard actions.
+- **Dual Identifier Authentication (`Username OR Email + Password`)**:
+  - Seamless login using either username or email address across Supabase and Firestore repositories.
+  - Hardened authentication flow ensuring zero session issuance before successful 6-digit TOTP verification if 2FA is active.
 - **Session Inactivity & Security Policy Card**: Administrators can configure and customize the global inactivity timeout with preset duration chips (5m High Security, 15m Default, 30m Standard, 60m 1-Hour, 120m 2-Hours) and custom numeric/slider inputs, saving directly to Firestore `site_settings`.
 - **Website Favicon & Branding Management**: System administrators can set and publish custom website favicons (`favicon.ico` / `<link rel="icon">`) that display in browser tabs, mobile web shortcuts, and bookmarks for all site visitors.
 - **5 High-Resolution SVG Presets**: Built-in SVG favicon presets (Golden Freight Ship, Global Trade Network, Emerald Logistics Box, Express Lightning Trade, Gold Shield Security).
@@ -167,13 +174,15 @@ The application implements a secure 3-tier full-stack architecture:
 
 1. **Client Tier (Vite Single Page App)**:
    - Zero database credentials or private service keys exposed in client bundles.
+   - **Two-Factor Authentication (TOTP - RFC 6238)**: Two-step authentication handshake with segmented 6-digit TOTP input, QR code scanning, single-use emergency backup recovery codes, and profile security management.
    - **Isolated Storage Keys (`src/lib/session.ts`)**: Session token (`cargo_session_token`) is stored in a dedicated key separate from the user profile metadata (`cargo_user_profile`), preventing administrative session corruption during user record management.
    - **Admin Session Isolation**: Modifying, creating, or toggling user accounts in the Admin Panel strictly safeguards the active administrator's session credentials.
    - All authenticated requests pass JWT tokens in `Authorization: Bearer <token>` headers.
    - Communicates exclusively through secure `/api/*` endpoints.
 
 2. **API Backend Tier (Express Server - `server.ts`)**:
-   - Centralized authentication & authorization with HMAC-SHA256 JWT tokens and PBKDF2 password hashing with salt.
+   - Centralized authentication & authorization with HMAC-SHA256 JWT tokens, PBKDF2 password hashing with salt, and TOTP verification (`/api/auth/2fa/*`).
+   - Temporary in-memory pending challenge store (`twoFactorPendingStore`) with 5-minute expiry window for 2FA validation handshakes.
    - Security Headers via Middleware: `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `X-XSS-Protection`.
    - Rate Limiting: General API rate limit (100 req/15min) and strict login rate limit (10 req/15min).
    - Server-side input validation and parameter sanitization to mitigate SQL/NoSQL Injection & XSS.

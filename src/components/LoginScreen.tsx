@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { UserProfile } from '../types';
+import { UserProfile, TwoFactorChallengeData } from '../types';
 import { loginUserApi } from '../lib/api';
 import { getUserProfileFromFirestore } from '../lib/firebase';
 import {
@@ -10,6 +10,7 @@ import {
   SessionInvalidationNotice,
 } from '../lib/session';
 import { translations, Language } from '../data/translations';
+import { TwoFactorAuthStep } from './TwoFactorAuthStep';
 import {
   Ship,
   Lock,
@@ -67,6 +68,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     return getSessionInvalidationNotice();
   });
 
+  // 2FA TOTP State
+  const [is2FAPending, setIs2FAPending] = useState(false);
+  const [pending2FaData, setPending2FaData] = useState<TwoFactorChallengeData | null>(null);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanUsername = username.trim().toLowerCase();
@@ -93,8 +98,19 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       // 1. Try Backend API login
       try {
         const loginRes = await loginUserApi(cleanUsername, cleanPassword);
-        activeUser = loginRes.user;
-        sessionToken = loginRes.token || null;
+
+        // Check if 2FA verification step is required
+        if ('requires2FA' in loginRes && loginRes.requires2FA) {
+          setPending2FaData(loginRes);
+          setIs2FAPending(true);
+          setIsSubmitting(false);
+          return;
+        }
+
+        if ('user' in loginRes) {
+          activeUser = loginRes.user;
+          sessionToken = loginRes.token || null;
+        }
       } catch (apiErr: any) {
         console.warn('API authentication notice, checking database fallback:', apiErr);
       }
@@ -114,6 +130,20 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               return;
             }
             if (!firestoreUser.password || firestoreUser.password === cleanPassword) {
+              // If user has 2FA enabled in firestore fallback
+              if (firestoreUser.twoFactorEnabled && firestoreUser.twoFactorSecret) {
+                setPending2FaData({
+                  requires2FA: true,
+                  twoFactorToken: `2fa_${firestoreUser.userId}_${Date.now()}`,
+                  username: firestoreUser.username,
+                  userId: firestoreUser.userId,
+                  isFirstSetup: !firestoreUser.twoFactorConfirmedAt,
+                  twoFactorSecret: firestoreUser.twoFactorSecret,
+                });
+                setIs2FAPending(true);
+                setIsSubmitting(false);
+                return;
+              }
               activeUser = firestoreUser;
             }
           }
@@ -156,6 +186,20 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       );
       setIsSubmitting(false);
     }
+  };
+
+  const handle2FaSuccess = (result: { token: string; user: UserProfile; backupCodeUsed?: boolean }) => {
+    const profileSchema: UserProfile = {
+      ...result.user,
+      password: password.trim(),
+      lastLoginAt: new Date().toISOString(),
+    };
+
+    saveFullSession(result.token, profileSchema, rememberMe);
+    setSuccessMsg(t.loginSuccessMsg);
+    setTimeout(() => {
+      onLoginSuccess(profileSchema);
+    }, 600);
   };
 
   return (
@@ -223,8 +267,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
             <p className="text-sm sm:text-base text-slate-300 leading-relaxed">
               {lang === 'ar'
-                ? 'أدخل اسم المستخدم وكلمة المرور لتسجيل الدخول مباشرة إلى حسابك الخاص بالمنصة.'
-                : 'Sign in with your registered Username and Password to access your private account.'}
+                ? 'أدخل اسم المستخدم أو البريد الإلكتروني وكلمة المرور لتسجيل الدخول مباشرة إلى حسابك الخاص بالمنصة.'
+                : 'Sign in with your registered Username or Email and Password to access your private account.'}
             </p>
 
             {/* Feature Highlights Grid */}
@@ -274,134 +318,163 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               <div className="p-6 bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-700 text-white flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="p-2.5 bg-white/10 rounded-xl backdrop-blur-md">
-                    <KeyRound className="w-6 h-6 text-emerald-200" />
+                    {is2FAPending ? (
+                      <ShieldCheck className="w-6 h-6 text-emerald-200" />
+                    ) : (
+                      <KeyRound className="w-6 h-6 text-emerald-200" />
+                    )}
                   </div>
                   <div>
-                    <h2 className="text-lg font-bold leading-tight">{t.loginModalTitle}</h2>
-                    <p className="text-xs text-emerald-100/90 mt-0.5">{t.loginModalSub}</p>
+                    <h2 className="text-lg font-bold leading-tight">
+                      {is2FAPending ? t.twoFactorTitle : t.loginModalTitle}
+                    </h2>
+                    <p className="text-xs text-emerald-100/90 mt-0.5">
+                      {is2FAPending
+                        ? (lang === 'ar' ? 'الخطوة 2 من 2: تأكيد الهوية برمز الأمان' : 'Step 2 of 2: Confirm identity with TOTP security code')
+                        : t.loginModalSub}
+                    </p>
                   </div>
                 </div>
+
+                {is2FAPending && (
+                  <span className="px-2.5 py-1 rounded-lg bg-white/15 text-emerald-200 text-xs font-bold font-mono">
+                    2FA
+                  </span>
+                )}
               </div>
 
-              {/* Form Body */}
-              <form onSubmit={handleSubmit} className="p-6 space-y-4">
-                {/* Username Input */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
-                    {t.usernameLabel} <span className="text-rose-400">*</span>
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 ltr:left-0 rtl:right-0 ltr:pl-3.5 rtl:pr-3.5 flex items-center pointer-events-none text-slate-400">
-                      <User className="w-4 h-4 text-emerald-400" />
-                    </div>
-                    <input
-                      type="text"
-                      required
-                      value={username}
-                      onChange={(e) => setUsername(e.target.value)}
-                      placeholder={t.usernamePlaceholder}
-                      className="w-full ltr:pl-10 rtl:pr-10 ltr:pr-3.5 rtl:pl-3.5 py-3 text-sm rounded-xl border border-slate-600 bg-slate-900/80 text-white font-semibold placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-emerald-500/50"
-                    />
-                  </div>
-                </div>
-
-                {/* Password Input */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
-                      {t.passwordLabel} <span className="text-rose-400">*</span>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-semibold cursor-pointer"
-                    >
-                    </button>
-                  </div>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 ltr:left-0 rtl:right-0 ltr:pl-3.5 rtl:pr-3.5 flex items-center pointer-events-none text-slate-400">
-                      <Lock className="w-4 h-4 text-emerald-400" />
-                    </div>
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder={t.passwordPlaceholder}
-                      className="w-full ltr:pl-10 rtl:pr-10 ltr:pr-10 rtl:pl-10 py-3 text-sm rounded-xl border border-slate-600 bg-slate-900/80 text-white font-semibold placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-emerald-500/50"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute inset-y-0 ltr:right-0 rtl:left-0 ltr:pr-3.5 rtl:pl-3.5 flex items-center text-slate-400 hover:text-slate-200 cursor-pointer"
-                      title={showPassword ? 'Hide password' : 'Show password'}
-                    >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Remember Me Option */}
-                <div className="flex items-center justify-between pt-0.5">
-                  <label className="flex items-center gap-2.5 text-xs font-semibold text-slate-300 cursor-pointer select-none group">
-                    <input
-                      type="checkbox"
-                      checked={rememberMe}
-                      onChange={(e) => setRememberMe(e.target.checked)}
-                      className="w-4 h-4 rounded-md bg-slate-900 border-slate-600 text-emerald-500 focus:ring-emerald-500/50 focus:ring-offset-slate-800 cursor-pointer accent-emerald-500"
-                    />
-                    <span className="group-hover:text-white transition-colors">
-                      {t.rememberMeLabel || (lang === 'ar' ? 'تذكر بيانات الدخول' : 'Remember me on this device')}
-                    </span>
-                  </label>
-                </div>
-
-
-                {/* Invalidation & Security Notice */}
-                {invalidationNotice && (
-                  <div className="p-3.5 text-xs font-medium text-amber-200 bg-amber-950/70 rounded-xl border border-amber-600/80 flex items-start gap-2.5 shadow-md">
-                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                    <div className="flex-1 space-y-0.5">
-                      <div className="font-bold text-amber-300">
-                        {lang === 'ar' ? 'تنبيه أمان الجلسة' : 'Security & Session Notice'}
-                      </div>
-                      <div className="text-amber-200/90 leading-relaxed">
-                        {lang === 'ar' ? invalidationNotice.messageAr : invalidationNotice.messageEn}
+              {/* Form Body or 2FA Step */}
+              <div className="p-6">
+                {is2FAPending ? (
+                  <TwoFactorAuthStep
+                    lang={lang}
+                    username={pending2FaData?.username || username.trim()}
+                    twoFactorToken={pending2FaData?.twoFactorToken}
+                    isFirstSetup={pending2FaData?.isFirstSetup}
+                    initialSecret={pending2FaData?.twoFactorSecret}
+                    initialUri={pending2FaData?.twoFactorUri}
+                    passwordFallback={password.trim()}
+                    onVerifySuccess={handle2FaSuccess}
+                    onBack={() => {
+                      setIs2FAPending(false);
+                      setPending2FaData(null);
+                      setErrorMsg(null);
+                    }}
+                  />
+                ) : (
+                  <form onSubmit={handleSubmit} className="space-y-4">
+                    {/* Username Input */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                        {t.usernameLabel} <span className="text-rose-400">*</span>
+                      </label>
+                      <div className="relative">
+                        <div className="absolute inset-y-0 ltr:left-0 rtl:right-0 ltr:pl-3.5 rtl:pr-3.5 flex items-center pointer-events-none text-slate-400">
+                          <User className="w-4 h-4 text-emerald-400" />
+                        </div>
+                        <input
+                          type="text"
+                          required
+                          value={username}
+                          onChange={(e) => setUsername(e.target.value)}
+                          placeholder={t.usernamePlaceholder}
+                          className="w-full ltr:pl-10 rtl:pr-10 ltr:pr-3.5 rtl:pl-3.5 py-3 text-sm rounded-xl border border-slate-600 bg-slate-900/80 text-white font-semibold placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-emerald-500/50"
+                        />
                       </div>
                     </div>
-                  </div>
-                )}
 
-                {/* Error & Success Messages */}
-                {errorMsg && (
-                  <div className="p-3 text-xs font-semibold text-rose-300 bg-rose-950/50 rounded-xl border border-rose-800">
-                    {errorMsg}
-                  </div>
-                )}
+                    {/* Password Input */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
+                          {t.passwordLabel} <span className="text-rose-400">*</span>
+                        </label>
+                      </div>
+                      <div className="relative">
+                        <div className="absolute inset-y-0 ltr:left-0 rtl:right-0 ltr:pl-3.5 rtl:pr-3.5 flex items-center pointer-events-none text-slate-400">
+                          <Lock className="w-4 h-4 text-emerald-400" />
+                        </div>
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          required
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          placeholder={t.passwordPlaceholder}
+                          className="w-full ltr:pl-10 rtl:pr-10 ltr:pr-10 rtl:pl-10 py-3 text-sm rounded-xl border border-slate-600 bg-slate-900/80 text-white font-semibold placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-emerald-500/50"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute inset-y-0 ltr:right-0 rtl:left-0 ltr:pr-3.5 rtl:pl-3.5 flex items-center text-slate-400 hover:text-slate-200 cursor-pointer"
+                          title={showPassword ? 'Hide password' : 'Show password'}
+                        >
+                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
 
-                {successMsg && (
-                  <div className="p-3 text-xs font-bold text-emerald-300 bg-emerald-950/60 rounded-xl border border-emerald-700 flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span>{successMsg}</span>
-                  </div>
-                )}
+                    {/* Remember Me Option */}
+                    <div className="flex items-center justify-between pt-0.5">
+                      <label className="flex items-center gap-2.5 text-xs font-semibold text-slate-300 cursor-pointer select-none group">
+                        <input
+                          type="checkbox"
+                          checked={rememberMe}
+                          onChange={(e) => setRememberMe(e.target.checked)}
+                          className="w-4 h-4 rounded-md bg-slate-900 border-slate-600 text-emerald-500 focus:ring-emerald-500/50 focus:ring-offset-slate-800 cursor-pointer accent-emerald-500"
+                        />
+                        <span className="group-hover:text-white transition-colors">
+                          {t.rememberMeLabel || (lang === 'ar' ? 'تذكر بيانات الدخول' : 'Remember me on this device')}
+                        </span>
+                      </label>
+                    </div>
 
-                {/* Login Submit Button */}
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="w-full py-3.5 px-6 rounded-xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-white font-extrabold text-sm shadow-lg shadow-emerald-900/30 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 mt-2"
-                >
-                  {isSubmitting ? (
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                  ) : (
-                    <>
-                      <span>{t.loginSubmitBtn}</span>
-                      {lang === 'ar' ? <ArrowLeft className="w-4 h-4" /> : <ArrowRight className="w-4 h-4" />}
-                    </>
-                  )}
-                </button>
-              </form>
+                    {/* Invalidation & Security Notice */}
+                    {invalidationNotice && (
+                      <div className="p-3.5 text-xs font-medium text-amber-200 bg-amber-950/70 rounded-xl border border-amber-600/80 flex items-start gap-2.5 shadow-md">
+                        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                        <div className="flex-1 space-y-0.5">
+                          <div className="font-bold text-amber-300">
+                            {lang === 'ar' ? 'تنبيه أمان الجلسة' : 'Security & Session Notice'}
+                          </div>
+                          <div className="text-amber-200/90 leading-relaxed">
+                            {lang === 'ar' ? invalidationNotice.messageAr : invalidationNotice.messageEn}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Error & Success Messages */}
+                    {errorMsg && (
+                      <div className="p-3 text-xs font-semibold text-rose-300 bg-rose-950/50 rounded-xl border border-rose-800">
+                        {errorMsg}
+                      </div>
+                    )}
+
+                    {successMsg && (
+                      <div className="p-3 text-xs font-bold text-emerald-300 bg-emerald-950/60 rounded-xl border border-emerald-700 flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                        <span>{successMsg}</span>
+                      </div>
+                    )}
+
+                    {/* Login Submit Button */}
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="w-full py-3.5 px-6 rounded-xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-white font-extrabold text-sm shadow-lg shadow-emerald-900/30 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 mt-2"
+                    >
+                      {isSubmitting ? (
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                      ) : (
+                        <>
+                          <span>{t.loginSubmitBtn}</span>
+                          {lang === 'ar' ? <ArrowLeft className="w-4 h-4" /> : <ArrowRight className="w-4 h-4" />}
+                        </>
+                      )}
+                    </button>
+                  </form>
+                )}
+              </div>
 
               {/* Footer info inside card */}
             </div>

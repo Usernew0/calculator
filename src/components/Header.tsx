@@ -121,13 +121,20 @@ export const Header: React.FC<HeaderProps> = ({
                 type="button"
                 onClick={onOpenLoginModal}
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 text-xs font-bold transition-all cursor-pointer"
-                title={lang === 'ar' ? 'تعديل بيانات الحساب والملف الشخصي' : 'Edit User Info & Profile Settings'}
+                title={lang === 'ar' ? 'تعديل بيانات الحساب والملف الشخصي وإعدادات الأمان' : 'Edit User Info & Security Settings'}
               >
                 <User className="w-3.5 h-3.5 text-emerald-400" />
                 <span className="font-mono">{userProfile.username || userProfile.userId}</span>
-                <span className="text-[10px] bg-emerald-500/30 px-1.5 py-0.5 rounded text-emerald-200">
-                  {lang === 'ar' ? 'الملف' : 'Profile'}
-                </span>
+                {userProfile.twoFactorEnabled ? (
+                  <span className="text-[10px] bg-emerald-500/40 text-emerald-200 px-1.5 py-0.5 rounded font-mono font-bold flex items-center gap-0.5" title="2FA Protected">
+                    <ShieldCheck className="w-3 h-3 text-emerald-300" />
+                    2FA
+                  </span>
+                ) : (
+                  <span className="text-[10px] bg-emerald-500/30 px-1.5 py-0.5 rounded text-emerald-200">
+                    {lang === 'ar' ? 'الملف' : 'Profile'}
+                  </span>
+                )}
               </button>
               {onLogout && (
                 <button

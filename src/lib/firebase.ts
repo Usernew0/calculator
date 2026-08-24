@@ -224,7 +224,8 @@ export async function getUserProfileFromFirestore(username: string): Promise<Use
         if (
           docSnap.id === docKey ||
           data.username?.toLowerCase() === docKey ||
-          data.userId?.toLowerCase() === docKey
+          data.userId?.toLowerCase() === docKey ||
+          data.email?.toLowerCase() === docKey
         ) {
           profile = data;
         }

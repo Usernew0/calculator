@@ -4,6 +4,7 @@ import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from "@supabase/supabase-js";
+import { generateTotpSecret, generateTotpUri, generateBackupCodes, verifyTotpCode } from "./src/lib/totp";
 
 const app = express();
 const PORT = 3000;
@@ -20,19 +21,21 @@ app.use((_req, res, next) => {
   next();
 });
 
-// Simple Rate Limiter Middleware
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
-function rateLimiter(maxRequests = 60, windowMs = 60 * 1000) {
+// Simple Rate Limiter Middleware with isolated stores and robust IP resolution
+function createRateLimiter(maxRequests = 120, windowMs = 60 * 1000, keyPrefix = "gen") {
+  const store = new Map<string, { count: number; resetAt: number }>();
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (process.env.NODE_ENV === "test" || process.env.npm_lifecycle_event === "test") {
       return next();
     }
-    const ip = (req.headers["x-forwarded-for"] as string) || req.socket.remoteAddress || "unknown";
+    const forwarded = req.headers["x-forwarded-for"];
+    const ip = (typeof forwarded === "string" ? forwarded.split(",")[0].trim() : Array.isArray(forwarded) ? forwarded[0] : req.socket.remoteAddress) || "127.0.0.1";
+    const key = `${keyPrefix}:${ip}`;
     const now = Date.now();
-    const record = rateLimitMap.get(ip);
+    const record = store.get(key);
 
     if (!record || now > record.resetAt) {
-      rateLimitMap.set(ip, { count: 1, resetAt: now + windowMs });
+      store.set(key, { count: 1, resetAt: now + windowMs });
       return next();
     }
 
@@ -45,12 +48,12 @@ function rateLimiter(maxRequests = 60, windowMs = 60 * 1000) {
   };
 }
 
-// Strict rate limiter for auth routes
-const authRateLimiter = rateLimiter(15, 60 * 1000);
+// Authentication rate limiter (generous 60 attempts / 1 min window)
+const authRateLimiter = createRateLimiter(60, 60 * 1000, "auth");
 app.use("/api/auth/", authRateLimiter);
 
-// General rate limiter for API routes
-app.use("/api/", rateLimiter(120, 60 * 1000));
+// General rate limiter for standard data API routes (500 requests / 1 min window)
+app.use("/api/", createRateLimiter(500, 60 * 1000, "api"));
 
 // Server-Side Password Hashing & Verification (Crypto)
 function hashPassword(password: string): string {
@@ -186,6 +189,17 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 // Server-Side In-Memory Cache Store for Data
 let serverUsersStore: Record<string, any> = {};
 
+// Temporary in-memory store for pending 2FA login challenges (5-minute expiration)
+const twoFactorPendingStore = new Map<string, {
+  username: string;
+  userId: string;
+  secret: string;
+  backupCodes: string[];
+  expiresAt: number;
+  isFirstSetup?: boolean;
+  userData: any;
+}>();
+
 function seedInMemoryUsers() {
   if (!serverUsersStore["admin"]) {
     serverUsersStore["admin"] = {
@@ -199,6 +213,7 @@ function seedInMemoryUsers() {
       password: hashPassword("admin123"),
       createdAt: new Date().toISOString(),
       lastLoginAt: new Date().toISOString(),
+      twoFactorEnabled: false,
     };
   }
   if (!serverUsersStore["trader"]) {
@@ -213,6 +228,7 @@ function seedInMemoryUsers() {
       password: hashPassword("user123"),
       createdAt: new Date().toISOString(),
       lastLoginAt: new Date().toISOString(),
+      twoFactorEnabled: false,
     };
   }
 }
@@ -284,10 +300,10 @@ async function generateGeminiWithFallback(ai: GoogleGenAI, contents: any[], opti
   throw lastError;
 }
 
-// Clean Sensitive Fields (Password) before returning User object to client
+// Clean Sensitive Fields (Password, TOTP Secret) before returning User object to client
 function sanitizeUser(user: any) {
   if (!user) return null;
-  const { password, ...clean } = user;
+  const { password, twoFactorSecret, two_factor_secret, ...clean } = user;
   return clean;
 }
 
@@ -345,9 +361,16 @@ app.post("/api/auth/login", async (req, res) => {
     }
 
     // 2. Fallback to in-memory store (e.g. newly created users or test mode)
-    if (!user && serverUsersStore[cleanUsername]) {
-      const storeUser = serverUsersStore[cleanUsername];
-      if (verifyPassword(cleanPassword, storeUser.password)) {
+    if (!user) {
+      const storeUser =
+        serverUsersStore[cleanUsername] ||
+        Object.values(serverUsersStore).find(
+          (u: any) =>
+            (u.email && u.email.toLowerCase() === cleanUsername) ||
+            (u.username && u.username.toLowerCase() === cleanUsername) ||
+            (u.userId && u.userId.toLowerCase() === cleanUsername)
+        );
+      if (storeUser && verifyPassword(cleanPassword, storeUser.password)) {
         user = storeUser;
       }
     }
@@ -360,7 +383,32 @@ app.post("/api/auth/login", async (req, res) => {
       return res.status(403).json({ error: "This account has been suspended by the system administrator." });
     }
 
-    // Password verified, generate JWT token with password signature
+    // Check if user has Two-Factor Authentication (2FA TOTP) enabled
+    if (user.twoFactorEnabled && user.twoFactorSecret) {
+      const challengeToken = crypto.randomBytes(32).toString("hex");
+      twoFactorPendingStore.set(challengeToken, {
+        username: cleanUsername,
+        userId: user.userId || cleanUsername,
+        secret: user.twoFactorSecret,
+        backupCodes: Array.isArray(user.twoFactorBackupCodes) ? user.twoFactorBackupCodes : [],
+        expiresAt: Date.now() + 5 * 60 * 1000,
+        isFirstSetup: !user.twoFactorConfirmedAt,
+        userData: user,
+      });
+
+      return res.json({
+        success: true,
+        requires2FA: true,
+        twoFactorToken: challengeToken,
+        username: user.username || cleanUsername,
+        userId: user.userId || cleanUsername,
+        isFirstSetup: !user.twoFactorConfirmedAt,
+        twoFactorSecret: !user.twoFactorConfirmedAt ? user.twoFactorSecret : undefined,
+        twoFactorUri: !user.twoFactorConfirmedAt ? generateTotpUri(user.username || cleanUsername, user.twoFactorSecret) : undefined,
+      });
+    }
+
+    // Password verified without 2FA, generate JWT token with password signature
     const token = generateToken({
       userId: user.userId || cleanUsername,
       username: user.username || cleanUsername,
@@ -378,6 +426,327 @@ app.post("/api/auth/login", async (req, res) => {
     });
   } catch (error: any) {
     res.status(500).json({ error: "Login failed: " + (error?.message || "") });
+  }
+});
+
+// POST /api/auth/2fa/verify
+app.post("/api/auth/2fa/verify", async (req, res) => {
+  try {
+    const { twoFactorToken, code, username, password } = req.body || {};
+    const cleanCode = String(code || "").trim();
+
+    if (!cleanCode) {
+      return res.status(400).json({ error: "Verification code is required" });
+    }
+
+    let challenge = twoFactorToken ? twoFactorPendingStore.get(twoFactorToken) : null;
+    let user: any = null;
+
+    if (challenge) {
+      if (Date.now() > challenge.expiresAt) {
+        twoFactorPendingStore.delete(twoFactorToken);
+        return res.status(401).json({ error: "2FA challenge expired. Please log in again.", code: "2FA_EXPIRED" });
+      }
+      user = challenge.userData || serverUsersStore[challenge.username];
+    } else if (username && password) {
+      const cleanUsername = String(username).trim().toLowerCase();
+      const storeUser = serverUsersStore[cleanUsername];
+      if (storeUser && verifyPassword(String(password).trim(), storeUser.password)) {
+        user = storeUser;
+        challenge = {
+          username: cleanUsername,
+          userId: user.userId,
+          secret: user.twoFactorSecret,
+          backupCodes: Array.isArray(user.twoFactorBackupCodes) ? user.twoFactorBackupCodes : [],
+          expiresAt: Date.now() + 60000,
+          userData: user,
+        };
+      }
+    }
+
+    if (!user || !challenge) {
+      return res.status(401).json({ error: "Invalid or expired 2FA session. Please log in again." });
+    }
+
+    let isValid = false;
+    let isBackupCodeUsed = false;
+    const sanitizedDigits = cleanCode.replace(/[\s-]/g, "");
+
+    // 1. Verify 6-digit TOTP
+    if (/^\d{6}$/.test(sanitizedDigits) && challenge.secret) {
+      isValid = await verifyTotpCode(sanitizedDigits, challenge.secret);
+    }
+
+    // 2. Verify emergency backup recovery code
+    if (!isValid && challenge.backupCodes && challenge.backupCodes.length > 0) {
+      const normInput = cleanCode.toUpperCase().replace(/[\s-]/g, "");
+      const matchedIdx = challenge.backupCodes.findIndex(
+        (bc: string) => bc.toUpperCase().replace(/[\s-]/g, "") === normInput
+      );
+      if (matchedIdx !== -1) {
+        isValid = true;
+        isBackupCodeUsed = true;
+        const updatedBackupCodes = [...challenge.backupCodes];
+        updatedBackupCodes.splice(matchedIdx, 1);
+        user.twoFactorBackupCodes = updatedBackupCodes;
+        serverUsersStore[challenge.username] = user;
+        try {
+          await supabase.from("users").upsert({
+            id: challenge.username,
+            username: challenge.username,
+            user_id: user.userId || challenge.username,
+            profile_data: user,
+            updated_at: new Date().toISOString(),
+          });
+        } catch {}
+      }
+    }
+
+    if (!isValid) {
+      return res.status(400).json({
+        error: "Invalid 6-digit authenticator code or backup key. Please check your app and try again.",
+      });
+    }
+
+    if (twoFactorToken) {
+      twoFactorPendingStore.delete(twoFactorToken);
+    }
+
+    // Mark 2FA as confirmed if this was first setup
+    if (!user.twoFactorConfirmedAt) {
+      user.twoFactorConfirmedAt = new Date().toISOString();
+      serverUsersStore[challenge.username] = user;
+      try {
+        await supabase.from("users").upsert({
+          id: challenge.username,
+          username: challenge.username,
+          user_id: user.userId || challenge.username,
+          profile_data: user,
+          updated_at: new Date().toISOString(),
+        });
+      } catch {}
+    }
+
+    const token = generateToken({
+      userId: user.userId || challenge.username,
+      username: user.username || challenge.username,
+      role: user.role || "user",
+      password: user.password,
+    });
+
+    res.json({
+      success: true,
+      token,
+      user: sanitizeUser({
+        ...user,
+        lastLoginAt: new Date().toISOString(),
+      }),
+      backupCodeUsed: isBackupCodeUsed,
+      remainingBackupCodes: user.twoFactorBackupCodes?.length || 0,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: "2FA verification failed: " + (err?.message || "") });
+  }
+});
+
+// POST /api/auth/2fa/setup (Generate new secret & URI for current user)
+app.post("/api/auth/2fa/setup", requireAuth, async (req, res) => {
+  try {
+    const authUser = (req as any).authUser;
+    const usernameKey = authUser.username.toLowerCase().trim();
+    const secret = generateTotpSecret(20);
+    const uri = generateTotpUri(authUser.username, secret);
+    const backupCodes = generateBackupCodes(6);
+
+    res.json({
+      success: true,
+      secret,
+      uri,
+      backupCodes,
+      username: authUser.username,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to generate 2FA setup details: " + (err?.message || "") });
+  }
+});
+
+// POST /api/auth/2fa/enable (Confirm & enable 2FA)
+app.post("/api/auth/2fa/enable", requireAuth, async (req, res) => {
+  try {
+    const authUser = (req as any).authUser;
+    const usernameKey = authUser.username.toLowerCase().trim();
+    const { secret, code, backupCodes } = req.body || {};
+
+    if (!secret || !code) {
+      return res.status(400).json({ error: "Secret and 6-digit confirmation code are required." });
+    }
+
+    const cleanCode = String(code).trim().replace(/[\s-]/g, "");
+    const isValid = await verifyTotpCode(cleanCode, String(secret).trim());
+
+    if (!isValid) {
+      return res.status(400).json({ error: "Invalid 6-digit confirmation code. Please check your Authenticator app and try again." });
+    }
+
+    let existingUser = serverUsersStore[usernameKey];
+    if (!existingUser) {
+      try {
+        const { data } = await supabase.from("users").select("*").eq("id", usernameKey).maybeSingle();
+        if (data && data.profile_data) existingUser = data.profile_data;
+      } catch {}
+    }
+
+    if (!existingUser) {
+      existingUser = {
+        userId: authUser.userId || usernameKey,
+        username: authUser.username,
+        role: authUser.role || "user",
+      };
+    }
+
+    const finalBackupCodes = Array.isArray(backupCodes) && backupCodes.length > 0 ? backupCodes : generateBackupCodes(6);
+
+    const updatedUser = {
+      ...existingUser,
+      twoFactorEnabled: true,
+      twoFactorSecret: String(secret).trim(),
+      twoFactorBackupCodes: finalBackupCodes,
+      twoFactorConfirmedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    serverUsersStore[usernameKey] = updatedUser;
+
+    try {
+      await supabase.from("users").upsert({
+        id: usernameKey,
+        username: usernameKey,
+        user_id: updatedUser.userId || usernameKey,
+        profile_data: updatedUser,
+        updated_at: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.warn("Supabase 2FA enable sync warning:", err);
+    }
+
+    res.json({
+      success: true,
+      message: "Two-Factor Authentication successfully enabled.",
+      user: sanitizeUser(updatedUser),
+      backupCodes: finalBackupCodes,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to enable 2FA: " + (err?.message || "") });
+  }
+});
+
+// POST /api/auth/2fa/disable
+app.post("/api/auth/2fa/disable", requireAuth, async (req, res) => {
+  try {
+    const authUser = (req as any).authUser;
+    const usernameKey = authUser.username.toLowerCase().trim();
+    const { password, code } = req.body || {};
+
+    let existingUser = serverUsersStore[usernameKey];
+    if (!existingUser) {
+      try {
+        const { data } = await supabase.from("users").select("*").eq("id", usernameKey).maybeSingle();
+        if (data && data.profile_data) existingUser = data.profile_data;
+      } catch {}
+    }
+
+    if (!existingUser) {
+      return res.status(404).json({ error: "User profile not found." });
+    }
+
+    // Verify authorization: check password/code if provided, or rely on active authenticated session
+    let isAuthorized = false;
+    if (password) {
+      isAuthorized = verifyPassword(String(password).trim(), existingUser.password);
+      if (!isAuthorized) {
+        return res.status(400).json({ error: "Incorrect password." });
+      }
+    } else if (code && existingUser.twoFactorSecret) {
+      const cleanCode = String(code).trim().replace(/[\s-]/g, "");
+      isAuthorized = await verifyTotpCode(cleanCode, existingUser.twoFactorSecret);
+      if (!isAuthorized) {
+        return res.status(400).json({ error: "Incorrect confirmation code." });
+      }
+    } else {
+      isAuthorized = true;
+    }
+
+    const updatedUser = {
+      ...existingUser,
+      twoFactorEnabled: false,
+      twoFactorSecret: null,
+      twoFactorBackupCodes: [],
+      twoFactorConfirmedAt: null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    serverUsersStore[usernameKey] = updatedUser;
+
+    try {
+      await supabase.from("users").upsert({
+        id: usernameKey,
+        username: usernameKey,
+        user_id: updatedUser.userId || usernameKey,
+        profile_data: updatedUser,
+        updated_at: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.warn("Supabase 2FA disable sync warning:", err);
+    }
+
+    res.json({
+      success: true,
+      message: "Two-Factor Authentication has been disabled.",
+      user: sanitizeUser(updatedUser),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to disable 2FA: " + (err?.message || "") });
+  }
+});
+
+// POST /api/auth/2fa/backup-codes/regenerate
+app.post("/api/auth/2fa/backup-codes/regenerate", requireAuth, async (req, res) => {
+  try {
+    const authUser = (req as any).authUser;
+    const usernameKey = authUser.username.toLowerCase().trim();
+
+    let existingUser = serverUsersStore[usernameKey];
+    if (!existingUser) {
+      try {
+        const { data } = await supabase.from("users").select("*").eq("id", usernameKey).maybeSingle();
+        if (data && data.profile_data) existingUser = data.profile_data;
+      } catch {}
+    }
+
+    if (!existingUser || !existingUser.twoFactorEnabled) {
+      return res.status(400).json({ error: "2FA is not enabled for this account." });
+    }
+
+    const newCodes = generateBackupCodes(6);
+    existingUser.twoFactorBackupCodes = newCodes;
+    serverUsersStore[usernameKey] = existingUser;
+
+    try {
+      await supabase.from("users").upsert({
+        id: usernameKey,
+        username: usernameKey,
+        user_id: existingUser.userId || usernameKey,
+        profile_data: existingUser,
+        updated_at: new Date().toISOString(),
+      });
+    } catch {}
+
+    res.json({
+      success: true,
+      backupCodes: newCodes,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to regenerate backup codes: " + (err?.message || "") });
   }
 });
 
@@ -577,6 +946,58 @@ app.delete("/api/users/:username", requireAdmin, async (req, res) => {
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to delete user" });
+  }
+});
+
+// POST /api/admin/users/:username/reset-2fa (Admin Only - Reset & Invalidate 2FA)
+app.post("/api/admin/users/:username/reset-2fa", requireAdmin, async (req, res) => {
+  try {
+    const key = String(req.params.username || "").trim().toLowerCase();
+    let user = serverUsersStore[key];
+    if (!user) {
+      try {
+        const { data } = await supabase.from("users").select("*").or(`id.ilike.${key},username.ilike.${key}`).maybeSingle();
+        if (data && data.profile_data) user = data.profile_data;
+      } catch {}
+    }
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const updatedUser = {
+      ...user,
+      twoFactorEnabled: false,
+      twoFactorSecret: null,
+      twoFactorBackupCodes: [],
+      twoFactorConfirmedAt: null,
+      two_factor_enabled: false,
+      two_factor_secret: null,
+      two_factor_enabled_at: null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    serverUsersStore[key] = updatedUser;
+
+    try {
+      await supabase.from("users").upsert({
+        id: key,
+        username: key,
+        user_id: updatedUser.userId || key,
+        two_factor_enabled: false,
+        two_factor_secret: null,
+        profile_data: updatedUser,
+        updated_at: new Date().toISOString(),
+      });
+    } catch {}
+
+    res.json({
+      success: true,
+      message: `Two-Factor Authentication reset and disabled for user "${user.username}".`,
+      user: sanitizeUser(updatedUser),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to reset 2FA for user: " + (err?.message || "") });
   }
 });
 

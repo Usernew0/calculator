@@ -1,5 +1,6 @@
-import { UserProfile, CalculationResult, FlightConsignment, FlightManifestParsedData } from '../types';
+import { UserProfile, CalculationResult, FlightConsignment, FlightManifestParsedData, TwoFactorChallengeData } from '../types';
 import { getSessionToken, setSessionToken, triggerSessionInvalidation } from './session';
+import { generateTotpSecret, generateTotpUri, verifyTotpCode } from './totp';
 import {
   getAllUsersFromFirestore,
   saveUserProfileToFirestore,
@@ -36,7 +37,7 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
 
   if (!res.ok) {
     // Check if session invalidation or authorization failure occurred
-    if ((res.status === 401 || res.status === 403) && endpoint !== '/api/auth/login' && token) {
+    if ((res.status === 401 || res.status === 403) && endpoint !== '/api/auth/login' && endpoint !== '/api/auth/2fa/verify' && token) {
       const code = data?.code;
       if (code === 'CREDENTIALS_CHANGED') {
         triggerSessionInvalidation({
@@ -71,19 +72,29 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
 
     const err = new Error(data?.error || `API request failed with status ${res.status}`);
     (err as any).status = res.status;
+    (err as any).code = data?.code;
     throw err;
   }
 
   return data;
 }
 
+export type LoginResponse =
+  | { requires2FA?: false; token: string; user: UserProfile }
+  | TwoFactorChallengeData;
+
 // Auth API
-export async function loginUserApi(username: string, password: string): Promise<{ token: string; user: UserProfile }> {
+export async function loginUserApi(username: string, password: string): Promise<LoginResponse> {
   try {
     const data = await apiFetch('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     });
+
+    if (data.requires2FA) {
+      return data as TwoFactorChallengeData;
+    }
+
     if (data.token) {
       setSessionToken(data.token);
     }
@@ -96,6 +107,20 @@ export async function loginUserApi(username: string, password: string): Promise<
         if (user.status === 'suspended') {
           throw new Error('This account has been suspended by the administrator.');
         }
+
+        if (user.twoFactorEnabled && user.twoFactorSecret) {
+          const mockToken = `2fa_token_${user.userId}_${Date.now()}`;
+          return {
+            requires2FA: true,
+            twoFactorToken: mockToken,
+            username: user.username,
+            userId: user.userId,
+            isFirstSetup: !user.twoFactorConfirmedAt,
+            twoFactorSecret: !user.twoFactorConfirmedAt ? user.twoFactorSecret : undefined,
+            twoFactorUri: !user.twoFactorConfirmedAt ? generateTotpUri(user.username, user.twoFactorSecret) : undefined,
+          };
+        }
+
         const clientToken = `client_${user.userId || user.username}_${Date.now()}`;
         setSessionToken(clientToken);
         return { token: clientToken, user };
@@ -104,6 +129,102 @@ export async function loginUserApi(username: string, password: string): Promise<
     }
     throw err;
   }
+}
+
+// 2FA Verification API
+export async function verify2FaApi(params: {
+  twoFactorToken?: string;
+  code: string;
+  username?: string;
+  password?: string;
+}): Promise<{ token: string; user: UserProfile; backupCodeUsed?: boolean }> {
+  try {
+    const data = await apiFetch('/api/auth/2fa/verify', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    if (data.token) {
+      setSessionToken(data.token);
+    }
+    return data;
+  } catch (err: any) {
+    // Firestore fallback for 2FA verification
+    if ((err?.status === 404 || err?.message?.includes('404')) && params.username) {
+      const user = await getUserProfileFromFirestore(params.username);
+      if (user && user.twoFactorSecret) {
+        const cleanDigits = params.code.trim().replace(/[\s-]/g, '');
+        let valid = false;
+        let isBackup = false;
+
+        if (/^\d{6}$/.test(cleanDigits)) {
+          valid = await verifyTotpCode(cleanDigits, user.twoFactorSecret);
+        }
+
+        if (!valid && user.twoFactorBackupCodes) {
+          const norm = params.code.toUpperCase().replace(/[\s-]/g, '');
+          const idx = user.twoFactorBackupCodes.findIndex((b) => b.toUpperCase().replace(/[\s-]/g, '') === norm);
+          if (idx !== -1) {
+            valid = true;
+            isBackup = true;
+            user.twoFactorBackupCodes.splice(idx, 1);
+            await saveUserProfileToFirestore(user);
+          }
+        }
+
+        if (valid) {
+          if (!user.twoFactorConfirmedAt) {
+            user.twoFactorConfirmedAt = new Date().toISOString();
+            await saveUserProfileToFirestore(user);
+          }
+          const clientToken = `client_${user.userId || user.username}_${Date.now()}`;
+          setSessionToken(clientToken);
+          return { token: clientToken, user, backupCodeUsed: isBackup };
+        }
+      }
+      throw new Error('Invalid 6-digit authenticator code or recovery key.');
+    }
+    throw err;
+  }
+}
+
+// 2FA Setup API (Generate new secret & URI)
+export async function setup2FaApi(): Promise<{ secret: string; uri: string; backupCodes: string[]; username: string }> {
+  return await apiFetch('/api/auth/2fa/setup', { method: 'POST' });
+}
+
+// 2FA Enable API
+export async function enable2FaApi(params: {
+  secret: string;
+  code: string;
+  backupCodes?: string[];
+}): Promise<{ success: boolean; user: UserProfile; backupCodes: string[] }> {
+  return await apiFetch('/api/auth/2fa/enable', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+// 2FA Disable API
+export async function disable2FaApi(params?: {
+  password?: string;
+  code?: string;
+}): Promise<{ success: boolean; user: UserProfile }> {
+  return await apiFetch('/api/auth/2fa/disable', {
+    method: 'POST',
+    body: JSON.stringify(params || {}),
+  });
+}
+
+// 2FA Admin Reset & Invalidate Secret API
+export async function adminResetUser2FaApi(username: string): Promise<{ success: boolean; message: string; user?: UserProfile }> {
+  return await apiFetch(`/api/admin/users/${encodeURIComponent(username)}/reset-2fa`, {
+    method: 'POST',
+  });
+}
+
+// 2FA Backup Codes Regeneration API
+export async function regenerateBackupCodesApi(): Promise<{ backupCodes: string[] }> {
+  return await apiFetch('/api/auth/2fa/backup-codes/regenerate', { method: 'POST' });
 }
 
 export async function fetchCurrentAuthUserApi(): Promise<UserProfile | null> {
