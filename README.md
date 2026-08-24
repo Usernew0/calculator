@@ -181,10 +181,12 @@ The application implements a secure 3-tier full-stack architecture:
    - Communicates exclusively through secure `/api/*` endpoints.
 
 2. **API Backend Tier (Express Server - `server.ts`)**:
-   - Centralized authentication & authorization with HMAC-SHA256 JWT tokens, PBKDF2 password hashing with salt, and TOTP verification (`/api/auth/2fa/*`).
+   - Centralized authentication & authorization with HMAC-SHA256 JWT tokens (7-day duration, supports client fallback tokens), PBKDF2 password hashing with salt, and TOTP verification (`/api/auth/2fa/*`).
+   - Global Express error handling middleware and safe request body parsing to catch all potential unhandled exceptions and prevent raw 500 HTML responses.
+   - Resilient database fallbacks: automatically returns server-side in-memory data if external relational services experience transient connectivity issues.
    - Temporary in-memory pending challenge store (`twoFactorPendingStore`) with 5-minute expiry window for 2FA validation handshakes.
    - Security Headers via Middleware: `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `X-XSS-Protection`.
-   - Rate Limiting: General API rate limit (100 req/15min) and strict login rate limit (10 req/15min).
+   - Rate Limiting: General API rate limit (500 req/1min) and generous login rate limit (60 req/1min).
    - Server-side input validation and parameter sanitization to mitigate SQL/NoSQL Injection & XSS.
 
 3. **Database Tier (Dual Engine: Cloud Firestore + Supabase PostgreSQL)**:

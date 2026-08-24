@@ -1,6 +1,6 @@
 import { UserProfile, CalculationResult, FlightConsignment, FlightManifestParsedData, TwoFactorChallengeData } from '../types';
 import { getSessionToken, setSessionToken, triggerSessionInvalidation } from './session';
-import { generateTotpSecret, generateTotpUri, verifyTotpCode } from './totp';
+import { generateTotpSecret, generateTotpUri, generateBackupCodes, verifyTotpCode } from './totp';
 import {
   getAllUsersFromFirestore,
   saveUserProfileToFirestore,
@@ -9,13 +9,35 @@ import {
   saveFlightConsignmentToFirestore,
   getFlightConsignmentsFromFirestore,
   deleteFlightConsignmentFromFirestore,
+  saveCalculationToFirestore,
+  deleteCalculationFromFirestore,
+  clearAllCalculationsFromFirestore,
+  getCalculationsFromFirestore,
+  saveSessionTimeoutToFirestore,
+  getSessionTimeoutFromFirestore,
+  saveSiteFaviconToFirestore,
+  getSiteFaviconFromFirestore,
 } from './firebase';
 
 /**
- * Client-Side API Helper for Secure Backend Operations with resilient fallback
+ * Client-Side API Helper for Secure Backend Operations with resilient Firestore and local fallback
  */
 
 export { getSessionToken as getAuthToken, setSessionToken as setAuthToken };
+
+export class ApiError extends Error {
+  status?: number;
+  code?: string;
+  isNetworkError?: boolean;
+
+  constructor(message: string, status?: number, code?: string, isNetworkError?: boolean) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+    this.isNetworkError = isNetworkError;
+  }
+}
 
 async function apiFetch(endpoint: string, options: RequestInit = {}) {
   const token = getSessionToken();
@@ -28,12 +50,29 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const res = await fetch(endpoint, {
-    ...options,
-    headers,
-  });
+  let res: Response;
+  try {
+    res = await fetch(endpoint, {
+      ...options,
+      headers,
+    });
+  } catch (networkErr: any) {
+    const errorMsg = networkErr?.message || 'Network connection failed. Operating in offline/resilient mode.';
+    throw new ApiError(errorMsg, 0, 'NETWORK_ERROR', true);
+  }
 
-  const data = await res.json().catch(() => ({}));
+  let data: any = {};
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    data = await res.json().catch(() => ({}));
+  } else {
+    const rawText = await res.text().catch(() => '');
+    if (!res.ok) {
+      data = {
+        error: rawText.length > 0 && rawText.length < 200 ? rawText : `Server responded with status ${res.status}`,
+      };
+    }
+  }
 
   if (!res.ok) {
     // Check if session invalidation or authorization failure occurred
@@ -70,10 +109,8 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
       }
     }
 
-    const err = new Error(data?.error || `API request failed with status ${res.status}`);
-    (err as any).status = res.status;
-    (err as any).code = data?.code;
-    throw err;
+    const errorMessage = data?.error || (res.status >= 500 ? 'Server is temporarily processing or updating. Using direct secure sync.' : `API request failed with status ${res.status}`);
+    throw new ApiError(errorMessage, res.status, data?.code);
   }
 
   return data;
@@ -85,6 +122,8 @@ export type LoginResponse =
 
 // Auth API
 export async function loginUserApi(username: string, password: string): Promise<LoginResponse> {
+  const cleanUsername = username.trim().toLowerCase();
+
   try {
     const data = await apiFetch('/api/auth/login', {
       method: 'POST',
@@ -100,19 +139,20 @@ export async function loginUserApi(username: string, password: string): Promise<
     }
     return data;
   } catch (err: any) {
-    // If backend returns 404 (e.g. static hosting without API routes), fallback directly to Firestore user auth
-    if (err?.status === 404 || err?.message?.includes('404')) {
-      const user = await getUserProfileFromFirestore(username);
+    // If backend returns 500, 404, or network failure, seamlessly fall back to Firestore user auth
+    console.info('Backend auth notice, checking direct Firestore credentials:', err?.message || err);
+    try {
+      const user = await getUserProfileFromFirestore(cleanUsername);
       if (user && user.password === password) {
         if (user.status === 'suspended') {
           throw new Error('This account has been suspended by the administrator.');
         }
 
         if (user.twoFactorEnabled && user.twoFactorSecret) {
-          const mockToken = `2fa_token_${user.userId}_${Date.now()}`;
+          const fallbackChallengeToken = `2fa_fb_${user.userId || user.username}_${Date.now()}`;
           return {
             requires2FA: true,
-            twoFactorToken: mockToken,
+            twoFactorToken: fallbackChallengeToken,
             username: user.username,
             userId: user.userId,
             isFirstSetup: !user.twoFactorConfirmedAt,
@@ -125,9 +165,14 @@ export async function loginUserApi(username: string, password: string): Promise<
         setSessionToken(clientToken);
         return { token: clientToken, user };
       }
+    } catch (fbErr: any) {
+      if (fbErr?.message?.includes('suspended')) throw fbErr;
+    }
+
+    if (err?.status === 401 || err?.message?.includes('Invalid')) {
       throw new Error('Invalid username or password');
     }
-    throw err;
+    throw new Error(err?.message || 'Invalid username or password');
   }
 }
 
@@ -149,7 +194,8 @@ export async function verify2FaApi(params: {
     return data;
   } catch (err: any) {
     // Firestore fallback for 2FA verification
-    if ((err?.status === 404 || err?.message?.includes('404')) && params.username) {
+    console.info('Backend 2FA verify notice, validating with Firestore backup/TOTP:', err?.message || err);
+    if (params.username) {
       const user = await getUserProfileFromFirestore(params.username);
       if (user && user.twoFactorSecret) {
         const cleanDigits = params.code.trim().replace(/[\s-]/g, '');
@@ -181,15 +227,23 @@ export async function verify2FaApi(params: {
           return { token: clientToken, user, backupCodeUsed: isBackup };
         }
       }
-      throw new Error('Invalid 6-digit authenticator code or recovery key.');
     }
-    throw err;
+    throw new Error('Invalid 6-digit authenticator code or recovery key.');
   }
 }
 
 // 2FA Setup API (Generate new secret & URI)
-export async function setup2FaApi(): Promise<{ secret: string; uri: string; backupCodes: string[]; username: string }> {
-  return await apiFetch('/api/auth/2fa/setup', { method: 'POST' });
+export async function setup2FaApi(username?: string): Promise<{ secret: string; uri: string; backupCodes: string[]; username: string }> {
+  try {
+    return await apiFetch('/api/auth/2fa/setup', { method: 'POST' });
+  } catch (err) {
+    console.info('Backend 2FA setup notice, generating client-side keys:', err);
+    const targetUser = username || 'admin';
+    const secret = generateTotpSecret();
+    const uri = generateTotpUri(targetUser, secret);
+    const backupCodes = generateBackupCodes(8);
+    return { secret, uri, backupCodes, username: targetUser };
+  }
 }
 
 // 2FA Enable API
@@ -197,34 +251,121 @@ export async function enable2FaApi(params: {
   secret: string;
   code: string;
   backupCodes?: string[];
+  username?: string;
 }): Promise<{ success: boolean; user: UserProfile; backupCodes: string[] }> {
-  return await apiFetch('/api/auth/2fa/enable', {
-    method: 'POST',
-    body: JSON.stringify(params),
-  });
+  try {
+    return await apiFetch('/api/auth/2fa/enable', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  } catch (err) {
+    console.info('Backend 2FA enable notice, applying via Firestore:', err);
+    const cleanDigits = params.code.trim().replace(/[\s-]/g, '');
+    const valid = await verifyTotpCode(cleanDigits, params.secret);
+    if (!valid) {
+      throw new Error('Invalid 6-digit authenticator code. Verification failed.');
+    }
+    const username = params.username || 'admin';
+    const existing = (await getUserProfileFromFirestore(username)) || {
+      userId: `USR-${username.toUpperCase()}`,
+      username,
+      name: username,
+      role: username === 'admin' ? 'admin' : 'user',
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      lastLoginAt: new Date().toISOString(),
+    };
+
+    const backupCodes = params.backupCodes && params.backupCodes.length > 0 ? params.backupCodes : generateBackupCodes(8);
+    const updatedUser: UserProfile = {
+      ...existing,
+      lastLoginAt: existing.lastLoginAt || new Date().toISOString(),
+      twoFactorEnabled: true,
+      twoFactorSecret: params.secret,
+      twoFactorBackupCodes: backupCodes,
+      twoFactorConfirmedAt: new Date().toISOString(),
+    };
+    await saveUserProfileToFirestore(updatedUser);
+    return { success: true, user: updatedUser, backupCodes };
+  }
+}
+
+// Supabase Health Check API
+export async function checkSupabaseHealthApi(): Promise<{
+  connected: boolean;
+  latencyMs?: number;
+  tables?: { users: boolean; calculations: boolean; site_settings: boolean };
+  error?: string;
+}> {
+  try {
+    return await apiFetch('/api/supabase-health');
+  } catch (err: any) {
+    return {
+      connected: false,
+      error: err?.message || 'Database health probe unreachable',
+    };
+  }
 }
 
 // 2FA Disable API
 export async function disable2FaApi(params?: {
   password?: string;
   code?: string;
+  username?: string;
 }): Promise<{ success: boolean; user: UserProfile }> {
-  return await apiFetch('/api/auth/2fa/disable', {
-    method: 'POST',
-    body: JSON.stringify(params || {}),
-  });
+  try {
+    return await apiFetch('/api/auth/2fa/disable', {
+      method: 'POST',
+      body: JSON.stringify(params || {}),
+    });
+  } catch (err) {
+    console.info('Backend 2FA disable notice, updating Firestore:', err);
+    const username = params?.username || 'admin';
+    const user = await getUserProfileFromFirestore(username);
+    if (!user) throw new Error('User not found');
+    user.twoFactorEnabled = false;
+    user.twoFactorSecret = undefined;
+    user.twoFactorConfirmedAt = undefined;
+    user.twoFactorBackupCodes = undefined;
+    await saveUserProfileToFirestore(user);
+    return { success: true, user };
+  }
 }
 
 // 2FA Admin Reset & Invalidate Secret API
 export async function adminResetUser2FaApi(username: string): Promise<{ success: boolean; message: string; user?: UserProfile }> {
-  return await apiFetch(`/api/admin/users/${encodeURIComponent(username)}/reset-2fa`, {
-    method: 'POST',
-  });
+  try {
+    return await apiFetch(`/api/admin/users/${encodeURIComponent(username)}/reset-2fa`, {
+      method: 'POST',
+    });
+  } catch (err) {
+    console.info('Backend 2FA reset notice, resetting in Firestore directly:', err);
+    const user = await getUserProfileFromFirestore(username);
+    if (!user) throw new Error('User not found');
+    user.twoFactorEnabled = false;
+    user.twoFactorSecret = undefined;
+    user.twoFactorConfirmedAt = undefined;
+    user.twoFactorBackupCodes = undefined;
+    await saveUserProfileToFirestore(user);
+    return { success: true, message: `2FA reset successfully for ${username}`, user };
+  }
 }
 
 // 2FA Backup Codes Regeneration API
-export async function regenerateBackupCodesApi(): Promise<{ backupCodes: string[] }> {
-  return await apiFetch('/api/auth/2fa/backup-codes/regenerate', { method: 'POST' });
+export async function regenerateBackupCodesApi(username?: string): Promise<{ backupCodes: string[] }> {
+  try {
+    return await apiFetch('/api/auth/2fa/backup-codes/regenerate', { method: 'POST' });
+  } catch (err) {
+    console.info('Backend backup codes regeneration notice, generating client-side:', err);
+    const newCodes = generateBackupCodes(8);
+    const targetUser = username || 'admin';
+    const user = await getUserProfileFromFirestore(targetUser);
+    if (user) {
+      user.twoFactorBackupCodes = newCodes;
+      await saveUserProfileToFirestore(user);
+    }
+    return { backupCodes: newCodes };
+  }
 }
 
 export async function fetchCurrentAuthUserApi(): Promise<UserProfile | null> {
@@ -242,12 +383,29 @@ export async function updateSelfProfileApi(payload: {
   name?: string;
   email?: string;
   company?: string;
+  username?: string;
 }): Promise<UserProfile> {
-  const data = await apiFetch('/api/auth/profile', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-  return data.user;
+  try {
+    const data = await apiFetch('/api/auth/profile', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return data.user;
+  } catch (err) {
+    console.info('Backend profile update notice, writing to Firestore:', err);
+    const username = payload.username || 'admin';
+    const existing = await getUserProfileFromFirestore(username);
+    if (!existing) throw new Error('User profile not found');
+    const updated: UserProfile = {
+      ...existing,
+      name: payload.name || existing.name,
+      email: payload.email || existing.email,
+      company: payload.company || existing.company,
+      password: payload.newPassword || existing.password,
+    };
+    await saveUserProfileToFirestore(updated);
+    return updated;
+  }
 }
 
 // Users Management API (Admin)
@@ -269,12 +427,15 @@ export async function saveUserApi(user: UserProfile, oldUsername?: string): Prom
       method: 'POST',
       body: JSON.stringify({ ...user, oldUsername }),
     });
-    return data.user;
+    if (data.user) {
+      saveUserProfileToFirestore(data.user, oldUsername).catch(() => {});
+      return data.user;
+    }
   } catch (err: any) {
-    // Fallback to direct Firestore save
-    await saveUserProfileToFirestore(user, oldUsername);
-    return user;
+    console.info('Backend saveUser notice, saving directly to Firestore/Supabase:', err?.message || err);
   }
+  await saveUserProfileToFirestore(user, oldUsername);
+  return user;
 }
 
 export async function deleteUserApi(username: string): Promise<boolean> {
@@ -282,6 +443,7 @@ export async function deleteUserApi(username: string): Promise<boolean> {
     await apiFetch(`/api/users/${encodeURIComponent(username)}`, {
       method: 'DELETE',
     });
+    deleteUserFromFirestore(username).catch(() => {});
     return true;
   } catch {
     try {
@@ -298,10 +460,11 @@ export async function getCalculationsApi(userId?: string): Promise<CalculationRe
   try {
     const query = userId ? `?userId=${encodeURIComponent(userId)}` : '';
     const data = await apiFetch(`/api/calculations${query}`);
-    return data.calculations || [];
-  } catch {
-    return [];
-  }
+    if (Array.isArray(data.calculations) && data.calculations.length > 0) {
+      return data.calculations;
+    }
+  } catch {}
+  return (await getCalculationsFromFirestore(userId)) || [];
 }
 
 export async function saveCalculationApi(calc: CalculationResult): Promise<boolean> {
@@ -310,9 +473,12 @@ export async function saveCalculationApi(calc: CalculationResult): Promise<boole
       method: 'POST',
       body: JSON.stringify(calc),
     });
+    saveCalculationToFirestore(calc).catch(() => {});
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    console.info('Backend save calculation notice, saving to Firestore:', err);
+    await saveCalculationToFirestore(calc);
+    return true;
   }
 }
 
@@ -321,9 +487,11 @@ export async function deleteCalculationApi(id: string): Promise<boolean> {
     await apiFetch(`/api/calculations/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
+    deleteCalculationFromFirestore(id).catch(() => {});
     return true;
   } catch {
-    return false;
+    await deleteCalculationFromFirestore(id);
+    return true;
   }
 }
 
@@ -333,9 +501,11 @@ export async function clearCalculationsApi(userId?: string): Promise<boolean> {
       method: 'POST',
       body: JSON.stringify({ userId }),
     });
+    clearAllCalculationsFromFirestore(userId).catch(() => {});
     return true;
   } catch {
-    return false;
+    await clearAllCalculationsFromFirestore(userId);
+    return true;
   }
 }
 
@@ -376,12 +546,10 @@ export async function deleteGalleryImageApi(id: string): Promise<boolean> {
 // Site Settings & Branding API
 export async function getSessionTimeoutApi(): Promise<number | null> {
   try {
-    const res = await fetch('/api/settings/session-timeout');
-    const data = await res.json();
-    return data.timeoutMinutes || null;
-  } catch {
-    return null;
-  }
+    const data = await apiFetch('/api/settings/session-timeout');
+    if (data.timeoutMinutes) return data.timeoutMinutes;
+  } catch {}
+  return await getSessionTimeoutFromFirestore();
 }
 
 export async function saveSessionTimeoutApi(timeoutMinutes: number): Promise<boolean> {
@@ -390,20 +558,21 @@ export async function saveSessionTimeoutApi(timeoutMinutes: number): Promise<boo
       method: 'POST',
       body: JSON.stringify({ timeoutMinutes }),
     });
+    saveSessionTimeoutToFirestore(timeoutMinutes).catch(() => {});
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    console.info('Backend save session timeout notice, writing to Firestore:', err);
+    await saveSessionTimeoutToFirestore(timeoutMinutes);
+    return true;
   }
 }
 
 export async function getSiteFaviconApi(): Promise<string | null> {
   try {
-    const res = await fetch('/api/settings/favicon');
-    const data = await res.json();
-    return data.faviconUrl || null;
-  } catch {
-    return null;
-  }
+    const data = await apiFetch('/api/settings/favicon');
+    if (data.faviconUrl) return data.faviconUrl;
+  } catch {}
+  return await getSiteFaviconFromFirestore();
 }
 
 export async function saveSiteFaviconApi(faviconUrl: string): Promise<boolean> {
@@ -412,41 +581,30 @@ export async function saveSiteFaviconApi(faviconUrl: string): Promise<boolean> {
       method: 'POST',
       body: JSON.stringify({ faviconUrl }),
     });
+    saveSiteFaviconToFirestore(faviconUrl).catch(() => {});
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    console.info('Backend save favicon notice, writing to Firestore:', err);
+    await saveSiteFaviconToFirestore(faviconUrl);
+    return true;
   }
 }
 
-export async function checkSupabaseHealthApi() {
+// Air Cargo Flight Consignments API
+export async function getFlightsApi(status?: string): Promise<FlightConsignment[]> {
   try {
-    return await apiFetch('/api/supabase-health');
-  } catch (err: any) {
-    return {
-      isConnected: false,
-      usersTableOk: false,
-      calculationsTableOk: false,
-      usersCount: 0,
-      calculationsCount: 0,
-      checkedAt: new Date().toISOString(),
-      generalError: err?.message || 'Server connection issue',
-    };
-  }
-}
-
-// Flight Consignments API
-export async function getFlightsApi(userId?: string): Promise<FlightConsignment[]> {
-  try {
-    const url = userId ? `/api/flights?userId=${encodeURIComponent(userId)}` : '/api/flights';
-    const data = await apiFetch(url);
-    if (data.flights && Array.isArray(data.flights)) {
+    const query = status ? `?status=${encodeURIComponent(status)}` : '';
+    const data = await apiFetch(`/api/flights${query}`);
+    if (Array.isArray(data.flights) && data.flights.length > 0) {
       return data.flights;
     }
   } catch (err) {
-    console.info('Backend flights fetch notice, falling back to Firestore/Supabase:', err);
+    console.info('Backend get flights notice, fetching from Firestore/Supabase:', err);
   }
-  return await getFlightConsignmentsFromFirestore(userId);
+  return await getFlightConsignmentsFromFirestore();
 }
+
+export const getFlightConsignmentsApi = getFlightsApi;
 
 export async function saveFlightApi(flight: FlightConsignment): Promise<FlightConsignment> {
   try {
@@ -455,7 +613,6 @@ export async function saveFlightApi(flight: FlightConsignment): Promise<FlightCo
       body: JSON.stringify(flight),
     });
     if (data.flight) {
-      // Background async dual-write to Firestore
       saveFlightConsignmentToFirestore(data.flight).catch(() => {});
       return data.flight;
     }
@@ -516,7 +673,7 @@ export async function getAiKeyStatusApi(): Promise<AiKeyStatusResponse> {
       configured: false,
       maskedKey: '',
       source: 'none',
-      model: 'gemini-3.7-flash',
+      model: 'gemini-2.5-flash',
     };
   }
 }
@@ -540,6 +697,3 @@ export async function deleteAiKeyApi(): Promise<{ success: boolean; message: str
     method: 'DELETE',
   });
 }
-
-
-

@@ -502,6 +502,35 @@ export async function deleteCalculationFromFirestore(id: string): Promise<void> 
 }
 
 /**
+ * Fetch calculation records from Firestore (with Supabase fallback)
+ */
+export async function getCalculationsFromFirestore(filterUserId?: string): Promise<CalculationResult[]> {
+  const list: CalculationResult[] = [];
+  try {
+    await ensureAuth();
+    const qSnap = await getDocs(query(collection(db, CALCULATIONS_COLLECTION)));
+    qSnap.forEach((docSnap) => {
+      const data = docSnap.data() as CalculationResult;
+      if (!filterUserId || data.userId === filterUserId || data.userId?.toLowerCase() === filterUserId.toLowerCase()) {
+        list.push(data);
+      }
+    });
+    list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  } catch (error: any) {
+    console.info("Firestore get calculations notice:", error?.message || error);
+  }
+
+  if (list.length === 0) {
+    try {
+      const supaList = await getCalculationsFromSupabase(filterUserId);
+      if (supaList && supaList.length > 0) return supaList;
+    } catch {}
+  }
+
+  return list;
+}
+
+/**
  * Subscribe to real-time updates from Supabase and Firestore users collection
  */
 export function subscribeToUsers(
