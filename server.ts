@@ -4,7 +4,7 @@ import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from "@supabase/supabase-js";
-import { generateTotpSecret, generateTotpUri, generateBackupCodes, verifyTotpCode } from "./src/lib/totp";
+import { generateTotpSecret, generateTotpUri, generateBackupCodes, verifyTotpCode, normalizeSecurityCode, matchBackupCodeIndex } from "./src/lib/totp";
 
 const app = express();
 const PORT = 3000;
@@ -372,6 +372,12 @@ app.post("/api/auth/login", async (req, res) => {
             ...data.profile_data,
             role: (cleanUsername === "admin" || data.profile_data?.role === "admin" || data.role === "admin") ? "admin" : (data.profile_data?.role || "user"),
             password: data.password || data.password_hash || data.profile_data?.password || "",
+            twoFactorEnabled: Boolean(data.two_factor_enabled ?? data.profile_data?.twoFactorEnabled ?? false),
+            twoFactorSecret: data.two_factor_secret || data.profile_data?.twoFactorSecret || "",
+            twoFactorBackupCodes: Array.isArray(data.two_factor_backup_codes)
+              ? data.two_factor_backup_codes
+              : (Array.isArray(data.profile_data?.twoFactorBackupCodes) ? data.profile_data.twoFactorBackupCodes : []),
+            twoFactorConfirmedAt: data.two_factor_confirmed_at || data.profile_data?.twoFactorConfirmedAt || null,
           };
         } else {
           dbUser = {
@@ -384,11 +390,16 @@ app.post("/api/auth/login", async (req, res) => {
             status: data.status === "suspended" ? "suspended" : "active",
             password: data.password || data.password_hash || "",
             createdAt: data.created_at || new Date().toISOString(),
+            twoFactorEnabled: Boolean(data.two_factor_enabled ?? false),
+            twoFactorSecret: data.two_factor_secret || "",
+            twoFactorBackupCodes: Array.isArray(data.two_factor_backup_codes) ? data.two_factor_backup_codes : [],
+            twoFactorConfirmedAt: data.two_factor_confirmed_at || null,
           };
         }
 
         if (dbUser && verifyPassword(cleanPassword, dbUser.password)) {
           user = dbUser;
+          serverUsersStore[cleanUsername] = dbUser;
         }
       }
     } catch (dbErr) {
@@ -421,11 +432,15 @@ app.post("/api/auth/login", async (req, res) => {
     // Check if user has Two-Factor Authentication (2FA TOTP) enabled
     if (user.twoFactorEnabled && user.twoFactorSecret) {
       const challengeToken = crypto.randomBytes(32).toString("hex");
+      const userBackupCodes = Array.isArray(user.twoFactorBackupCodes)
+        ? user.twoFactorBackupCodes
+        : (Array.isArray(user.two_factor_backup_codes) ? user.two_factor_backup_codes : []);
+
       twoFactorPendingStore.set(challengeToken, {
         username: cleanUsername,
         userId: user.userId || cleanUsername,
         secret: user.twoFactorSecret,
-        backupCodes: Array.isArray(user.twoFactorBackupCodes) ? user.twoFactorBackupCodes : [],
+        backupCodes: userBackupCodes,
         expiresAt: Date.now() + 5 * 60 * 1000,
         isFirstSetup: !user.twoFactorConfirmedAt,
         userData: user,
@@ -464,7 +479,7 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-// POST /api/auth/2fa/verify
+// POST /api/auth/2fa/verify (Verifies either 6-digit TOTP OR Emergency Backup Code)
 app.post("/api/auth/2fa/verify", async (req, res) => {
   try {
     const { twoFactorToken, code, username, password } = req.body || {};
@@ -476,70 +491,108 @@ app.post("/api/auth/2fa/verify", async (req, res) => {
 
     let challenge = twoFactorToken ? twoFactorPendingStore.get(twoFactorToken) : null;
     let user: any = null;
+    let usernameKey = "";
 
     if (challenge) {
       if (Date.now() > challenge.expiresAt) {
         twoFactorPendingStore.delete(twoFactorToken);
-        return res.status(401).json({ error: "2FA challenge expired. Please log in again.", code: "2FA_EXPIRED" });
-      }
-      user = challenge.userData || serverUsersStore[challenge.username];
-    } else if (username && password) {
-      const cleanUsername = String(username).trim().toLowerCase();
-      const storeUser = serverUsersStore[cleanUsername];
-      if (storeUser && verifyPassword(String(password).trim(), storeUser.password)) {
-        user = storeUser;
-        challenge = {
-          username: cleanUsername,
-          userId: user.userId,
-          secret: user.twoFactorSecret,
-          backupCodes: Array.isArray(user.twoFactorBackupCodes) ? user.twoFactorBackupCodes : [],
-          expiresAt: Date.now() + 60000,
-          userData: user,
-        };
+        challenge = null;
+      } else {
+        usernameKey = (challenge.username || "").toLowerCase().trim();
+        user = challenge.userData || serverUsersStore[usernameKey];
       }
     }
 
-    if (!user || !challenge) {
+    // Fallback: if challenge token was missing or expired, but username was provided
+    if (!user && username) {
+      usernameKey = String(username).toLowerCase().trim();
+      user = serverUsersStore[usernameKey];
+      if (!user) {
+        try {
+          const { data } = await supabase
+            .from("users")
+            .select("*")
+            .or(`id.ilike.${usernameKey},username.ilike.${usernameKey},user_id.ilike.${usernameKey},email.ilike.${usernameKey}`)
+            .maybeSingle();
+          if (data) {
+            user = data.profile_data || {
+              userId: data.user_id || data.id || `USR-${usernameKey.toUpperCase()}`,
+              username: data.username || usernameKey,
+              role: data.role || "user",
+              status: data.status || "active",
+              password: data.password || data.password_hash || "",
+              twoFactorEnabled: Boolean(data.two_factor_enabled ?? false),
+              twoFactorSecret: data.two_factor_secret || "",
+              twoFactorBackupCodes: Array.isArray(data.two_factor_backup_codes) ? data.two_factor_backup_codes : [],
+              twoFactorConfirmedAt: data.two_factor_confirmed_at || null,
+            };
+            serverUsersStore[usernameKey] = user;
+          }
+        } catch (dbErr) {
+          console.warn("[2FA Verify Supabase lookup notice]:", dbErr);
+        }
+      }
+    }
+
+    if (!user) {
       return res.status(401).json({ error: "Invalid or expired 2FA session. Please log in again." });
     }
+
+    // Compile candidate backup codes across all source fields & deduplicate
+    const rawBackupList: string[] = [
+      ...(Array.isArray(challenge?.backupCodes) ? challenge.backupCodes : []),
+      ...(Array.isArray(user?.twoFactorBackupCodes) ? user.twoFactorBackupCodes : []),
+      ...(Array.isArray(user?.two_factor_backup_codes) ? user.two_factor_backup_codes : []),
+      ...(Array.isArray(user?.profile_data?.twoFactorBackupCodes) ? user.profile_data.twoFactorBackupCodes : []),
+    ].filter((c, idx, arr) => typeof c === "string" && c.trim() && arr.indexOf(c) === idx);
+
+    const secret = challenge?.secret || user?.twoFactorSecret || user?.two_factor_secret || user?.profile_data?.twoFactorSecret || "";
 
     let isValid = false;
     let isBackupCodeUsed = false;
     const sanitizedDigits = cleanCode.replace(/[\s-]/g, "");
 
-    // 1. Verify 6-digit TOTP
-    if (/^\d{6}$/.test(sanitizedDigits) && challenge.secret) {
-      isValid = await verifyTotpCode(sanitizedDigits, challenge.secret);
+    // 1. Verify 6-digit TOTP (if standard 6 digits entered and secret available)
+    if (/^\d{6}$/.test(sanitizedDigits) && secret) {
+      isValid = await verifyTotpCode(sanitizedDigits, secret);
     }
 
-    // 2. Verify emergency backup recovery code
-    if (!isValid && challenge.backupCodes && challenge.backupCodes.length > 0) {
-      const normInput = cleanCode.toUpperCase().replace(/[\s-]/g, "");
-      const matchedIdx = challenge.backupCodes.findIndex(
-        (bc: string) => bc.toUpperCase().replace(/[\s-]/g, "") === normInput
-      );
+    // 2. Verify Emergency Backup Recovery Code (Normalized match)
+    if (!isValid && rawBackupList.length > 0) {
+      const matchedIdx = matchBackupCodeIndex(cleanCode, rawBackupList);
       if (matchedIdx !== -1) {
         isValid = true;
         isBackupCodeUsed = true;
-        const updatedBackupCodes = [...challenge.backupCodes];
-        updatedBackupCodes.splice(matchedIdx, 1);
+
+        // Remove the used single-use backup code
+        const updatedBackupCodes = rawBackupList.filter((_, idx) => idx !== matchedIdx);
         user.twoFactorBackupCodes = updatedBackupCodes;
-        serverUsersStore[challenge.username] = user;
+        user.two_factor_backup_codes = updatedBackupCodes;
+        if (user.profile_data) {
+          user.profile_data.twoFactorBackupCodes = updatedBackupCodes;
+        }
+
+        const effectiveKey = usernameKey || (user.username || "").toLowerCase().trim();
+        serverUsersStore[effectiveKey] = user;
+
         try {
           await supabase.from("users").upsert({
-            id: challenge.username,
-            username: challenge.username,
-            user_id: user.userId || challenge.username,
+            id: effectiveKey,
+            username: user.username || effectiveKey,
+            user_id: user.userId || effectiveKey,
+            two_factor_backup_codes: updatedBackupCodes,
             profile_data: user,
             updated_at: new Date().toISOString(),
           });
-        } catch {}
+        } catch (dbErr) {
+          console.warn("[2FA Verify Supabase backup code sync warning]:", dbErr);
+        }
       }
     }
 
     if (!isValid) {
       return res.status(400).json({
-        error: "Invalid 6-digit authenticator code or backup key. Please check your app and try again.",
+        error: "Invalid 6-digit authenticator code or emergency backup key. Please check and try again.",
       });
     }
 
@@ -547,15 +600,18 @@ app.post("/api/auth/2fa/verify", async (req, res) => {
       twoFactorPendingStore.delete(twoFactorToken);
     }
 
+    const effectiveUserKey = usernameKey || (user.username || "").toLowerCase().trim();
+
     // Mark 2FA as confirmed if this was first setup
     if (!user.twoFactorConfirmedAt) {
       user.twoFactorConfirmedAt = new Date().toISOString();
-      serverUsersStore[challenge.username] = user;
+      serverUsersStore[effectiveUserKey] = user;
       try {
         await supabase.from("users").upsert({
-          id: challenge.username,
-          username: challenge.username,
-          user_id: user.userId || challenge.username,
+          id: effectiveUserKey,
+          username: user.username || effectiveUserKey,
+          user_id: user.userId || effectiveUserKey,
+          two_factor_confirmed_at: user.twoFactorConfirmedAt,
           profile_data: user,
           updated_at: new Date().toISOString(),
         });
@@ -563,8 +619,8 @@ app.post("/api/auth/2fa/verify", async (req, res) => {
     }
 
     const token = generateToken({
-      userId: user.userId || challenge.username,
-      username: user.username || challenge.username,
+      userId: user.userId || effectiveUserKey,
+      username: user.username || effectiveUserKey,
       role: user.role || "user",
       password: user.password,
     });
@@ -577,7 +633,7 @@ app.post("/api/auth/2fa/verify", async (req, res) => {
         lastLoginAt: new Date().toISOString(),
       }),
       backupCodeUsed: isBackupCodeUsed,
-      remainingBackupCodes: user.twoFactorBackupCodes?.length || 0,
+      remainingBackupCodes: Array.isArray(user.twoFactorBackupCodes) ? user.twoFactorBackupCodes.length : 0,
     });
   } catch (err: any) {
     res.status(500).json({ error: "2FA verification failed: " + (err?.message || "") });
@@ -760,12 +816,13 @@ app.post("/api/auth/2fa/disable", requireAuth, async (req, res) => {
 app.post("/api/auth/2fa/backup-codes/regenerate", requireAuth, async (req, res) => {
   try {
     const authUser = (req as any).authUser;
-    const usernameKey = authUser.username.toLowerCase().trim();
+    const requestedUsername = req.body?.username ? String(req.body.username).toLowerCase().trim() : '';
+    const usernameKey = (authUser.role === 'admin' && requestedUsername) ? requestedUsername : authUser.username.toLowerCase().trim();
 
     let existingUser = serverUsersStore[usernameKey];
     if (!existingUser) {
       try {
-        const { data } = await supabase.from("users").select("*").eq("id", usernameKey).maybeSingle();
+        const { data } = await supabase.from("users").select("*").or(`id.ilike.${usernameKey},username.ilike.${usernameKey}`).maybeSingle();
         if (data && data.profile_data) existingUser = data.profile_data;
       } catch {}
     }
@@ -774,19 +831,26 @@ app.post("/api/auth/2fa/backup-codes/regenerate", requireAuth, async (req, res) 
       return res.status(400).json({ error: "2FA is not enabled for this account." });
     }
 
-    const newCodes = generateBackupCodes(6);
+    const newCodes = generateBackupCodes(8);
     existingUser.twoFactorBackupCodes = newCodes;
+    existingUser.two_factor_backup_codes = newCodes;
+    if (existingUser.profile_data) {
+      existingUser.profile_data.twoFactorBackupCodes = newCodes;
+    }
     serverUsersStore[usernameKey] = existingUser;
 
     try {
       await supabase.from("users").upsert({
         id: usernameKey,
-        username: usernameKey,
+        username: existingUser.username || usernameKey,
         user_id: existingUser.userId || usernameKey,
+        two_factor_backup_codes: newCodes,
         profile_data: existingUser,
         updated_at: new Date().toISOString(),
       });
-    } catch {}
+    } catch (dbErr) {
+      console.warn("[Regenerate Backup Codes Supabase warning]:", dbErr);
+    }
 
     res.json({
       success: true,

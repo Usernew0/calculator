@@ -237,8 +237,9 @@ npm start
 | **Backend Express Offline / Cold-Start** | Auto-detected by `apiFetch` in `src/lib/api.ts` | Gracefully falls back to direct client-side Firestore Web SDK | Zero user disruption; profile updates and 2FA changes save directly to Firestore |
 | **Firestore Disconnected / Offline** | Fallback to `localStorage` | Fallback to `localStorage` + in-memory state | User can calculate landed costs, plan pricing, and export PDFs offline |
 | **2FA Verification with Clock Drift** | Validates $\pm 30\text{s}$ time window | Validates $\pm 30\text{s}$ time window | Logins succeed even if mobile phone clock has slight drift |
-| **Lost 2FA Device** | Single-use 8-character backup recovery codes | Single-use 8-character backup recovery codes | Administrator can also reset 2FA via Admin Panel |
-| **2FA Disable / Reset** | Atomic `deleteField()` in Firestore | Atomic `deleteField()` in Firestore | Eliminates `undefined` payload errors across all database layers |
+| **Emergency Backup Recovery Codes** | Sanitized via `normalizeSecurityCode` (`[\s\-_—–]`) | Multi-source lookup across challenge store, Supabase, and Firestore | Ignores hyphens, spaces, and case differences; consumes code on use |
+| **2FA Disable / Reset Engine** | Atomic `deleteField()` in Firestore & Supabase nullify | Synchronized across in-memory store and database rows | Eliminates `undefined` payload errors and refreshes UI state immediately |
+| **Backup Code Regeneration** | Instant client-side & API `/api/auth/2fa/backup-codes/regenerate` | Real-time dual write to Supabase & Firestore | Produces 8 fresh alphanumeric keys with 1-click clipboard copy |
 | **Iframe Preview Sandbox** | Replaces native `window.confirm` with in-app React modals | Full screen or embedded iframe compatible | Buttons and actions trigger reliably without browser security suppression |
 | **High-Resolution Camera Uploads** | Compressed via HTML5 Canvas | Compressed via HTML5 Canvas | Downscales 15MB+ camera photos to ~150KB JPEGs to prevent storage quota limits |
 

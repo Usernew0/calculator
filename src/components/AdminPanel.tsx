@@ -34,6 +34,7 @@ import {
   enable2FaApi,
   disable2FaApi,
   adminResetUser2FaApi,
+  regenerateBackupCodesApi,
   AiKeyStatusResponse,
 } from '../lib/api';
 import { generateTotpSecret, generateTotpCode, verifyTotpCode, generateQrCodeDataUrl, generateBackupCodes } from '../lib/totp';
@@ -1347,7 +1348,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const targetUser = admin2FaUser || currentUser;
     setIsAdmin2FaLoading(true);
     try {
-      const newCodes = generateBackupCodes(8);
+      let newCodes: string[] = [];
+      try {
+        const res = await regenerateBackupCodesApi(targetUser.username);
+        if (res && Array.isArray(res.backupCodes) && res.backupCodes.length > 0) {
+          newCodes = res.backupCodes;
+        }
+      } catch {}
+
+      if (newCodes.length === 0) {
+        newCodes = generateBackupCodes(8);
+      }
+
       const updatedUser: UserProfile = {
         ...targetUser,
         twoFactorBackupCodes: newCodes,

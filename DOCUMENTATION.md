@@ -168,11 +168,20 @@ Before building or deploying to production, verify the following steps:
 ## 📝 Modification & Update Log (Auto-Updated)
 
 - **2026-08-26**:
-  - **Hardened 2FA Disable & Reset Flow Across Full Stack (`firebase.ts`, `server.ts`, `api.ts`, `AdminPanel.tsx`, `LoginModal.tsx`)**:
-    - **Firestore SDK Error Resolution**: Replaced raw `undefined` assignments with `deleteField()` from `firebase/firestore` and sanitized payloads in `saveUserProfileToFirestore` so Firestore updates never fail with `Unsupported field value: undefined`.
-    - **Backend API Robustness (`server.ts`)**: Enhanced `/api/auth/2fa/disable` and `/api/admin/users/:username/reset-2fa` to support target username parameters, graceful memory fallback, and dual-sync with Supabase.
-    - **Iframe Compatibility & In-App Confirmation (`LoginModal.tsx`, `AdminPanel.tsx`)**: Replaced browser `window.confirm` with smooth in-modal confirmation controls, preventing silent failures inside sandboxed iframes.
-    - **Instant Real-Time UI Synchronizations**: Local state (`users`, `currentUser`, `admin2FaUser`, `storedUserProfile`) updates immediately on disabling 2FA without requiring a page reload.
+  - **Two-Factor Authentication (2FA) Emergency Backup Code & Disable Full-Stack Engine (`totp.ts`, `server.ts`, `api.ts`, `TwoFactorAuthStep.tsx`, `AdminPanel.tsx`, `LoginModal.tsx`, `firebase.ts`)**:
+    - **Emergency Backup Code Ingestion & Multi-Source Reconciliation**:
+      - Implemented `normalizeSecurityCode` and `matchBackupCodeIndex` in `src/lib/totp.ts` to sanitize security codes across case variations, whitespace, hyphens, en-dashes, and underscores (`[\s\-_—–]`).
+      - Upgraded `/api/auth/2fa/verify` in `server.ts` to aggregate backup code candidates from pending challenge sessions, in-memory `serverUsersStore`, `profile_data`, and Supabase `two_factor_backup_codes` columns.
+      - Upon successful verification using a single-use emergency backup code, the code is immediately consumed, removed from all storage layers, and persisted via database upserts.
+      - Enhanced client-side fallback in `src/lib/api.ts` (`verify2FaApi`) to use identical normalized matching against Firestore user profiles.
+      - Added Enter key submission handling and uppercase auto-formatting to the emergency backup recovery key input field in `src/components/TwoFactorAuthStep.tsx`.
+    - **2FA Disabling & Backup Code Regeneration**:
+      - Hardened `/api/auth/2fa/disable` in `server.ts` to support self-service and administrative disabling of 2FA with complete reset of `two_factor_enabled`, `two_factor_secret`, and `two_factor_backup_codes`.
+      - Replaced raw `undefined` assignments with `deleteField()` from `firebase/firestore` and sanitized payloads in `saveUserProfileToFirestore` so Firestore updates never fail with `Unsupported field value: undefined`.
+      - Added `/api/auth/2fa/backup-codes/regenerate` endpoint and frontend wrapper `regenerateBackupCodesApi` supporting immediate single-click regeneration of 8 high-entropy alphanumeric emergency backup keys.
+      - Replaced browser `window.confirm` with smooth in-modal confirmation controls, preventing silent failures inside sandboxed iframes.
+      - Local state (`users`, `currentUser`, `admin2FaUser`, `storedUserProfile`) updates immediately on disabling 2FA without requiring a page reload.
+      - Connected `handleRegenerateAdminBackupCodes` in `src/components/AdminPanel.tsx` and `handleRegenerateBackupCodes` in `src/components/LoginModal.tsx` to update state across Supabase, Firestore, and memory concurrently.
 
 - **2026-08-24**:
   - **Streamlined 2FA Management in Admin Panel (`AdminPanel.tsx`, `api.ts`, `server.ts`)**:

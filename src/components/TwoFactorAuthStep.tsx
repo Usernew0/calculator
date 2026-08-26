@@ -298,6 +298,12 @@ export const TwoFactorAuthStep: React.FC<TwoFactorAuthStepProps> = ({
               autoFocus
               value={backupCode}
               onChange={(e) => setBackupCode(e.target.value.toUpperCase())}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  submitVerification();
+                }
+              }}
               placeholder={t.twoFactorBackupPlaceholder}
               className="w-full ltr:pl-10 rtl:pr-10 py-3 text-base font-mono font-bold tracking-widest uppercase rounded-xl border border-slate-700 bg-slate-900 text-emerald-300 placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-emerald-500/50"
             />

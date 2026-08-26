@@ -1,6 +1,6 @@
 import { UserProfile, CalculationResult, FlightConsignment, FlightManifestParsedData, TwoFactorChallengeData } from '../types';
 import { getSessionToken, setSessionToken, triggerSessionInvalidation } from './session';
-import { generateTotpSecret, generateTotpUri, generateBackupCodes, verifyTotpCode } from './totp';
+import { generateTotpSecret, generateTotpUri, generateBackupCodes, verifyTotpCode, matchBackupCodeIndex } from './totp';
 import {
   getAllUsersFromFirestore,
   saveUserProfileToFirestore,
@@ -206,9 +206,8 @@ export async function verify2FaApi(params: {
           valid = await verifyTotpCode(cleanDigits, user.twoFactorSecret);
         }
 
-        if (!valid && user.twoFactorBackupCodes) {
-          const norm = params.code.toUpperCase().replace(/[\s-]/g, '');
-          const idx = user.twoFactorBackupCodes.findIndex((b) => b.toUpperCase().replace(/[\s-]/g, '') === norm);
+        if (!valid && Array.isArray(user.twoFactorBackupCodes) && user.twoFactorBackupCodes.length > 0) {
+          const idx = matchBackupCodeIndex(params.code, user.twoFactorBackupCodes);
           if (idx !== -1) {
             valid = true;
             isBackup = true;
@@ -344,6 +343,26 @@ export async function disable2FaApi(params?: {
   }
 }
 
+// 2FA Regenerate Backup Codes API
+export async function regenerateBackupCodesApi(username?: string): Promise<{ success: boolean; backupCodes: string[] }> {
+  try {
+    return await apiFetch('/api/auth/2fa/backup-codes/regenerate', {
+      method: 'POST',
+      body: JSON.stringify({ username }),
+    });
+  } catch (err) {
+    console.info('Backend backup codes regenerate notice, generating via Firestore fallback:', err);
+    const targetUser = username || 'admin';
+    const user = await getUserProfileFromFirestore(targetUser);
+    const newCodes = generateBackupCodes(8);
+    if (user) {
+      user.twoFactorBackupCodes = newCodes;
+      await saveUserProfileToFirestore(user);
+    }
+    return { success: true, backupCodes: newCodes };
+  }
+}
+
 // 2FA Admin Reset & Invalidate Secret API
 export async function adminResetUser2FaApi(username: string): Promise<{ success: boolean; message: string; user?: UserProfile }> {
   try {
@@ -372,23 +391,6 @@ export async function adminResetUser2FaApi(username: string): Promise<{ success:
     user.twoFactorBackupCodes = [];
     await saveUserProfileToFirestore(user);
     return { success: true, message: `2FA reset successfully for ${username}`, user };
-  }
-}
-
-// 2FA Backup Codes Regeneration API
-export async function regenerateBackupCodesApi(username?: string): Promise<{ backupCodes: string[] }> {
-  try {
-    return await apiFetch('/api/auth/2fa/backup-codes/regenerate', { method: 'POST' });
-  } catch (err) {
-    console.info('Backend backup codes regeneration notice, generating client-side:', err);
-    const newCodes = generateBackupCodes(8);
-    const targetUser = username || 'admin';
-    const user = await getUserProfileFromFirestore(targetUser);
-    if (user) {
-      user.twoFactorBackupCodes = newCodes;
-      await saveUserProfileToFirestore(user);
-    }
-    return { backupCodes: newCodes };
   }
 }
 

@@ -126,6 +126,31 @@ export function generateBackupCodes(count = 6): string[] {
 }
 
 /**
+ * Normalizes user input for security / emergency backup codes:
+ * Strips whitespace, hyphens, en-dashes, em-dashes, underscores and converts to uppercase
+ */
+export function normalizeSecurityCode(input: string): string {
+  if (!input) return '';
+  return String(input)
+    .toUpperCase()
+    .trim()
+    .replace(/[\s\-_—–]/g, '');
+}
+
+/**
+ * Verifies if an entered code matches any code in the backup codes array.
+ * Returns the matching index or -1 if not found.
+ */
+export function matchBackupCodeIndex(enteredCode: string, backupCodes: string[]): number {
+  if (!enteredCode || !Array.isArray(backupCodes) || backupCodes.length === 0) {
+    return -1;
+  }
+  const normalizedInput = normalizeSecurityCode(enteredCode);
+  if (!normalizedInput) return -1;
+  return backupCodes.findIndex((code) => normalizeSecurityCode(code) === normalizedInput);
+}
+
+/**
  * Calculates HMAC-SHA1 using Web Crypto API or pure fallback
  */
 async function hmacSha1(keyBytes: Uint8Array, messageBytes: Uint8Array): Promise<Uint8Array> {
