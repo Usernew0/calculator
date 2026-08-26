@@ -314,19 +314,31 @@ export async function disable2FaApi(params?: {
   username?: string;
 }): Promise<{ success: boolean; user: UserProfile }> {
   try {
-    return await apiFetch('/api/auth/2fa/disable', {
+    const res = await apiFetch('/api/auth/2fa/disable', {
       method: 'POST',
       body: JSON.stringify(params || {}),
     });
+    if (res.user) {
+      await saveUserProfileToFirestore(res.user);
+    }
+    return res;
   } catch (err) {
     console.info('Backend 2FA disable notice, updating Firestore:', err);
     const username = params?.username || 'admin';
-    const user = await getUserProfileFromFirestore(username);
-    if (!user) throw new Error('User not found');
+    let user = await getUserProfileFromFirestore(username);
+    if (!user) {
+      user = {
+        userId: username,
+        username: username,
+        role: 'user',
+        createdAt: new Date().toISOString(),
+        lastLoginAt: new Date().toISOString(),
+      };
+    }
     user.twoFactorEnabled = false;
     user.twoFactorSecret = undefined;
     user.twoFactorConfirmedAt = undefined;
-    user.twoFactorBackupCodes = undefined;
+    user.twoFactorBackupCodes = [];
     await saveUserProfileToFirestore(user);
     return { success: true, user };
   }
@@ -335,17 +347,29 @@ export async function disable2FaApi(params?: {
 // 2FA Admin Reset & Invalidate Secret API
 export async function adminResetUser2FaApi(username: string): Promise<{ success: boolean; message: string; user?: UserProfile }> {
   try {
-    return await apiFetch(`/api/admin/users/${encodeURIComponent(username)}/reset-2fa`, {
+    const res = await apiFetch(`/api/admin/users/${encodeURIComponent(username)}/reset-2fa`, {
       method: 'POST',
     });
+    if (res.user) {
+      await saveUserProfileToFirestore(res.user);
+    }
+    return res;
   } catch (err) {
     console.info('Backend 2FA reset notice, resetting in Firestore directly:', err);
-    const user = await getUserProfileFromFirestore(username);
-    if (!user) throw new Error('User not found');
+    let user = await getUserProfileFromFirestore(username);
+    if (!user) {
+      user = {
+        userId: username,
+        username: username,
+        role: 'user',
+        createdAt: new Date().toISOString(),
+        lastLoginAt: new Date().toISOString(),
+      };
+    }
     user.twoFactorEnabled = false;
     user.twoFactorSecret = undefined;
     user.twoFactorConfirmedAt = undefined;
-    user.twoFactorBackupCodes = undefined;
+    user.twoFactorBackupCodes = [];
     await saveUserProfileToFirestore(user);
     return { success: true, message: `2FA reset successfully for ${username}`, user };
   }

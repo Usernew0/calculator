@@ -218,12 +218,29 @@ npm install
 # Start development server (Express + Vite on Port 3000)
 npm run dev
 
+# Run TypeScript Lint & Type Verification
+npm run lint
+
 # Build for production (Vite client + esbuild CommonJS server bundle)
 npm run build
 
 # Run production server
 npm start
 ```
+
+---
+
+## 🛡️ Edge-Case & Full-System Reliability Matrix
+
+| Scenario | Local & Development | Live Production | Fail-Safe Behavior |
+| :--- | :--- | :--- | :--- |
+| **Backend Express Offline / Cold-Start** | Auto-detected by `apiFetch` in `src/lib/api.ts` | Gracefully falls back to direct client-side Firestore Web SDK | Zero user disruption; profile updates and 2FA changes save directly to Firestore |
+| **Firestore Disconnected / Offline** | Fallback to `localStorage` | Fallback to `localStorage` + in-memory state | User can calculate landed costs, plan pricing, and export PDFs offline |
+| **2FA Verification with Clock Drift** | Validates $\pm 30\text{s}$ time window | Validates $\pm 30\text{s}$ time window | Logins succeed even if mobile phone clock has slight drift |
+| **Lost 2FA Device** | Single-use 8-character backup recovery codes | Single-use 8-character backup recovery codes | Administrator can also reset 2FA via Admin Panel |
+| **2FA Disable / Reset** | Atomic `deleteField()` in Firestore | Atomic `deleteField()` in Firestore | Eliminates `undefined` payload errors across all database layers |
+| **Iframe Preview Sandbox** | Replaces native `window.confirm` with in-app React modals | Full screen or embedded iframe compatible | Buttons and actions trigger reliably without browser security suppression |
+| **High-Resolution Camera Uploads** | Compressed via HTML5 Canvas | Compressed via HTML5 Canvas | Downscales 15MB+ camera photos to ~150KB JPEGs to prevent storage quota limits |
 
 ---
 

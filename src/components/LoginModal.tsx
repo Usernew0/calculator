@@ -21,6 +21,7 @@ import {
   Database,
   Loader2,
   ShieldCheck,
+  ShieldOff,
   IdCard,
   Eye,
   EyeOff,
@@ -71,6 +72,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
   // 2FA Management State
   const [is2FaEnabled, setIs2FaEnabled] = useState(currentUser?.twoFactorEnabled || false);
+  const [isConfirmingDisable2Fa, setIsConfirmingDisable2Fa] = useState(false);
   const [show2FaSetup, setShow2FaSetup] = useState(false);
   const [setupSecret, setSetupSecret] = useState('');
   const [setupUri, setSetupUri] = useState('');
@@ -151,28 +153,26 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
   const handleDisable2Fa = async () => {
     if (!currentUser?.userId) return;
-    const confirmPrompt = window.confirm(
-      lang === 'ar'
-        ? 'هل أنت متأكد من رغبتك في تعطيل المصادقة الثنائية؟'
-        : 'Are you sure you want to disable two-factor authentication?'
-    );
-    if (!confirmPrompt) return;
 
     setIs2FaLoading(true);
     setErrorMsg(null);
     try {
-      const res = await disable2FaApi({ password: oldPassword.trim() || undefined });
+      const res = await disable2FaApi({
+        username: currentUser.username || currentUser.userId,
+        password: oldPassword.trim() || undefined,
+      });
       setIs2FaEnabled(false);
       setShow2FaSetup(false);
+      setIsConfirmingDisable2Fa(false);
       setBackupCodesList([]);
-      setSuccessMsg(lang === 'ar' ? 'تم تعطيل المصادقة الثنائية' : 'Two-factor authentication disabled');
+      setSuccessMsg(lang === 'ar' ? 'تم تعطيل المصادقة الثنائية بنجاح' : 'Two-factor authentication disabled successfully');
 
       if (res.user) {
         setStoredUserProfile(res.user);
         onLoginSuccess(res.user);
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to disable 2FA');
+      setErrorMsg(err.message || (lang === 'ar' ? 'تعذر تعطيل المصادقة الثنائية' : 'Failed to disable 2FA'));
     } finally {
       setIs2FaLoading(false);
     }
@@ -553,14 +553,37 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
                 <div className="flex items-center gap-2">
                   {is2FaEnabled ? (
-                    <button
-                      type="button"
-                      disabled={is2FaLoading}
-                      onClick={handleDisable2Fa}
-                      className="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 border border-rose-200 dark:border-rose-800/60 text-rose-700 dark:text-rose-300 text-xs font-bold transition-all cursor-pointer disabled:opacity-50"
-                    >
-                      {is2FaLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : t.twoFactorDisableBtn}
-                    </button>
+                    isConfirmingDisable2Fa ? (
+                      <div className="flex items-center gap-1.5 animate-in fade-in">
+                        <button
+                          type="button"
+                          disabled={is2FaLoading}
+                          onClick={handleDisable2Fa}
+                          className="px-2.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50 shadow-xs"
+                        >
+                          {is2FaLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldOff className="w-3 h-3" />}
+                          <span>{lang === 'ar' ? 'تأكيد التعطيل' : 'Confirm'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={is2FaLoading}
+                          onClick={() => setIsConfirmingDisable2Fa(false)}
+                          className="px-2 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-xs font-bold transition-all cursor-pointer"
+                        >
+                          {lang === 'ar' ? 'إلغاء' : 'Cancel'}
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={is2FaLoading}
+                        onClick={() => setIsConfirmingDisable2Fa(true)}
+                        className="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 border border-rose-200 dark:border-rose-800/60 text-rose-700 dark:text-rose-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        <ShieldOff className="w-3.5 h-3.5" />
+                        <span>{t.twoFactorDisableBtn}</span>
+                      </button>
+                    )
                   ) : (
                     <button
                       type="button"

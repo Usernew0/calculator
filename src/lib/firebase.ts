@@ -6,6 +6,7 @@ import {
   getDoc,
   setDoc,
   deleteDoc,
+  deleteField,
   onSnapshot,
   query,
   orderBy,
@@ -187,16 +188,35 @@ export async function saveUserProfileToFirestore(
     await ensureAuth();
     const docKey = newUsernameKey;
     const docRef = doc(db, USERS_COLLECTION, docKey);
-    await setDoc(
-      docRef,
-      {
-        ...profile,
-        userId: profile.userId || docKey,
-        username: profile.username || docKey,
-        updatedAt: new Date().toISOString(),
-      },
-      { merge: true }
-    );
+
+    // Build clean Firestore payload without undefined values
+    const firestorePayload: Record<string, any> = {
+      userId: profile.userId || docKey,
+      username: profile.username || docKey,
+      name: profile.name ?? '',
+      email: profile.email ?? '',
+      company: profile.company ?? '',
+      role: profile.role ?? 'user',
+      status: profile.status ?? 'active',
+      password: profile.password ?? '',
+      createdAt: profile.createdAt || new Date().toISOString(),
+      lastLoginAt: profile.lastLoginAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      twoFactorEnabled: Boolean(profile.twoFactorEnabled),
+    };
+
+    if (profile.twoFactorEnabled && profile.twoFactorSecret) {
+      firestorePayload.twoFactorSecret = profile.twoFactorSecret;
+      firestorePayload.twoFactorConfirmedAt = profile.twoFactorConfirmedAt || new Date().toISOString();
+      firestorePayload.twoFactorBackupCodes = Array.isArray(profile.twoFactorBackupCodes) ? profile.twoFactorBackupCodes : [];
+    } else {
+      // Explicitly remove/delete 2FA secret and backup codes when 2FA is disabled
+      firestorePayload.twoFactorSecret = deleteField();
+      firestorePayload.twoFactorConfirmedAt = deleteField();
+      firestorePayload.twoFactorBackupCodes = [];
+    }
+
+    await setDoc(docRef, firestorePayload, { merge: true });
     console.info("User profile saved to Firestore collection successfully:", docKey);
   } catch (error: any) {
     handleFirestoreError(error, OperationType.WRITE, USERS_COLLECTION);

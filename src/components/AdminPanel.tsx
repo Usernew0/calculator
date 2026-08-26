@@ -1458,9 +1458,31 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
       await saveUserProfileToFirestore(updatedUser);
 
+      // Immediately update local users state so table & badges reflect changes instantly
+      setUsers((prev) =>
+        prev.map((u) => {
+          const uKey = (u.username || u.userId || '').toLowerCase().trim();
+          const targetKey = (userToDisable.username || userToDisable.userId || '').toLowerCase().trim();
+          if (uKey === targetKey) {
+            return {
+              ...u,
+              twoFactorEnabled: false,
+              twoFactorSecret: undefined,
+              twoFactorBackupCodes: [],
+              twoFactorConfirmedAt: undefined,
+            };
+          }
+          return u;
+        })
+      );
+
       if (isSelf) {
         setStoredUserProfile(updatedUser);
         onUpdateCurrentUser?.(updatedUser);
+      }
+
+      if (admin2FaUser) {
+        setAdmin2FaUser(updatedUser);
       }
 
       showNotification(
@@ -3774,7 +3796,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
       {/* Reset & Disable 2FA In-App Confirmation Modal */}
       {userToReset2Fa && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[70] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-3xl border border-rose-500/30 shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
             {/* Modal Header */}
             <div className="p-5 bg-gradient-to-r from-rose-950 via-slate-900 to-slate-900 border-b border-rose-900/40 text-white flex items-center justify-between">

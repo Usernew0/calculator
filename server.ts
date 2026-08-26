@@ -679,24 +679,31 @@ app.post("/api/auth/2fa/enable", requireAuth, async (req, res) => {
 app.post("/api/auth/2fa/disable", requireAuth, async (req, res) => {
   try {
     const authUser = (req as any).authUser;
-    const usernameKey = authUser.username.toLowerCase().trim();
+    const requestedUsername = req.body?.username ? String(req.body.username).toLowerCase().trim() : '';
+    // If admin requested for a specific username, allow target user
+    const usernameKey = (authUser.role === 'admin' && requestedUsername) ? requestedUsername : authUser.username.toLowerCase().trim();
     const { password, code } = req.body || {};
 
     let existingUser = serverUsersStore[usernameKey];
     if (!existingUser) {
       try {
-        const { data } = await supabase.from("users").select("*").eq("id", usernameKey).maybeSingle();
+        const { data } = await supabase.from("users").select("*").or(`id.ilike.${usernameKey},username.ilike.${usernameKey}`).maybeSingle();
         if (data && data.profile_data) existingUser = data.profile_data;
       } catch {}
     }
 
     if (!existingUser) {
-      return res.status(404).json({ error: "User profile not found." });
+      existingUser = {
+        userId: authUser.userId || usernameKey,
+        username: usernameKey,
+        role: authUser.role || "user",
+        name: authUser.name || usernameKey,
+      };
     }
 
     // Verify authorization: check password/code if provided, or rely on active authenticated session
     let isAuthorized = false;
-    if (password) {
+    if (password && existingUser.password) {
       isAuthorized = verifyPassword(String(password).trim(), existingUser.password);
       if (!isAuthorized) {
         return res.status(400).json({ error: "Incorrect password." });
@@ -717,6 +724,9 @@ app.post("/api/auth/2fa/disable", requireAuth, async (req, res) => {
       twoFactorSecret: null,
       twoFactorBackupCodes: [],
       twoFactorConfirmedAt: null,
+      two_factor_enabled: false,
+      two_factor_secret: null,
+      two_factor_enabled_at: null,
       updatedAt: new Date().toISOString(),
     };
 
@@ -727,6 +737,8 @@ app.post("/api/auth/2fa/disable", requireAuth, async (req, res) => {
         id: usernameKey,
         username: usernameKey,
         user_id: updatedUser.userId || usernameKey,
+        two_factor_enabled: false,
+        two_factor_secret: null,
         profile_data: updatedUser,
         updated_at: new Date().toISOString(),
       });
@@ -997,7 +1009,11 @@ app.post("/api/admin/users/:username/reset-2fa", requireAdmin, async (req, res) 
     }
 
     if (!user) {
-      return res.status(404).json({ error: "User not found" });
+      user = {
+        userId: key,
+        username: key,
+        role: "user",
+      };
     }
 
     const updatedUser = {

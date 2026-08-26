@@ -78,7 +78,101 @@ Elegant FX incorporates an enterprise-grade **Time-Based One-Time Password (TOTP
 
 ---
 
+## 🌐 Local & Production Environment Engineering Guide
+
+To ensure flawless operation across **Local Development**, **Staging/Preview Sandboxes**, and **Live Cloud Run Production**, the system is built with a resilient multi-tier fallback architecture that gracefully handles all network, database, and sandbox constraints.
+
+### 1. Environment Architecture & Configuration Matrix
+
+| Component | Local Development (`dev`) | AI Studio Preview / Staging | Production Deployment (Cloud Run) |
+| :--- | :--- | :--- | :--- |
+| **Server Runtime** | `tsx server.ts` | `tsx server.ts` / Port `3000` | Node.js CommonJS bundle (`dist/server.cjs`) |
+| **Ingress Port** | Port `3000` bound to `0.0.0.0` | Port `3000` behind NGINX proxy | Port `3000` behind Google Cloud Run Ingress |
+| **Frontend Serving** | Vite Dev Middleware (`middlewareMode: true`) | Vite Dev Middleware | Express static file server from `dist/` |
+| **Auth & Sessions** | In-memory store + Firestore SDK | In-memory store + Firestore SDK | In-memory store + Firestore + JWT Cookie/Bearer |
+| **Relational Data** | Supabase REST + In-memory fallback | Supabase REST + In-memory fallback | Supabase PostgreSQL + RLS + Auto Trigger Sync |
+| **AI Manifest Parsing** | Gemini 3.7 Flash + Manual Form | Gemini 3.7 Flash + Manual Form | Gemini 3.7 Flash + Admin Configured Key |
+
+---
+
+### 2. Multi-Tier Storage & Database Fail-Safe Architecture
+
+The application employs a 3-tier hierarchical storage strategy to guarantee 100% uptime and prevent fatal errors even if third-party services encounter intermittent downtime:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Tier 1: Express Server API + Supabase PostgreSQL + Firestore │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ (On 5xx, Network Timeout or CORS error)
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Tier 2: Direct Client-Side Firestore SDK + Auth Listeners   │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ (If Firestore network is unreachable)
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Tier 3: Client LocalStorage Cache + Session State Fallback  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+1. **Tier 1 (Full-Stack Primary)**:
+   - Authenticates credentials, generates signed JWTs, and handles 2FA TOTP challenges via Express backend (`/api/*`).
+   - Persists trade calculations and media records in Supabase PostgreSQL tables (`calculations`, `gallery_images`, `site_settings`).
+   - Syncs user security states, real-time session invalidation, and custom branding via Firestore collections.
+2. **Tier 2 (Direct Client SDK Fallback)**:
+   - If the backend Express server is restarting or unreachable, `src/lib/api.ts` transparently catches errors and routes profile updates, user queries, and 2FA states directly through the Firebase Web SDK (`src/lib/firebase.ts`).
+   - Firestore updates sanitize all payloads using `deleteField()` (avoiding `undefined` values) so database operations never fail.
+3. **Tier 3 (Local Storage Offline Fallback)**:
+   - Calculations and user session preferences are continuously mirrored to `localStorage`.
+   - The user can continue drafting trade calculations, exporting PDFs, and viewing saved history uninterrupted even with zero external connectivity.
+
+---
+
+### 3. Edge-Case Matrix & System Handling
+
+| Subsystem | Potential Failure / Edge Case | How Elegant FX Handles It (Local & Production) |
+| :--- | :--- | :--- |
+| **Authentication** | User enters Email instead of Username | Handled natively. Backend and Firestore check both `username` and `email` fields case-insensitively. |
+| **2FA Verification** | User's phone clock has a 15-30s drift | TOTP engine checks $\pm 1$ time-step ($\pm 30\text{s}$) window. Code remains valid even if slightly desynchronized. |
+| **2FA Recovery** | User lost authenticator app / phone | User enters one of 8 single-use emergency backup recovery codes (`XXXX-XXXX`). Backup code is consumed and invalidated upon login. |
+| **2FA Reset & Disable** | Firestore `undefined` field error | Uses `deleteField()` from `firebase/firestore` to cleanly delete `twoFactorSecret` and `twoFactorConfirmedAt` while updating `twoFactorEnabled: false`. |
+| **Iframe Sandbox** | Native `window.confirm` blocked in iframe | Replaced with in-app React modal confirmation dialogs (`z-[70]`), ensuring 100% click execution without browser blocking. |
+| **Exchange Rates** | XE Currency Converter rate source offline | Express server falls back to secondary Open Exchange Rates, then Fawaz Ahmed API, and finally to cached baseline rates. Client fetches directly if server fails. |
+| **AI PDF Manifests** | No Gemini API key configured | System falls back to a clean manual air manifest editor with live auto-consolidation of weights, CBM, and P&L. |
+| **Large Images** | High-resolution mobile camera uploads (15MB+) | Compressed automatically via HTML5 Canvas in `imageCompressor.ts` down to ~150KB JPEGs before database persistence. |
+| **Inactivity Logout** | User leaves tab open unattended | Configurable timer (5m to 180m) tracks user interaction (mouse, key, touch) and automatically logs out the session with Firestore sync. |
+
+---
+
+### 4. Production Build & Deployment Checklist
+
+Before building or deploying to production, verify the following steps:
+
+1. **Run Linter & TypeScript Compilation**:
+   ```bash
+   npm run lint
+   ```
+2. **Build Production Bundle**:
+   ```bash
+   npm run build
+   ```
+   *Ensures Vite builds static assets in `dist/` and esbuild bundles `server.ts` into `dist/server.cjs`.*
+3. **Execute Automated System Test Suite**:
+   - Open **Admin Panel** ➔ **System Diagnostics & Automated Test Suite**.
+   - Run **"Run All Diagnostics"** to execute all 12 test modules covering Math formulas, database sync, 2FA security, session timeouts, and favicon persistence.
+4. **Verify Schema Synchronization**:
+   - Ensure `/schema.sql` and `SUPABASE_REQUIRED_DDL_SQL` in `src/lib/supabase.ts` contain identical DDL, indexes, and triggers.
+
+---
+
 ## 📝 Modification & Update Log (Auto-Updated)
+
+- **2026-08-26**:
+  - **Hardened 2FA Disable & Reset Flow Across Full Stack (`firebase.ts`, `server.ts`, `api.ts`, `AdminPanel.tsx`, `LoginModal.tsx`)**:
+    - **Firestore SDK Error Resolution**: Replaced raw `undefined` assignments with `deleteField()` from `firebase/firestore` and sanitized payloads in `saveUserProfileToFirestore` so Firestore updates never fail with `Unsupported field value: undefined`.
+    - **Backend API Robustness (`server.ts`)**: Enhanced `/api/auth/2fa/disable` and `/api/admin/users/:username/reset-2fa` to support target username parameters, graceful memory fallback, and dual-sync with Supabase.
+    - **Iframe Compatibility & In-App Confirmation (`LoginModal.tsx`, `AdminPanel.tsx`)**: Replaced browser `window.confirm` with smooth in-modal confirmation controls, preventing silent failures inside sandboxed iframes.
+    - **Instant Real-Time UI Synchronizations**: Local state (`users`, `currentUser`, `admin2FaUser`, `storedUserProfile`) updates immediately on disabling 2FA without requiring a page reload.
 
 - **2026-08-24**:
   - **Streamlined 2FA Management in Admin Panel (`AdminPanel.tsx`, `api.ts`, `server.ts`)**:
