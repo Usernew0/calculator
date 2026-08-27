@@ -410,7 +410,10 @@ export async function exportFlightManifestPDF(
 
   const overallMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
   const flightCode = flight.flightNumber || 'FLIGHT';
-  const flightRoute = `${flight.originAirport || 'ORIGIN'} ➔ ${flight.destinationAirport || 'DEST'}`;
+  const isRoundTrip = flight.tripType === 'round_trip' || Boolean(flight.returnFlightNumber);
+  const flightRoute = isRoundTrip
+    ? `${flight.originAirport || 'DEP'} ⇄ ${flight.destinationAirport || 'RET'}`
+    : `${flight.originAirport || 'ORIGIN'} ➔ ${flight.destinationAirport || 'DEST'}`;
 
   const container = document.createElement('div');
   container.style.position = 'fixed';
@@ -473,10 +476,12 @@ export async function exportFlightManifestPDF(
           <h1 style="margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px;">
             ${flight.flightName || flight.flightNumber}
           </h1>
-          <div style="font-size: 12px; color: #94a3b8; margin-top: 4px; display: flex; gap: 16px;">
+          <div style="font-size: 12px; color: #94a3b8; margin-top: 4px; display: flex; flex-wrap: wrap; gap: 16px;">
             <span><strong>${isArabic ? 'الناقل الجوي:' : 'Airline:'}</strong> ${flight.airline || 'N/A'}</span>
             <span><strong>${isArabic ? 'خط السير:' : 'Route:'}</strong> ${flightRoute}</span>
-            <span><strong>${isArabic ? 'تاريخ الرحلة:' : 'Date:'}</strong> ${flight.flightDate || 'N/A'}</span>
+            <span><strong>${isArabic ? (isRoundTrip ? 'تاريخ الذهاب:' : 'تاريخ الرحلة:') : (isRoundTrip ? 'Departure Date:' : 'Date:')}</strong> ${flight.flightDate || 'N/A'}</span>
+            ${isRoundTrip && flight.returnFlightDate ? `<span><strong>${isArabic ? 'تاريخ العودة:' : 'Return Date:'}</strong> ${flight.returnFlightDate}</span>` : ''}
+            ${flight.flightTicketPrice !== undefined && flight.flightTicketPrice !== null ? `<span><strong>${isArabic ? 'سعر تذكرة الطيران:' : 'Flight Ticket Price:'}</strong> ${formatCurrency(flight.flightTicketPrice, flight.flightTicketCurrency || 'USD')}</span>` : ''}
           </div>
         </div>
         <div style="text-align: ${isArabic ? 'left' : 'right'}; font-size: 11px; color: #cbd5e1; font-family: monospace;">

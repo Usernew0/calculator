@@ -66,23 +66,26 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 ---
 
 ### 4. Air Freight & Flight Consignment Manifest Management (With P&L Analysis & AI PDF Parser)
-- **Flight Consignment Manifest Subsystem (`FlightConsignmentModal.tsx` & `DashboardView.tsx`)**: Group multiple historical calculation records under specific flight numbers, dates, airlines, and Master Air Waybills (MAWB).
-- **Physical Weight & Cargo Consolidation Engine (`calculator.ts`)**:
-  - Automatically calculates and sums **Gross Weight (KG)**, **Chargeable Weight (KG)**, **Volumetric CBM**, and **Total Packages/Pieces** across all linked products with unit normalizations (`kg`, `g`, `lb`, `ton`).
-  - Flight cards, KPI overview summary cards, itemized cargo tables, and PDF manifest exports derive weights seamlessly with intelligent fallback for both new and existing flight records.
-- **Flight Profit & Loss (P&L) Engine**:
-  - Automatically consolidates total landed cost, total projected revenue, and net profit/loss for all products linked to a flight.
-  - Highlights profitable flights with emerald badges (`+ Net Profit`) and deficit flights with rose badges (`- Net Loss`), complete with margin % and ROI %.
-  - Expandable **Itemized Cargo Breakdown Accordion** displays product images, quantities, individual item weights (KG), landed costs, revenues, individual profit contributions, and an instant **Unlink** button with real-time recalculation.
-- **Bulk Action & Single-Row Linking**:
-  - Select multiple items in the History Table and click "Consolidate Flight" in the bulk toolbar.
-  - Click the flight icon on any individual table row or mobile card to link or inspect its flight consignment.
-- **Dual Subtab Dashboard**: Switch seamlessly between "Calculation Records" and "Flight Consignments (Air Manifests)" with real-time KPI metrics (Total Flights, Gross Weight in KG, Volume in CBM, Landed Cost in EGP, and Combined Projected Profit).
-- **Flight Route & Manifest Badges**: Calculation records display dynamic flight badges (e.g. `✈️ MS-789 (CAN → CAI)`) linking each product calculation directly to its flight manifest.
-- **Gemini AI Flight Manifest PDF Extraction (`/api/parse-flight-manifest`)**:
-  - Automatically parses flight numbers, carrier airlines, origin & destination airports/countries, Master AWB numbers, gross weights, volumes, and freight rates directly from uploaded PDF documents using Google Gemini multimodal intelligence with resilient fallback models.
-  - **Manual Entry Fallback**: If an AI key is not configured or if manual entry is preferred, users can type or adjust all flight manifest fields manually with live consolidated metrics.
-- **Official Air Cargo Manifest PDF Export (`exportFlightManifestPDF`)**: Export high-resolution branded Air Cargo Manifest documents for airlines and customs authorities with comprehensive product line items, weights, and commercial metrics.
+- **Air Freight & Flight Consignment Manifest Management (With P&L Analysis & AI PDF Parser)**:
+  - **Round-Trip (Departure & Return) Flight Routing**: Full support for both **One-Way** (`one_way`) and **Round-Trip** (`round_trip`) flights, storing departure origin/destination airports and return origin/destination airports, flight numbers, and dates.
+  - **Flight Ticket Price vs. Cargo Freight Distinction**: Explicitly supports entering and recording **Flight Passenger Ticket Price** (`flightTicketPrice` and `flightTicketCurrency`) separately from cargo handling and air freight logistics fees, providing crystal-clear transparency for business travelers, couriers, and cargo consolidations.
+  - **Flight Consignment Manifest Subsystem (`FlightConsignmentModal.tsx` & `DashboardView.tsx`)**: Group multiple historical calculation records under specific flight numbers, dates, airlines, and Master Air Waybills (MAWB).
+  - **Physical Weight & Cargo Consolidation Engine (`calculator.ts`)**:
+    - Automatically calculates and sums **Gross Weight (KG)**, **Chargeable Weight (KG)**, **Volumetric CBM**, and **Total Packages/Pieces** across all linked products with unit normalizations (`kg`, `g`, `lb`, `ton`).
+    - Flight cards, KPI overview summary cards, itemized cargo tables, and PDF manifest exports derive weights seamlessly with intelligent fallback for both new and existing flight records.
+  - **Flight Profit & Loss (P&L) Engine**:
+    - Automatically consolidates total landed cost, total projected revenue, and net profit/loss for all products linked to a flight.
+    - Highlights profitable flights with emerald badges (`+ Net Profit`) and deficit flights with rose badges (`- Net Loss`), complete with margin % and ROI %.
+    - Expandable **Itemized Cargo Breakdown Accordion** displays product images, quantities, individual item weights (KG), landed costs, revenues, individual profit contributions, and an instant **Unlink** button with real-time recalculation.
+  - **Bulk Action & Single-Row Linking**:
+    - Select multiple items in the History Table and click "Consolidate Flight" in the bulk toolbar.
+    - Click the flight icon on any individual table row or mobile card to link or inspect its flight consignment.
+  - **Dual Subtab Dashboard**: Switch seamlessly between "Calculation Records" and "Flight Consignments (Air Manifests)" with real-time KPI metrics (Total Flights, Gross Weight in KG, Volume in CBM, Landed Cost in EGP, and Combined Projected Profit).
+  - **Flight Route & Manifest Badges**: Calculation records display dynamic flight badges (e.g. `✈️ MS-789 (CAN ⇄ CAI)`) linking each product calculation directly to its flight manifest.
+  - **Gemini AI Flight Manifest & Ticket PDF Extraction (`/api/parse-flight-manifest`)**:
+    - Automatically parses round-trip flight itineraries, return flight numbers, return dates, passenger ticket fares, carrier airlines, origin & destination airports/countries, Master AWB numbers, gross weights, volumes, and freight rates directly from uploaded PDF documents using Google Gemini multimodal intelligence with resilient fallback models.
+    - **Manual Entry Fallback**: If an AI key is not configured or if manual entry is preferred, users can type or adjust all flight manifest fields manually with live consolidated metrics.
+  - **Official Air Cargo Manifest PDF Export (`exportFlightManifestPDF`)**: Export high-resolution branded Air Cargo Manifest documents for airlines and customs authorities with comprehensive product line items, weights, commercial metrics, and ticket fare data.
 
 ---
 

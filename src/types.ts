@@ -86,14 +86,20 @@ export interface CalculationInput {
 export interface FlightConsignment {
   id: string; // e.g. "FLIGHT-20260825-MS777-XYZ"
   userId?: string;
-  flightNumber: string; // e.g. "MS 777"
-  flightName: string; // e.g. "MS 777 (CAN ➔ CAI)"
-  airline?: string; // e.g. "EgyptAir Cargo"
-  flightDate: string; // YYYY-MM-DD
-  originAirport: string; // Code or name, e.g. "CAN (Guangzhou)"
-  originCountry?: string; // e.g. "China"
-  destinationAirport: string; // Code or name, e.g. "CAI (Cairo)"
-  destinationCountry?: string; // e.g. "Egypt"
+  tripType?: 'one_way' | 'round_trip'; // Trip type: one-way or round-trip
+  flightNumber: string; // e.g. "MS 777" (Outbound / Departure flight)
+  flightName: string; // e.g. "MS 777 (CAN ➔ CAI)" or "MS 777 / MS 778 (CAI ⇄ CAN)"
+  airline?: string; // e.g. "EgyptAir Cargo" or "Emirates"
+  flightDate: string; // Departure Date: YYYY-MM-DD
+  originAirport: string; // Departure Origin Airport e.g. "CAI (Cairo)" or "CAN (Guangzhou)"
+  originCountry?: string; // e.g. "Egypt" or "China"
+  destinationAirport: string; // Departure Destination Airport e.g. "CAN (Guangzhou)" or "CAI (Cairo)"
+  destinationCountry?: string; // e.g. "China" or "Egypt"
+  // Return flight fields (for round-trip tickets)
+  returnFlightNumber?: string; // e.g. "MS 778"
+  returnFlightDate?: string; // Return Date: YYYY-MM-DD
+  returnOriginAirport?: string; // Return Origin Airport e.g. "CAN (Guangzhou)"
+  returnDestinationAirport?: string; // Return Destination Airport e.g. "CAI (Cairo)"
   awbNumber?: string; // Air Waybill #
   masterAwbNumber?: string; // Master Air Waybill #
   totalGrossWeightKg?: number;
@@ -102,6 +108,8 @@ export interface FlightConsignment {
   totalPackagesCount?: number;
   totalPieces?: number;
   totalVolumeCbm?: number;
+  flightTicketPrice?: number; // Cost of passenger/buyer flight ticket (e.g. 500 USD or 25,000 EGP)
+  flightTicketCurrency?: string; // Currency of the ticket, defaults to targetCurrency or USD
   freightCostUSD?: number;
   totalLandedCost?: number;
   totalLandedCostEGP?: number;
@@ -133,6 +141,7 @@ export interface FlightManifestParsedItem {
 }
 
 export interface FlightManifestParsedData {
+  tripType?: 'one_way' | 'round_trip';
   flightNumber?: string;
   flightDate?: string;
   airline?: string;
@@ -140,10 +149,16 @@ export interface FlightManifestParsedData {
   originCountry?: string;
   destinationAirport?: string;
   destinationCountry?: string;
+  returnFlightNumber?: string;
+  returnFlightDate?: string;
+  returnOriginAirport?: string;
+  returnDestinationAirport?: string;
   awbNumber?: string;
   totalGrossWeightKg?: number;
   totalChargeableWeightKg?: number;
   totalPackagesCount?: number;
+  flightTicketPrice?: number;
+  flightTicketCurrency?: string;
   currency?: string;
   notes?: string;
   items?: FlightManifestParsedItem[];

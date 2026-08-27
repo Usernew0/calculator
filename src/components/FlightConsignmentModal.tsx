@@ -21,12 +21,14 @@ import {
   Unlink2,
   Plus,
   ArrowRight,
+  ArrowLeftRight,
   TrendingUp,
   TrendingDown,
   DollarSign,
   Package,
   Search,
   Check,
+  Ticket,
 } from 'lucide-react';
 import { saveFlightConsignmentApi } from '../lib/api';
 import { saveFlightConsignmentToFirestore, saveCalculationToFirestore } from '../lib/firebase';
@@ -99,6 +101,9 @@ export const FlightConsignmentModal: React.FC<FlightConsignmentModalProps> = ({
   }, [initialFlight, selectedItems, allHistoryCalculations]);
 
   // Form fields for New/Edit Flight
+  const [tripType, setTripType] = useState<'one_way' | 'round_trip'>(
+    initialFlight?.tripType || (initialFlight?.returnFlightNumber ? 'round_trip' : 'one_way')
+  );
   const [flightNumber, setFlightNumber] = useState(initialFlight?.flightNumber || '');
   const [flightName, setFlightName] = useState(initialFlight?.flightName || '');
   const [airline, setAirline] = useState(initialFlight?.airline || '');
@@ -113,8 +118,20 @@ export const FlightConsignmentModal: React.FC<FlightConsignmentModalProps> = ({
   const [destinationCountry, setDestinationCountry] = useState(
     initialFlight?.destinationCountry || ''
   );
+  // Return flight fields
+  const [returnFlightNumber, setReturnFlightNumber] = useState(initialFlight?.returnFlightNumber || '');
+  const [returnFlightDate, setReturnFlightDate] = useState(initialFlight?.returnFlightDate || '');
+  const [returnOriginAirport, setReturnOriginAirport] = useState(initialFlight?.returnOriginAirport || '');
+  const [returnDestinationAirport, setReturnDestinationAirport] = useState(initialFlight?.returnDestinationAirport || '');
+
   const [awbNumber, setAwbNumber] = useState(
     initialFlight?.masterAwbNumber || initialFlight?.awbNumber || ''
+  );
+  const [flightTicketPrice, setFlightTicketPrice] = useState<string>(
+    initialFlight?.flightTicketPrice !== undefined ? String(initialFlight.flightTicketPrice) : ''
+  );
+  const [flightTicketCurrency, setFlightTicketCurrency] = useState<string>(
+    initialFlight?.flightTicketCurrency || 'USD'
   );
   const [status, setStatus] = useState<
     'scheduled' | 'in_transit' | 'customs_clearing' | 'delivered' | 'cancelled'
@@ -280,6 +297,11 @@ export const FlightConsignmentModal: React.FC<FlightConsignmentModalProps> = ({
 
           if (parsed) {
             setExtractedData(parsed);
+            if (parsed.tripType) {
+              setTripType(parsed.tripType);
+            } else if (parsed.returnFlightNumber || parsed.returnFlightDate) {
+              setTripType('round_trip');
+            }
             if (parsed.flightNumber) setFlightNumber(parsed.flightNumber);
             if (parsed.airline) setAirline(parsed.airline);
             if (parsed.flightDate) setFlightDate(parsed.flightDate);
@@ -287,8 +309,28 @@ export const FlightConsignmentModal: React.FC<FlightConsignmentModalProps> = ({
             if (parsed.originCountry) setOriginCountry(parsed.originCountry);
             if (parsed.destinationAirport) setDestinationAirport(parsed.destinationAirport);
             if (parsed.destinationCountry) setDestinationCountry(parsed.destinationCountry);
+            if (parsed.returnFlightNumber) setReturnFlightNumber(parsed.returnFlightNumber);
+            if (parsed.returnFlightDate) setReturnFlightDate(parsed.returnFlightDate);
+            if (parsed.returnOriginAirport) {
+              setReturnOriginAirport(parsed.returnOriginAirport);
+            } else if (parsed.destinationAirport) {
+              // Default return origin to departure destination
+              setReturnOriginAirport(parsed.destinationAirport);
+            }
+            if (parsed.returnDestinationAirport) {
+              setReturnDestinationAirport(parsed.returnDestinationAirport);
+            } else if (parsed.originAirport) {
+              // Default return destination to departure origin
+              setReturnDestinationAirport(parsed.originAirport);
+            }
             if (parsed.awbNumber || parsed.masterAwbNumber)
               setAwbNumber(parsed.awbNumber || parsed.masterAwbNumber);
+            if (parsed.flightTicketPrice !== undefined && parsed.flightTicketPrice !== null) {
+              setFlightTicketPrice(String(parsed.flightTicketPrice));
+            }
+            if (parsed.flightTicketCurrency) {
+              setFlightTicketCurrency(parsed.flightTicketCurrency);
+            }
             if (parsed.notes) setNotes(parsed.notes);
           }
         } catch (err: any) {
@@ -416,16 +458,25 @@ export const FlightConsignmentModal: React.FC<FlightConsignmentModalProps> = ({
       const flightPayload: FlightConsignment = {
         id: flightId,
         userId: initialFlight?.userId || currentUser?.userId || currentUser?.username || 'admin',
+        tripType,
         flightNumber: flightNumber.trim().toUpperCase(),
-        flightName: flightName.trim() || flightNumber.trim().toUpperCase(),
+        flightName: flightName.trim() || (tripType === 'round_trip' && returnFlightNumber
+          ? `${flightNumber.trim().toUpperCase()} / ${returnFlightNumber.trim().toUpperCase()} (${originAirport.trim().toUpperCase() || 'DEP'} ⇄ ${destinationAirport.trim().toUpperCase() || 'RET'})`
+          : `${flightNumber.trim().toUpperCase()} (${originAirport.trim().toUpperCase() || 'DEP'} ➔ ${destinationAirport.trim().toUpperCase() || 'ARR'})`),
         airline: airline.trim(),
         flightDate,
         originAirport: originAirport.trim().toUpperCase(),
         originCountry: originCountry.trim(),
         destinationAirport: destinationAirport.trim().toUpperCase(),
         destinationCountry: destinationCountry.trim(),
+        returnFlightNumber: tripType === 'round_trip' ? returnFlightNumber.trim().toUpperCase() : undefined,
+        returnFlightDate: tripType === 'round_trip' ? returnFlightDate : undefined,
+        returnOriginAirport: tripType === 'round_trip' ? (returnOriginAirport.trim().toUpperCase() || destinationAirport.trim().toUpperCase()) : undefined,
+        returnDestinationAirport: tripType === 'round_trip' ? (returnDestinationAirport.trim().toUpperCase() || originAirport.trim().toUpperCase()) : undefined,
         awbNumber: awbNumber.trim(),
         masterAwbNumber: awbNumber.trim(),
+        flightTicketPrice: flightTicketPrice.trim() !== '' ? Number(flightTicketPrice) : undefined,
+        flightTicketCurrency: flightTicketCurrency.trim() || 'USD',
         status,
         notes: notes.trim(),
         calculationIds: calcIds,
@@ -994,13 +1045,20 @@ export const FlightConsignmentModal: React.FC<FlightConsignmentModalProps> = ({
                   )}
 
                   {extractedData && (
-                    <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                      <span>
-                        {isArabic
-                          ? `تم استخراج البيانات: ${extractedData.airline || ''} ${extractedData.flightNumber || ''} (${extractedData.originAirport || ''} ➔ ${extractedData.destinationAirport || ''})`
-                          : `Extracted: ${extractedData.airline || ''} ${extractedData.flightNumber || ''} (${extractedData.originAirport || ''} ➔ ${extractedData.destinationAirport || ''})`}
-                      </span>
+                    <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                        <span>
+                          {isArabic
+                            ? `تم استخراج البيانات: ${extractedData.airline || ''} ${extractedData.flightNumber || ''} (${extractedData.originAirport || ''} ➔ ${extractedData.destinationAirport || ''})`
+                            : `Extracted: ${extractedData.airline || ''} ${extractedData.flightNumber || ''} (${extractedData.originAirport || ''} ➔ ${extractedData.destinationAirport || ''})`}
+                        </span>
+                      </div>
+                      {extractedData.flightTicketPrice !== undefined && extractedData.flightTicketPrice !== null && (
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 font-bold text-[11px] border border-emerald-500/30">
+                          {isArabic ? 'سعر التذكرة:' : 'Ticket:'} {extractedData.flightTicketPrice} {extractedData.flightTicketCurrency || 'USD'}
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1008,119 +1066,307 @@ export const FlightConsignmentModal: React.FC<FlightConsignmentModalProps> = ({
 
               {/* Flight Form */}
               <form id="new-flight-form" onSubmit={handleSaveNewFlight} className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5">
-                  {/* Flight Number */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      {isArabic ? 'رقم الرحلة الجوية *' : 'Flight Number *'}
-                    </label>
-                    <div className="relative">
-                      <Plane className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
-                      <input
-                        type="text"
-                        required
-                        placeholder="e.g. MS 777 / EK 923"
-                        value={flightNumber}
-                        onChange={(e) => setFlightNumber(e.target.value)}
-                        className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-sky-500 font-bold ${
-                          isArabic ? 'pr-9' : 'pl-9'
-                        }`}
-                      />
-                    </div>
+                {/* Trip Type Selector */}
+                <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                      {isArabic ? 'نوع مسار الرحلة:' : 'Trip Routing Type:'}
+                    </span>
+                  </div>
+                  <div className="inline-flex rounded-xl p-1 bg-slate-200/80 dark:bg-slate-900 border border-slate-300/50 dark:border-slate-700/80">
+                    <button
+                      type="button"
+                      onClick={() => setTripType('one_way')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                        tripType === 'one_way'
+                          ? 'bg-sky-600 text-white shadow-sm'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      <ArrowRight className="w-3.5 h-3.5" />
+                      <span>{isArabic ? 'ذهاب فقط (One-Way)' : 'One-Way'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTripType('round_trip');
+                        if (!returnOriginAirport && destinationAirport) setReturnOriginAirport(destinationAirport);
+                        if (!returnDestinationAirport && originAirport) setReturnDestinationAirport(originAirport);
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                        tripType === 'round_trip'
+                          ? 'bg-sky-600 text-white shadow-sm'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      <ArrowLeftRight className="w-3.5 h-3.5" />
+                      <span>{isArabic ? 'ذهاب وعودة (Round-Trip)' : 'Round-Trip'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Departure (Outbound) Section */}
+                <div className="p-3.5 rounded-2xl bg-sky-500/5 border border-sky-500/15 space-y-3">
+                  <div className="flex items-center gap-2 text-xs font-bold text-sky-700 dark:text-sky-300">
+                    <Plane className="w-4 h-4" />
+                    <span>{tripType === 'round_trip' ? (isArabic ? 'بيانات رحلة الذهاب (Outbound Departure)' : 'Outbound Departure Flight') : (isArabic ? 'بيانات الرحلة الأساسية (Flight Details)' : 'Flight Details')}</span>
                   </div>
 
-                  {/* Airline */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      {isArabic ? 'شركة الطيران الناقلة' : 'Airline Carrier'}
-                    </label>
-                    <div className="relative">
-                      <Building2 className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
-                      <input
-                        type="text"
-                        placeholder="e.g. EgyptAir, Emirates SkyCargo"
-                        value={airline}
-                        onChange={(e) => setAirline(e.target.value)}
-                        className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-sky-500 ${
-                          isArabic ? 'pr-9' : 'pl-9'
-                        }`}
-                      />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5">
+                    {/* Flight Number */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        {tripType === 'round_trip' ? (isArabic ? 'رقم رحلة الذهاب *' : 'Departure Flight # *') : (isArabic ? 'رقم الرحلة الجوية *' : 'Flight Number *')}
+                      </label>
+                      <div className="relative">
+                        <Plane className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
+                        <input
+                          type="text"
+                          required
+                          placeholder="e.g. MS 777 / EK 923"
+                          value={flightNumber}
+                          onChange={(e) => setFlightNumber(e.target.value)}
+                          className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-sky-500 font-bold ${
+                            isArabic ? 'pr-9' : 'pl-9'
+                          }`}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Airline */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        {isArabic ? 'شركة الطيران الناقلة' : 'Airline Carrier'}
+                      </label>
+                      <div className="relative">
+                        <Building2 className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
+                        <input
+                          type="text"
+                          placeholder="e.g. EgyptAir, Emirates SkyCargo"
+                          value={airline}
+                          onChange={(e) => setAirline(e.target.value)}
+                          className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-sky-500 ${
+                            isArabic ? 'pr-9' : 'pl-9'
+                          }`}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Flight Date */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        {tripType === 'round_trip' ? (isArabic ? 'تاريخ الذهاب *' : 'Departure Date *') : (isArabic ? 'تاريخ الرحلة *' : 'Flight Date *')}
+                      </label>
+                      <div className="relative">
+                        <Calendar className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
+                        <input
+                          type="date"
+                          required
+                          value={flightDate}
+                          onChange={(e) => setFlightDate(e.target.value)}
+                          className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-sky-500 ${
+                            isArabic ? 'pr-9' : 'pl-9'
+                          }`}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Origin Airport */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        {isArabic ? 'مطار الإقلاع (المصدر / Departure From)' : 'Departure Airport (Origin)'}
+                      </label>
+                      <div className="relative">
+                        <Compass className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
+                        <input
+                          type="text"
+                          placeholder="e.g. CAI - Cairo"
+                          value={originAirport}
+                          onChange={(e) => {
+                            setOriginAirport(e.target.value);
+                            if (tripType === 'round_trip' && !returnDestinationAirport) {
+                              setReturnDestinationAirport(e.target.value);
+                            }
+                          }}
+                          className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-sky-500 ${
+                            isArabic ? 'pr-9' : 'pl-9'
+                          }`}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Destination Airport */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        {isArabic ? 'مطار الوصول (الوجهة / Arrival To)' : 'Arrival Airport (Destination)'}
+                      </label>
+                      <div className="relative">
+                        <Globe className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
+                        <input
+                          type="text"
+                          placeholder="e.g. CAN - Guangzhou"
+                          value={destinationAirport}
+                          onChange={(e) => {
+                            setDestinationAirport(e.target.value);
+                            if (tripType === 'round_trip' && !returnOriginAirport) {
+                              setReturnOriginAirport(e.target.value);
+                            }
+                          }}
+                          className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-sky-500 ${
+                            isArabic ? 'pr-9' : 'pl-9'
+                          }`}
+                        />
+                      </div>
+                    </div>
+
+                    {/* AWB Number */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        {isArabic ? 'رقم بوليصة الشحن (AWB #)' : 'Air Waybill # (AWB)'}
+                      </label>
+                      <div className="relative">
+                        <FileSpreadsheet className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
+                        <input
+                          type="text"
+                          placeholder="e.g. 077-98765432"
+                          value={awbNumber}
+                          onChange={(e) => setAwbNumber(e.target.value)}
+                          className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-sky-500 ${
+                            isArabic ? 'pr-9' : 'pl-9'
+                          }`}
+                        />
+                      </div>
                     </div>
                   </div>
+                </div>
 
-                  {/* Flight Date */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      {isArabic ? 'تاريخ الرحلة *' : 'Flight Date *'}
-                    </label>
-                    <div className="relative">
-                      <Calendar className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
-                      <input
-                        type="date"
-                        required
-                        value={flightDate}
-                        onChange={(e) => setFlightDate(e.target.value)}
-                        className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-sky-500 ${
-                          isArabic ? 'pr-9' : 'pl-9'
-                        }`}
-                      />
+                {/* Return Flight Section (Only shown if round_trip) */}
+                {tripType === 'round_trip' && (
+                  <div className="p-3.5 rounded-2xl bg-indigo-500/5 border border-indigo-500/20 space-y-3">
+                    <div className="flex items-center gap-2 text-xs font-bold text-indigo-700 dark:text-indigo-300">
+                      <ArrowLeftRight className="w-4 h-4" />
+                      <span>{isArabic ? 'بيانات رحلة العودة (Inbound Return Flight)' : 'Inbound Return Flight Details'}</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3.5">
+                      {/* Return Flight Number */}
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          {isArabic ? 'رقم رحلة العودة' : 'Return Flight #'}
+                        </label>
+                        <div className="relative">
+                          <Plane className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
+                          <input
+                            type="text"
+                            placeholder="e.g. MS 778"
+                            value={returnFlightNumber}
+                            onChange={(e) => setReturnFlightNumber(e.target.value)}
+                            className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold ${
+                              isArabic ? 'pr-9' : 'pl-9'
+                            }`}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Return Flight Date */}
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          {isArabic ? 'تاريخ العودة' : 'Return Date'}
+                        </label>
+                        <div className="relative">
+                          <Calendar className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
+                          <input
+                            type="date"
+                            value={returnFlightDate}
+                            onChange={(e) => setReturnFlightDate(e.target.value)}
+                            className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                              isArabic ? 'pr-9' : 'pl-9'
+                            }`}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Return Origin (Return From) */}
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          {isArabic ? 'الإقلاع في العودة (Return From)' : 'Return From (Origin)'}
+                        </label>
+                        <div className="relative">
+                          <Compass className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
+                          <input
+                            type="text"
+                            placeholder="e.g. CAN - Guangzhou"
+                            value={returnOriginAirport}
+                            onChange={(e) => setReturnOriginAirport(e.target.value)}
+                            className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                              isArabic ? 'pr-9' : 'pl-9'
+                            }`}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Return Destination (Return To) */}
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          {isArabic ? 'الوصول في العودة (Return To)' : 'Return To (Destination)'}
+                        </label>
+                        <div className="relative">
+                          <Globe className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
+                          <input
+                            type="text"
+                            placeholder="e.g. CAI - Cairo"
+                            value={returnDestinationAirport}
+                            onChange={(e) => setReturnDestinationAirport(e.target.value)}
+                            className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                              isArabic ? 'pr-9' : 'pl-9'
+                            }`}
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
+                )}
 
-                  {/* Origin Airport */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+
+                  {/* Flight Ticket Price (Passenger / Travel Ticket Price) */}
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      {isArabic ? 'مطار الإقلاع (المصدر)' : 'Origin Airport'}
-                    </label>
-                    <div className="relative">
-                      <Compass className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
-                      <input
-                        type="text"
-                        placeholder="e.g. CAN - Guangzhou"
-                        value={originAirport}
-                        onChange={(e) => setOriginAirport(e.target.value)}
-                        className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-sky-500 ${
-                          isArabic ? 'pr-9' : 'pl-9'
-                        }`}
-                      />
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                        {isArabic ? 'سعر تذكرة الطيران (Ticket Price)' : 'Flight Ticket Price'}
+                      </label>
+                      <span className="text-[10px] text-sky-600 dark:text-sky-400 font-medium">
+                        {isArabic ? 'منفصلة عن الشحن' : 'Separate from Cargo'}
+                      </span>
                     </div>
-                  </div>
-
-                  {/* Destination Airport */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      {isArabic ? 'مطار الوصول (الوجهة)' : 'Destination Airport'}
-                    </label>
-                    <div className="relative">
-                      <Globe className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
-                      <input
-                        type="text"
-                        placeholder="e.g. CAI - Cairo"
-                        value={destinationAirport}
-                        onChange={(e) => setDestinationAirport(e.target.value)}
-                        className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-sky-500 ${
-                          isArabic ? 'pr-9' : 'pl-9'
-                        }`}
-                      />
-                    </div>
-                  </div>
-
-                  {/* AWB Number */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      {isArabic ? 'رقم بوليصة الشحن (AWB #)' : 'Air Waybill # (AWB)'}
-                    </label>
-                    <div className="relative">
-                      <FileSpreadsheet className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
-                      <input
-                        type="text"
-                        placeholder="e.g. 077-98765432"
-                        value={awbNumber}
-                        onChange={(e) => setAwbNumber(e.target.value)}
-                        className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-sky-500 ${
-                          isArabic ? 'pr-9' : 'pl-9'
-                        }`}
-                      />
+                    <div className="relative flex gap-1.5">
+                      <div className="relative flex-1">
+                        <Ticket className={`w-4 h-4 absolute top-3 text-slate-400 ${isArabic ? 'right-3' : 'left-3'}`} />
+                        <input
+                          type="number"
+                          step="any"
+                          placeholder={isArabic ? 'سعر التذكرة e.g. 450' : 'e.g. 450'}
+                          value={flightTicketPrice}
+                          onChange={(e) => setFlightTicketPrice(e.target.value)}
+                          className={`w-full text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-sky-500 font-semibold ${
+                            isArabic ? 'pr-9' : 'pl-9'
+                          }`}
+                        />
+                      </div>
+                      <select
+                        value={flightTicketCurrency}
+                        onChange={(e) => setFlightTicketCurrency(e.target.value)}
+                        className="w-20 text-xs font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 px-2 focus:outline-none focus:ring-2 focus:ring-sky-500 shrink-0"
+                      >
+                        <option value="USD">USD ($)</option>
+                        <option value="EGP">EGP (ج.م)</option>
+                        <option value="SAR">SAR (ر.س)</option>
+                        <option value="AED">AED (د.إ)</option>
+                        <option value="EUR">EUR (€)</option>
+                        <option value="CNY">CNY (¥)</option>
+                        <option value="TRY">TRY (₺)</option>
+                        <option value="GBP">GBP (£)</option>
+                      </select>
                     </div>
                   </div>
 

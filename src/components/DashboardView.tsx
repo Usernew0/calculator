@@ -55,6 +55,8 @@ import {
   TrendingDown,
   Link2,
   Unlink2,
+  Ticket,
+  ArrowLeftRight,
 } from 'lucide-react';
 import { ClientQuoteModal } from './ClientQuoteModal';
 import { EditTransactionModal } from './EditTransactionModal';
@@ -1858,33 +1860,57 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                                 AWB: <strong className="text-slate-700 dark:text-slate-300">{flight.masterAwbNumber}</strong>
                               </span>
                             )}
+                            {flight.flightTicketPrice !== undefined && flight.flightTicketPrice !== null && (
+                              <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/20 font-bold">
+                                <Ticket className="w-3.5 h-3.5 text-amber-500" />
+                                <span>
+                                  {lang === 'ar' ? 'تذكرة السفر:' : 'Ticket:'} {formatCurrency(flight.flightTicketPrice, flight.flightTicketCurrency || 'USD')}
+                                </span>
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
 
                       {/* Route Display */}
-                      <div className="flex items-center gap-2 p-2.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/80 dark:border-slate-800 text-xs">
-                        <div className="text-center">
-                          <div className="font-mono font-black text-sm text-slate-900 dark:text-white">
-                            {flight.originAirport}
+                      <div className="flex flex-col items-end gap-1">
+                        <div className="flex items-center gap-2 p-2.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/80 dark:border-slate-800 text-xs">
+                          <div className="text-center">
+                            <div className="font-mono font-black text-sm text-slate-900 dark:text-white">
+                              {flight.originAirport}
+                            </div>
+                            <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate max-w-[90px]">
+                              {flight.originCountry}
+                            </div>
                           </div>
-                          <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate max-w-[90px]">
-                            {flight.originCountry}
+                          <div className="flex items-center gap-1 text-sky-500 font-bold px-1">
+                            <span className="w-3 h-px bg-sky-400" />
+                            {flight.tripType === 'round_trip' ? (
+                              <ArrowLeftRight className="w-3.5 h-3.5 text-indigo-500" />
+                            ) : (
+                              <Plane className="w-3.5 h-3.5 rtl:-rotate-90 rotate-90" />
+                            )}
+                            <span className="w-3 h-px bg-sky-400" />
+                          </div>
+                          <div className="text-center">
+                            <div className="font-mono font-black text-sm text-slate-900 dark:text-white">
+                              {flight.destinationAirport}
+                            </div>
+                            <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate max-w-[90px]">
+                              {flight.destinationCountry}
+                            </div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-1 text-sky-500 font-bold px-1">
-                          <span className="w-4 h-px bg-sky-400" />
-                          <Plane className="w-3.5 h-3.5 rtl:-rotate-90 rotate-90" />
-                          <span className="w-4 h-px bg-sky-400" />
-                        </div>
-                        <div className="text-center">
-                          <div className="font-mono font-black text-sm text-slate-900 dark:text-white">
-                            {flight.destinationAirport}
+                        {flight.tripType === 'round_trip' && (
+                          <div className="flex items-center gap-1 text-[10px] font-bold text-indigo-600 dark:text-indigo-400">
+                            <span>{lang === 'ar' ? 'رحلة ذهاب وعودة' : 'Round-Trip'}</span>
+                            {flight.returnFlightDate && (
+                              <span className="font-mono text-slate-500 dark:text-slate-400">
+                                ({lang === 'ar' ? 'العودة:' : 'Ret:'} {flight.returnFlightDate})
+                              </span>
+                            )}
                           </div>
-                          <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate max-w-[90px]">
-                            {flight.destinationCountry}
-                          </div>
-                        </div>
+                        )}
                       </div>
                     </div>
 
@@ -2758,20 +2784,40 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-white/10 text-white border border-white/20">
                     AWB: {selectedFlightForView.masterAwbNumber || 'N/A'}
                   </span>
+                  {selectedFlightForView.flightTicketPrice !== undefined && selectedFlightForView.flightTicketPrice !== null && (
+                    <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
+                      <Ticket className="w-3 h-3 text-amber-400" />
+                      <span>{lang === 'ar' ? 'سعر التذكرة:' : 'Ticket Fare:'} {formatCurrency(selectedFlightForView.flightTicketPrice, selectedFlightForView.flightTicketCurrency || 'USD')}</span>
+                    </span>
+                  )}
                 </div>
                 <h3 className="font-extrabold text-xl sm:text-2xl text-white tracking-tight leading-snug flex items-center gap-2">
                   <Plane className="w-6 h-6 text-sky-400" />
                   <span>{selectedFlightForView.flightNumber}</span>
+                  {selectedFlightForView.tripType === 'round_trip' && selectedFlightForView.returnFlightNumber && (
+                    <span className="text-base text-indigo-300 font-bold">/ {selectedFlightForView.returnFlightNumber}</span>
+                  )}
                   <span className="text-sm font-normal text-sky-300">
-                    ({selectedFlightForView.originAirport} → {selectedFlightForView.destinationAirport})
+                    ({selectedFlightForView.originAirport} {selectedFlightForView.tripType === 'round_trip' ? '⇄' : '→'} {selectedFlightForView.destinationAirport})
                   </span>
                 </h3>
-                <p className="text-xs text-sky-200 mt-1 flex items-center gap-2">
-                  <Calendar className="w-3.5 h-3.5 text-sky-400" />
-                  <span>{selectedFlightForView.flightDate}</span>
+                <div className="text-xs text-sky-200 mt-1 flex flex-wrap items-center gap-2">
+                  <span className="flex items-center gap-1">
+                    <Calendar className="w-3.5 h-3.5 text-sky-400" />
+                    <span>{lang === 'ar' ? 'الذهاب:' : 'Dep:'} {selectedFlightForView.flightDate}</span>
+                  </span>
+                  {selectedFlightForView.tripType === 'round_trip' && selectedFlightForView.returnFlightDate && (
+                    <>
+                      <span>•</span>
+                      <span className="flex items-center gap-1 text-indigo-200 font-semibold">
+                        <ArrowLeftRight className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>{lang === 'ar' ? 'العودة:' : 'Ret:'} {selectedFlightForView.returnFlightDate}</span>
+                      </span>
+                    </>
+                  )}
                   <span>•</span>
-                  <span>{selectedFlightForView.originCountry} → {selectedFlightForView.destinationCountry}</span>
-                </p>
+                  <span>{selectedFlightForView.originCountry} {selectedFlightForView.tripType === 'round_trip' ? '⇄' : '→'} {selectedFlightForView.destinationCountry}</span>
+                </div>
               </div>
 
               <button

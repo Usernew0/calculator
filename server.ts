@@ -1977,20 +1977,27 @@ app.post("/api/parse-flight-manifest", async (req, res) => {
       cleanMimeType = "application/pdf";
     }
 
-    const prompt = `You are an expert Air Freight Logistics Specialist, IATA Air Waybill (AWB) auditor, and Cargo Flight Manifest extractor.
-Examine this Air Waybill (AWB), Flight Cargo Manifest, Airline Bill of Lading, or Air Freight Packing List document carefully.
+    const prompt = `You are an expert Air Freight Logistics Specialist, IATA Air Waybill (AWB) auditor, Travel Itinerary Auditor, and Cargo Flight Manifest extractor.
+Examine this Air Waybill (AWB), Flight Cargo Manifest, Passenger E-Ticket Itinerary, Airline Bill of Lading, or Air Freight Packing List document carefully.
 
-Extract all flight and cargo parameters into a clean, structured JSON object adhering strictly to this schema:
+Extract all flight, passenger ticket, and cargo parameters into a clean, structured JSON object adhering strictly to this schema:
 {
-  "flightNumber": "e.g. MS 777, EK 923, QR 884, TK 654",
-  "airline": "Airline name e.g. EgyptAir Cargo, Emirates SkyCargo, Qatar Airways Cargo, Turkish Cargo, Saudia Cargo",
-  "flightDate": "Flight departure date in YYYY-MM-DD format (or ISO date)",
-  "originAirport": "Airport name and 3-letter IATA code e.g. CAN - Guangzhou Baiyun, PVG - Shanghai Pudong, DXB - Dubai",
-  "originCountry": "Country of origin e.g. China, United Arab Emirates, Turkey",
-  "destinationAirport": "Destination Airport name and 3-letter IATA code e.g. CAI - Cairo International, RUH - King Khalid, JED - King Abdulaziz",
-  "destinationCountry": "Destination Country e.g. Egypt, Saudi Arabia",
-  "awbNumber": "Master or House Air Waybill Number e.g. 077-98765432, 176-12345678",
-  "totalGrossWeightKg": number (total shipment gross weight in KG),
+  "tripType": "'one_way' or 'round_trip' (determine if this is a one-way trip or a round-trip / return journey)",
+  "flightNumber": "Outbound/Departure Flight number e.g. MS 777, EK 923, QR 884, TK 654",
+  "airline": "Airline name e.g. EgyptAir, Emirates, Qatar Airways, Turkish Airlines, Saudia",
+  "flightDate": "Departure date in YYYY-MM-DD format",
+  "originAirport": "Departure origin Airport name and 3-letter IATA code e.g. CAI - Cairo International, CAN - Guangzhou Baiyun, DXB - Dubai",
+  "originCountry": "Country of origin e.g. Egypt, China, United Arab Emirates, Turkey",
+  "destinationAirport": "Departure destination Airport name and 3-letter IATA code e.g. CAN - Guangzhou Baiyun, CAI - Cairo International, RUH - King Khalid",
+  "destinationCountry": "Destination Country e.g. China, Egypt, Saudi Arabia",
+  "returnFlightNumber": "Return/Inbound Flight number if round-trip e.g. MS 778, EK 924",
+  "returnFlightDate": "Return date in YYYY-MM-DD format if round-trip",
+  "returnOriginAirport": "Return origin Airport name and 3-letter IATA code if round-trip e.g. CAN - Guangzhou Baiyun",
+  "returnDestinationAirport": "Return destination Airport name and 3-letter IATA code if round-trip e.g. CAI - Cairo International",
+  "awbNumber": "Master or House Air Waybill Number or Ticket e-ticket booking reference e.g. 077-98765432, 176-12345678, PNR/Booking Ref",
+  "flightTicketPrice": number (flight passenger ticket fare or total booking cost if this is a passenger ticket / travel e-ticket itinerary e.g. 450, 750, 12000),
+  "flightTicketCurrency": "3-letter currency code for ticket fare e.g. USD, EGP, SAR, AED, EUR",
+  "totalGrossWeightKg": number (total shipment gross weight or baggage allowance in KG),
   "totalChargeableWeightKg": number (total chargeable / volumetric weight in KG),
   "totalPackagesCount": number (number of packages / cartons / pieces),
   "currency": "3-letter currency code e.g. USD, EUR, CNY, EGP, SAR",

@@ -201,6 +201,16 @@ Before building or deploying to production, verify the following steps:
 
 ## 📝 Modification & Update Log (Auto-Updated)
 
+- **2026-08-27**:
+  - **Round-Trip (Departure & Return) Flight Manifest & Travel Ticket System (`types.ts`, `server.ts`, `FlightConsignmentModal.tsx`, `DashboardView.tsx`, `pdfExport.ts`, `README.md`, `DOCUMENTATION.md`)**:
+    - **Flexible Trip Routing Selection (One-Way vs. Round-Trip)**: Added dynamic trip type switching (`tripType: 'one_way' | 'round_trip'`) supporting both single one-way cargo flights and complete round-trip commercial travel itineraries.
+    - **Departure & Return Parameter Sets**:
+      - **Departure (Outbound)**: Departure flight number (`flightNumber`), departure date (`flightDate`), origin departure airport (`originAirport`), destination arrival airport (`destinationAirport`), and origin/destination countries.
+      - **Return (Inbound)**: Return flight number (`returnFlightNumber`), return date (`returnFlightDate`), return origin departure airport (`returnOriginAirport`), and return destination arrival airport (`returnDestinationAirport`).
+    - **Multimodal AI Travel Itinerary & E-Ticket Parser (`/api/gemini/extract-flight-manifest`)**: Upgraded the Gemini multimodal extraction engine to automatically detect and extract round-trip journeys, departure/return dates, return flight codes, and combined passenger flight ticket fares (`flightTicketPrice` and `flightTicketCurrency`) alongside cargo line items and air freight logistics data.
+    - **Interactive Dashboard & Inspection Views**: Updated flight consignment cards in `DashboardView.tsx` with dedicated round-trip route badges (`CAI ⇄ CAN`), return date indicator chips, and full round-trip route formatting in inspection modals.
+    - **Air Cargo Manifest & Travel PDF Export (`pdfExport.ts`)**: Integrated round-trip route indicators (`⇄`) with explicit Departure and Return dates and separated flight ticket prices in high-resolution PDF exports.
+
 - **2026-08-26**:
   - **Two-Factor Authentication (2FA) Emergency Backup Code & Disable Full-Stack Engine (`totp.ts`, `server.ts`, `api.ts`, `TwoFactorAuthStep.tsx`, `AdminPanel.tsx`, `LoginModal.tsx`, `firebase.ts`)**:
     - **Emergency Backup Code Ingestion & Multi-Source Reconciliation**:
