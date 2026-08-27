@@ -107,7 +107,9 @@ export const translations = {
     // Section 3: Weight & Dimensions
     section3Title: '3. Weight & Dimensions',
     weightBadge: 'Weight & Volumetric Measures',
-    unitGrossWeightLabel: 'Unit Gross Weight',
+    unitGrossWeightLabel: 'Unit Gross Weight (Per Piece)',
+    totalGrossWeightLabel: 'Total Gross Weight (All Units)',
+    weightInputModeHelp: 'Enter Unit Weight OR Total Batch Weight — changing either calculates the other automatically.',
     totalMeasuredWeightBanner: 'Total Shipment Measured Weight',
     includeDimensionsCheckbox: 'Include Dimensions & Volumetric CBM Calculation',
     lengthLabel: 'Length',
@@ -167,6 +169,9 @@ export const translations = {
     setDesiredMarginMode: 'Set Desired Net Profit Margin %',
     setDesiredMarkupMode: 'Set Desired Cost Markup %',
     targetSellingPriceLabel: 'Target Selling Price',
+    unitTargetSellingPriceLabel: 'Target Selling Price (Per Unit)',
+    totalTargetSellingPriceLabel: 'Total Target Revenue / Selling Price (All Units)',
+    targetPriceInputModeHelp: 'Enter Target Price per Unit OR Total Expected Revenue — changing either calculates the other automatically.',
     targetMarginLabel: 'Target Net Profit Margin (%)',
     targetMarkupLabel: 'Target Cost Markup (%)',
 
@@ -462,7 +467,9 @@ export const translations = {
     // Section 3: Weight & Dimensions
     section3Title: '٣. الوزن والأبعاد',
     weightBadge: 'قياسات الوزن والحجم',
-    unitGrossWeightLabel: 'الوزن القائم للوحدة',
+    unitGrossWeightLabel: 'الوزن القائم للقطعة الواحدة',
+    totalGrossWeightLabel: 'إجمالي الوزن القائم (جميع القطع)',
+    weightInputModeHelp: 'أدخل وزن القطعة الواحدة أو الوزن الإجمالي للشحنة — تعديل أيهما يحسب الآخر تلقائياً.',
     totalMeasuredWeightBanner: 'إجمالي الوزن المقاس للشحنة',
     includeDimensionsCheckbox: 'تضمين الأبعاد وحساب الحجم (CBM)',
     lengthLabel: 'الطول',
@@ -522,6 +529,9 @@ export const translations = {
     setDesiredMarginMode: 'تحديد هامش الربح الصافي المطلوب %',
     setDesiredMarkupMode: 'تحديد نسبة المارك أب (الزيادة) %',
     targetSellingPriceLabel: 'سعر البيع المستهدف',
+    unitTargetSellingPriceLabel: 'سعر البيع المستهدف للقطعة',
+    totalTargetSellingPriceLabel: 'إجمالي سعر البيع / الإيراد المستهدف (جميع القطع)',
+    targetPriceInputModeHelp: 'أدخل سعر البيع المستهدف للقطعة أو إجمالي الإيراد المتوقع لجميع القطع — تعديل أيهما يحسب الآخر تلقائياً.',
     targetMarginLabel: 'هامش الربح الصافي المطلوب (%)',
     targetMarkupLabel: 'نسبة الزيادة على التكلفة (%)',
 

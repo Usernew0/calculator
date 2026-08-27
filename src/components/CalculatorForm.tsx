@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { CalculationInput, FreightMethod, WeightUnit, DimensionUnit, TransportRateBasis, ExtraFee, CalculationResult } from '../types';
-import { POPULAR_CURRENCIES, getCurrencySymbol } from '../data/currencies';
+import { POPULAR_CURRENCIES, getCurrencySymbol, formatCurrency } from '../data/currencies';
 import { calculateTradeAndFreight } from '../utils/calculator';
 import { CalculationResultsCard } from './CalculationResultsCard';
 import { translations, Language } from '../data/translations';
@@ -88,6 +88,8 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
   const [isHistoryProductModalOpen, setIsHistoryProductModalOpen] = useState<boolean>(false);
   const [historyProductSearch, setHistoryProductSearch] = useState<string>('');
   const [rawTotalCost, setRawTotalCost] = useState<string | null>(null);
+  const [rawTotalWeight, setRawTotalWeight] = useState<string | null>(null);
+  const [rawTotalTargetPrice, setRawTotalTargetPrice] = useState<string | null>(null);
 
   // Extract unique saved products from history calculations
   const uniqueHistoryProducts = useMemo(() => {
@@ -242,7 +244,9 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
     field: keyof CalculationInput,
     value: string | number | boolean | ExtraFee[] | undefined
   ) => {
-    setRawTotalCost(null);
+    if (field === 'originalPrice' || field === 'quantity') setRawTotalCost(null);
+    if (field === 'weight' || field === 'quantity') setRawTotalWeight(null);
+    if (field === 'targetValue' || field === 'quantity') setRawTotalTargetPrice(null);
     setFormData((prev) => {
       if ((field === 'title' || field === 'skuSupplier') && typeof value === 'string') {
         return autoFillFromHistory(field, value, prev);
@@ -253,6 +257,9 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
 
   const handleResetForm = () => {
     setFormData(DEFAULT_INPUT);
+    setRawTotalCost(null);
+    setRawTotalWeight(null);
+    setRawTotalTargetPrice(null);
     setNewFeeName('');
     setNewFeeAmount('');
   };
@@ -707,17 +714,21 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Option A: Unit Gross Weight */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
-                  {t.unitGrossWeightLabel}
+                  {t.unitGrossWeightLabel || (lang === 'ar' ? 'الوزن القائم للقطعة الواحدة' : 'Unit Gross Weight (Per Piece)')}
                 </label>
                 <div className="flex gap-2">
                   <input
                     type="number"
-                    step="0.01"
+                    step="0.001"
                     min="0"
                     value={formData.weight || ''}
-                    onChange={(e) => handleChange('weight', e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
+                    onChange={(e) => {
+                      setRawTotalWeight(null);
+                      handleChange('weight', e.target.value === '' ? 0 : parseFloat(e.target.value) || 0);
+                    }}
                     placeholder="e.g. 1.5"
                     className="w-full px-3.5 py-2 text-sm font-extrabold text-slate-900 dark:text-slate-100 bg-white dark:bg-slate-800 rounded-xl border border-slate-300 dark:border-slate-700 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-emerald-500/30"
                   />
@@ -746,31 +757,69 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
                 </div>
               </div>
 
-              {/* Live Weight Calculation Banner */}
-              <div className="bg-slate-900 dark:bg-slate-950 text-white rounded-xl p-3 flex flex-col justify-between shadow-inner border border-slate-800">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-400">
-                    {t.totalMeasuredWeightBanner}
-                  </span>
-                  <span className="text-[10px] text-slate-400 font-mono">
-                    {formData.quantity} units × {formData.weight} {formData.weightUnit}
+              {/* Option B: Total Gross Weight for All Units */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
+                  {t.totalGrossWeightLabel || (lang === 'ar' ? 'إجمالي الوزن القائم (جميع القطع)' : 'Total Gross Weight (All Units)')}
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    step="0.001"
+                    min="0"
+                    value={rawTotalWeight !== null ? rawTotalWeight : ((formData.weight * formData.quantity) > 0 ? (formData.weight * formData.quantity) : '')}
+                    onChange={(e) => {
+                      const valStr = e.target.value;
+                      setRawTotalWeight(valStr);
+                      const numVal = parseFloat(valStr);
+                      const qty = formData.quantity > 0 ? formData.quantity : 1;
+                      if (!isNaN(numVal) && numVal >= 0) {
+                        setFormData((prev) => ({ ...prev, weight: numVal / qty }));
+                      } else if (valStr === '') {
+                        setFormData((prev) => ({ ...prev, weight: 0 }));
+                      }
+                    }}
+                    onBlur={() => setRawTotalWeight(null)}
+                    placeholder={t.totalGrossWeightPlaceholder || 'e.g. 150.0'}
+                    className="w-full px-3.5 py-2 text-sm font-extrabold text-amber-600 dark:text-amber-400 bg-white dark:bg-slate-800 rounded-xl border border-slate-300 dark:border-slate-700 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-amber-500/30"
+                  />
+                  <span className="px-3.5 py-2 text-sm rounded-xl border border-slate-300 dark:border-slate-700 font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center justify-center shrink-0 min-w-[54px]">
+                    {formData.weightUnit}
                   </span>
                 </div>
-                <div className="text-xl font-black text-amber-300 my-0.5">
-                  {(formData.weight * formData.quantity).toLocaleString(undefined, { maximumFractionDigits: 2 })} {formData.weightUnit}
+              </div>
+
+              {/* Live Weight Calculation Banner & Synchronized Helper */}
+              <div className="sm:col-span-2 bg-slate-900 dark:bg-slate-950 text-white rounded-xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-inner border border-slate-800">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-400">
+                      {t.totalMeasuredWeightBanner}
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      {formData.quantity} units × {formData.weight.toLocaleString(undefined, { maximumFractionDigits: 3 })} {formData.weightUnit}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-400 font-medium">
+                    {t.weightInputModeHelp || (lang === 'ar' ? 'أدخل وزن القطعة الواحدة أو الوزن الإجمالي للشحنة — تعديل أيهما يحسب الآخر تلقائياً.' : 'Enter Unit Weight OR Total Batch Weight — changing either calculates the other automatically.')}
+                  </div>
                 </div>
-                <div className="text-[10px] text-slate-300 font-mono flex flex-wrap gap-2">
-                  {formData.weightUnit === 'g' ? (
-                    <>
+
+                <div className="text-right sm:text-end shrink-0">
+                  <div className="text-xl font-black text-amber-300">
+                    {(formData.weight * formData.quantity).toLocaleString(undefined, { maximumFractionDigits: 3 })} {formData.weightUnit}
+                  </div>
+                  <div className="text-[10px] text-slate-300 font-mono flex flex-wrap gap-2 justify-end">
+                    {formData.weightUnit === 'g' ? (
                       <span>≈ {((formData.weight * formData.quantity) / 1000).toFixed(3)} kg</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>≈ {((formData.weight * formData.quantity) * 1000).toLocaleString()} g</span>
-                      <span>•</span>
-                      <span>{((formData.weight * formData.quantity) * 2.20462).toFixed(2)} lbs</span>
-                    </>
-                  )}
+                    ) : (
+                      <>
+                        <span>≈ {((formData.weight * formData.quantity) * 1000).toLocaleString()} g</span>
+                        <span>•</span>
+                        <span>{((formData.weight * formData.quantity) * 2.20462).toFixed(2)} lbs</span>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1220,29 +1269,150 @@ export const CalculatorForm: React.FC<CalculatorFormProps> = ({
                 </select>
               </div>
 
-              <div className="sm:col-span-2">
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
-                  {formData.pricingStrategy === 'target_price'
-                    ? `${t.targetSellingPriceLabel} (${formData.targetCurrency} / Unit)`
-                    : formData.pricingStrategy === 'margin'
-                    ? t.targetMarginLabel
-                    : t.targetMarkupLabel}
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3.5 top-2.5 text-emerald-600 dark:text-emerald-400 font-extrabold text-sm">
-                    {formData.pricingStrategy === 'target_price' ? getCurrencySymbol(formData.targetCurrency) : '%'}
-                  </span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={formData.targetValue || ''}
-                    onChange={(e) => handleChange('targetValue', e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
-                    placeholder="0"
-                    className="w-full pl-9 pr-3.5 py-2 text-sm font-extrabold text-slate-900 dark:text-slate-100 bg-white dark:bg-slate-800 rounded-xl border border-slate-300 dark:border-slate-700 placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-emerald-500/30"
-                  />
-                </div>
-              </div>
+              {formData.pricingStrategy === 'target_price' ? (
+                <>
+                  {/* Option A: Target Selling Price (Per Unit) */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
+                      {t.unitTargetSellingPriceLabel || (lang === 'ar' ? 'سعر البيع المستهدف للقطعة' : 'Target Selling Price (Per Unit)')} ({formData.targetCurrency})
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3.5 top-2.5 text-emerald-600 dark:text-emerald-400 font-extrabold text-sm">
+                        {getCurrencySymbol(formData.targetCurrency)}
+                      </span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={formData.targetValue || ''}
+                        onChange={(e) => {
+                          setRawTotalTargetPrice(null);
+                          handleChange('targetValue', e.target.value === '' ? 0 : parseFloat(e.target.value) || 0);
+                        }}
+                        placeholder="0.00"
+                        className="w-full pl-9 pr-3.5 py-2 text-sm font-extrabold text-slate-900 dark:text-slate-100 bg-white dark:bg-slate-800 rounded-xl border border-slate-300 dark:border-slate-700 placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-emerald-500/30"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Option B: Total Target Revenue / Selling Price for All Units */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
+                      {t.totalTargetSellingPriceLabel || (lang === 'ar' ? 'إجمالي سعر البيع / الإيراد المستهدف (جميع القطع)' : 'Total Target Revenue / Selling Price (All Units)')} ({formData.targetCurrency})
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3.5 top-2.5 text-emerald-600 dark:text-emerald-400 font-extrabold text-sm">
+                        {getCurrencySymbol(formData.targetCurrency)}
+                      </span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={rawTotalTargetPrice !== null ? rawTotalTargetPrice : ((formData.targetValue * formData.quantity) > 0 ? (formData.targetValue * formData.quantity) : '')}
+                        onChange={(e) => {
+                          const valStr = e.target.value;
+                          setRawTotalTargetPrice(valStr);
+                          const numVal = parseFloat(valStr);
+                          const qty = formData.quantity > 0 ? formData.quantity : 1;
+                          if (!isNaN(numVal) && numVal >= 0) {
+                            setFormData((prev) => ({ ...prev, targetValue: numVal / qty }));
+                          } else if (valStr === '') {
+                            setFormData((prev) => ({ ...prev, targetValue: 0 }));
+                          }
+                        }}
+                        onBlur={() => setRawTotalTargetPrice(null)}
+                        placeholder="0.00"
+                        className="w-full pl-9 pr-3.5 py-2 text-sm font-extrabold text-emerald-600 dark:text-emerald-400 bg-white dark:bg-slate-800 rounded-xl border border-slate-300 dark:border-slate-700 placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-emerald-500/30"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Synchronized Helper & Live Target Price Banner */}
+                  <div className="sm:col-span-2 bg-emerald-950/20 dark:bg-emerald-950/40 border border-emerald-500/30 rounded-xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300">
+                          {lang === 'ar' ? 'إجمالي الإيراد المستهدف المتوقع:' : 'Total Expected Target Revenue:'}
+                        </span>
+                        <span className="text-xs font-mono font-bold text-emerald-700 dark:text-emerald-400">
+                          {formData.quantity} units × {getCurrencySymbol(formData.targetCurrency)}{Number(formData.targetValue || 0).toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                        {t.targetPriceInputModeHelp || (lang === 'ar' ? 'أدخل سعر البيع المستهدف للقطعة أو إجمالي الإيراد المتوقع لجميع القطع — تعديل أيهما يحسب الآخر تلقائياً.' : 'Enter Target Price per Unit OR Total Expected Revenue — changing either calculates the other automatically.')}
+                      </div>
+                    </div>
+
+                    <div className="text-right sm:text-end shrink-0">
+                      <div className="text-lg font-black text-emerald-600 dark:text-emerald-400">
+                        {formatCurrency(formData.targetValue * formData.quantity, formData.targetCurrency)}
+                      </div>
+                      <div className="text-[10px] font-semibold text-teal-600 dark:text-teal-400">
+                        {lang === 'ar' ? 'صافي الربح المتوقع:' : 'Expected Net Profit:'} {formatCurrency(calculationResult.totalProfitTarget, formData.targetCurrency)} ({calculationResult.actualMarginPercentage.toFixed(1)}%)
+                      </div>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* Percentage Input (Margin % or Markup %) */}
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
+                      {formData.pricingStrategy === 'margin' ? t.targetMarginLabel : t.targetMarkupLabel}
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3.5 top-2.5 text-emerald-600 dark:text-emerald-400 font-extrabold text-sm">
+                        %
+                      </span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        value={formData.targetValue || ''}
+                        onChange={(e) => handleChange('targetValue', e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
+                        placeholder="0.0"
+                        className="w-full pl-9 pr-3.5 py-2 text-sm font-extrabold text-slate-900 dark:text-slate-100 bg-white dark:bg-slate-800 rounded-xl border border-slate-300 dark:border-slate-700 placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-emerald-500/30"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Live Calculation preview for margin/markup */}
+                  <div className="sm:col-span-2 bg-emerald-950/20 dark:bg-emerald-950/40 border border-emerald-500/30 rounded-xl p-3.5 grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                    <div>
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold block">
+                        {t.suggestedSellingPrice}
+                      </span>
+                      <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">
+                        {formatCurrency(calculationResult.suggestedSellingPricePerUnitTarget, formData.targetCurrency)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold block">
+                        {t.totalLabel} {t.revenueLabel}
+                      </span>
+                      <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">
+                        {formatCurrency(calculationResult.totalRevenueTarget, formData.targetCurrency)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold block">
+                        {t.estNetProfitPerUnit}
+                      </span>
+                      <span className="text-sm font-black text-teal-600 dark:text-teal-400">
+                        {formatCurrency(calculationResult.profitPerUnitTarget, formData.targetCurrency)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold block">
+                        {t.totalLabel} {t.netProfitLabel}
+                      </span>
+                      <span className="text-sm font-black text-teal-600 dark:text-teal-400">
+                        {formatCurrency(calculationResult.totalProfitTarget, formData.targetCurrency)}
+                      </span>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>

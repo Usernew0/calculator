@@ -5,7 +5,41 @@
 
 ---
 
-## 📱 Mobile & Web Responsive Architecture
+## ⚖️ Dual-Mode Unit vs. Total Parameter Synchronization Engine
+
+Elegant FX incorporates a bidirectional parameter synchronization engine across both the main trade calculator (`CalculatorForm.tsx`) and the transaction modification suite (`EditTransactionModal.tsx`). Users can fluidly enter either unit-level specifics or aggregated batch totals across all three core dimensions:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    Bidirectional Parameter Engine (Auto-Sync)                   │
+├──────────────────────────┬──────────────────────────────────────────────────────┤
+│ 1. Supplier Purchase     │ Unit Purchase Price (FOB) ⇄ Total Purchase Batch Cost│
+│ 2. Cargo Weight          │ Gross Weight / Piece     ⇄ Total Gross Batch Weight │
+│ 3. Target Selling Price  │ Target Unit Price        ⇄ Total Expected Revenue   │
+└──────────────────────────┴──────────────────────────────────────────────────────┘
+```
+
+### 1. Mathematical Formulas & Dynamic Bidirectionality
+
+1. **Purchase Price Synchronization**:
+   $$\text{Total FOB Cost} = \text{Unit FOB Price} \times \text{Quantity}$$
+   $$\text{Unit FOB Price} = \frac{\text{Total FOB Cost}}{\text{Quantity}}$$
+   - Modifying Unit Cost instantly recalculates Total Cost.
+   - Typing into Total Cost computes the exact unit price down to fractional cents without rounding distortions.
+
+2. **Cargo Weight Logistics Synchronization**:
+   $$\text{Total Gross Weight} = \text{Gross Weight per Piece} \times \text{Quantity}$$
+   $$\text{Gross Weight per Piece} = \frac{\text{Total Gross Weight}}{\text{Quantity}}$$
+   - Supports seamless unit switching across `kg`, `g`, `lbs`, and `tonnes`.
+   - Freight calculations instantly adapt whether quoting by total shipment weight or individual product specs.
+
+3. **Target Selling Price & Revenue Synchronization**:
+   $$\text{Total Expected Revenue} = \text{Target Unit Price} \times \text{Quantity}$$
+   $$\text{Target Unit Price} = \frac{\text{Total Expected Revenue}}{\text{Quantity}}$$
+   - When using the `target_price` strategy, users can input either their target consumer unit price or total batch sales turnover target.
+   - Live KPI cards instantly display estimated Net Profit, Landed Cost per Unit, and true Profit Margin %.
+
+---
 
 Elegant FX is engineered with a mobile-first, desktop-optimized responsive layout matrix that dynamically scales across all device form factors.
 

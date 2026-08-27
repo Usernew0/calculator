@@ -46,11 +46,17 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
   const [input, setInput] = useState<CalculationInput | null>(null);
   const [transactionDate, setTransactionDate] = useState<string>('');
   const [imagePreview, setImagePreview] = useState<string>('');
+  const [rawTotalCost, setRawTotalCost] = useState<string | null>(null);
+  const [rawTotalWeight, setRawTotalWeight] = useState<string | null>(null);
+  const [rawTotalTargetPrice, setRawTotalTargetPrice] = useState<string | null>(null);
 
   useEffect(() => {
     if (item) {
       setInput({ ...item.input });
       setImagePreview(item.input.invoiceImage || '');
+      setRawTotalCost(null);
+      setRawTotalWeight(null);
+      setRawTotalTargetPrice(null);
       // Format item.createdAt to YYYY-MM-DD for date input
       const dateObj = new Date(item.createdAt);
       const formattedDate = !isNaN(dateObj.getTime())
@@ -259,7 +265,7 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
               {/* Quantity */}
               <div className="space-y-1">
                 <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
@@ -270,11 +276,14 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                   min="1"
                   required
                   value={input.quantity}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    setRawTotalCost(null);
+                    setRawTotalWeight(null);
+                    setRawTotalTargetPrice(null);
                     setInput((prev) =>
                       prev ? { ...prev, quantity: Math.max(1, parseInt(e.target.value) || 1) } : prev
-                    )
-                  }
+                    );
+                  }}
                   className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-900 border-2 border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono font-black text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
@@ -290,12 +299,40 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                   min="0"
                   required
                   value={input.originalPrice}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    setRawTotalCost(null);
                     setInput((prev) =>
                       prev ? { ...prev, originalPrice: Math.max(0, parseFloat(e.target.value) || 0) } : prev
-                    )
-                  }
+                    );
+                  }}
                   className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-900 border-2 border-sky-400 dark:border-sky-500/50 rounded-xl text-xs font-mono font-black text-sky-700 dark:text-sky-300 focus:ring-2 focus:ring-sky-500"
+                />
+              </div>
+
+              {/* Total Purchase Cost (All Units) */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                  {t.totalPriceLabel || (lang === 'ar' ? 'إجمالي الشراء (جميع القطع)' : 'Total Cost (All Units)')}
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={rawTotalCost !== null ? rawTotalCost : ((input.originalPrice * input.quantity) > 0 ? (input.originalPrice * input.quantity) : '')}
+                  onChange={(e) => {
+                    const valStr = e.target.value;
+                    setRawTotalCost(valStr);
+                    const numVal = parseFloat(valStr);
+                    const qty = input.quantity > 0 ? input.quantity : 1;
+                    if (!isNaN(numVal) && numVal >= 0) {
+                      setInput((prev) => (prev ? { ...prev, originalPrice: numVal / qty } : prev));
+                    } else if (valStr === '') {
+                      setInput((prev) => (prev ? { ...prev, originalPrice: 0 } : prev));
+                    }
+                  }}
+                  onBlur={() => setRawTotalCost(null)}
+                  placeholder="0.00"
+                  className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-900 border-2 border-emerald-500/60 dark:border-emerald-500/60 rounded-xl text-xs font-mono font-black text-emerald-600 dark:text-emerald-400 focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
 
@@ -350,7 +387,7 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="space-y-1">
                 <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
                   {t.freightMethodLabel}
@@ -386,20 +423,50 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                 />
               </div>
 
+              {/* Unit Gross Weight */}
               <div className="space-y-1">
                 <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
-                  <span>{t.weightLabel}</span>
+                  <span>{t.unitGrossWeightLabel || (lang === 'ar' ? 'وزن القطعة' : 'Unit Weight')}</span>
                   <span className="text-[10px] uppercase font-mono text-emerald-500">({input.weightUnit || 'kg'})</span>
                 </label>
                 <input
                   type="number"
-                  step="0.01"
+                  step="0.001"
                   min="0"
                   value={input.weight || 0}
-                  onChange={(e) =>
-                    setInput((prev) => (prev ? { ...prev, weight: parseFloat(e.target.value) || 0 } : prev))
-                  }
+                  onChange={(e) => {
+                    setRawTotalWeight(null);
+                    setInput((prev) => (prev ? { ...prev, weight: parseFloat(e.target.value) || 0 } : prev));
+                  }}
                   className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-900 border-2 border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-900 dark:text-white font-extrabold focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              {/* Total Gross Weight (All Units) */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
+                  <span>{t.totalGrossWeightLabel || (lang === 'ar' ? 'إجمالي الوزن (الكل)' : 'Total Weight (All)')}</span>
+                  <span className="text-[10px] uppercase font-mono text-amber-500">({input.weightUnit || 'kg'})</span>
+                </label>
+                <input
+                  type="number"
+                  step="0.001"
+                  min="0"
+                  value={rawTotalWeight !== null ? rawTotalWeight : (((input.weight || 0) * input.quantity) > 0 ? ((input.weight || 0) * input.quantity) : '')}
+                  onChange={(e) => {
+                    const valStr = e.target.value;
+                    setRawTotalWeight(valStr);
+                    const numVal = parseFloat(valStr);
+                    const qty = input.quantity > 0 ? input.quantity : 1;
+                    if (!isNaN(numVal) && numVal >= 0) {
+                      setInput((prev) => (prev ? { ...prev, weight: numVal / qty } : prev));
+                    } else if (valStr === '') {
+                      setInput((prev) => (prev ? { ...prev, weight: 0 } : prev));
+                    }
+                  }}
+                  onBlur={() => setRawTotalWeight(null)}
+                  placeholder="0.00"
+                  className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-900 border-2 border-amber-500/60 dark:border-amber-500/60 rounded-xl text-xs font-mono text-amber-600 dark:text-amber-400 font-extrabold focus:ring-2 focus:ring-amber-500"
                 />
               </div>
             </div>
@@ -469,35 +536,87 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
               </div>
             </div>
 
-            {/* Target Value Input Field */}
+            {/* Target Value Input Field (Per Unit vs Total for Target Price) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
-              <div className="space-y-1">
-                <label className="text-xs font-extrabold text-slate-800 dark:text-slate-200">
-                  {input.pricingStrategy === 'margin'
-                    ? (lang === 'ar' ? 'نسبة هامش الربح المطلوبة (%)' : 'Target Profit Margin (%)')
-                    : input.pricingStrategy === 'markup'
-                    ? (lang === 'ar' ? 'نسبة العلامة فوق التكلفة (%)' : 'Target Markup (%)')
-                    : (lang === 'ar' ? `سعر بيع القطعة المستهدف (${targetCurr})` : `Selling Price per Unit (${targetCurr})`)}
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    required
-                    value={input.targetValue || 0}
-                    onChange={(e) =>
-                      setInput((prev) =>
-                        prev ? { ...prev, targetValue: Math.max(0, parseFloat(e.target.value) || 0) } : prev
-                      )
-                    }
-                    className="w-full px-4 py-3 bg-white dark:bg-slate-900 border-2 border-emerald-500 dark:border-emerald-400 rounded-xl text-sm font-mono font-black text-emerald-600 dark:text-emerald-400 focus:ring-4 focus:ring-emerald-500/20"
-                  />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono">
-                    {input.pricingStrategy === 'margin' || input.pricingStrategy === 'markup' ? '%' : targetCurr}
-                  </span>
+              {input.pricingStrategy === 'target_price' ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <label className="text-xs font-extrabold text-slate-800 dark:text-slate-200">
+                      {t.unitTargetSellingPriceLabel || (lang === 'ar' ? 'سعر البيع للقطعة' : 'Target Price / Unit')} ({targetCurr})
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        required
+                        value={input.targetValue || 0}
+                        onChange={(e) => {
+                          setRawTotalTargetPrice(null);
+                          setInput((prev) =>
+                            prev ? { ...prev, targetValue: Math.max(0, parseFloat(e.target.value) || 0) } : prev
+                          );
+                        }}
+                        className="w-full px-3 py-2.5 bg-white dark:bg-slate-900 border-2 border-emerald-500 dark:border-emerald-400 rounded-xl text-xs font-mono font-black text-emerald-600 dark:text-emerald-400 focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-extrabold text-slate-800 dark:text-slate-200">
+                      {t.totalTargetSellingPriceLabel || (lang === 'ar' ? 'إجمالي الإيراد (الكل)' : 'Total Revenue (All)')} ({targetCurr})
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={rawTotalTargetPrice !== null ? rawTotalTargetPrice : (((input.targetValue || 0) * input.quantity) > 0 ? ((input.targetValue || 0) * input.quantity) : '')}
+                        onChange={(e) => {
+                          const valStr = e.target.value;
+                          setRawTotalTargetPrice(valStr);
+                          const numVal = parseFloat(valStr);
+                          const qty = input.quantity > 0 ? input.quantity : 1;
+                          if (!isNaN(numVal) && numVal >= 0) {
+                            setInput((prev) => (prev ? { ...prev, targetValue: numVal / qty } : prev));
+                          } else if (valStr === '') {
+                            setInput((prev) => (prev ? { ...prev, targetValue: 0 } : prev));
+                          }
+                        }}
+                        onBlur={() => setRawTotalTargetPrice(null)}
+                        placeholder="0.00"
+                        className="w-full px-3 py-2.5 bg-white dark:bg-slate-900 border-2 border-emerald-600 dark:border-emerald-500 rounded-xl text-xs font-mono font-black text-emerald-600 dark:text-emerald-400 focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="space-y-1">
+                  <label className="text-xs font-extrabold text-slate-800 dark:text-slate-200">
+                    {input.pricingStrategy === 'margin'
+                      ? (lang === 'ar' ? 'نسبة هامش الربح المطلوبة (%)' : 'Target Profit Margin (%)')
+                      : (lang === 'ar' ? 'نسبة العلامة فوق التكلفة (%)' : 'Target Markup (%)')}
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      required
+                      value={input.targetValue || 0}
+                      onChange={(e) =>
+                        setInput((prev) =>
+                          prev ? { ...prev, targetValue: Math.max(0, parseFloat(e.target.value) || 0) } : prev
+                        )
+                      }
+                      className="w-full px-4 py-3 bg-white dark:bg-slate-900 border-2 border-emerald-500 dark:border-emerald-400 rounded-xl text-sm font-mono font-black text-emerald-600 dark:text-emerald-400 focus:ring-4 focus:ring-emerald-500/20"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono">
+                      %
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* Profit & Selling Price Live Metric Cards */}
               <div className="grid grid-cols-2 gap-2 bg-white dark:bg-slate-900 p-3 rounded-xl border border-emerald-500/30">

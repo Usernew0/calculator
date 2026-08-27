@@ -8,7 +8,11 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 
 ### 1. Landed Cost & Profit Calculator
 - **Trade Operation Selection**: Choose between **Import** (استيراد) and **Export** (تصدير) shipment operations with saved history, filtering, and report badging.
-- **Dual Cost Entry Mode**: Input either Unit Purchase Price (per piece) OR Total Purchase Cost for all units — changing either automatically calculates the other based on quantity.
+- **Dual-Mode Input Synchronization (Unit vs. Total)**:
+  - **Purchase Price**: Input Unit FOB Cost (per piece) OR Total Batch Purchase Cost.
+  - **Cargo Weight**: Input Gross Weight per Piece OR Total Gross Batch Weight with auto-conversion for `kg`, `g`, `lbs`, and `tonnes`.
+  - **Target Selling Price & Revenue**: Input Target Unit Selling Price OR Total Expected Revenue turnover.
+  - Changing any unit or total parameter dynamically calculates the other in real-time based on quantity.
 - **Instant Product & SKU Auto-Fill**: Selecting or typing a product title or SKU automatically matches saved items from history and pre-fills the title, SKU, category, price, currency, weight, duty rate, and attached cargo/invoice image.
 - **Multi-Currency Support**: Supports EGP (Egyptian Pound), USD, EUR, GBP, JPY, CNY, AED, SAR, BRL, and all major world currencies.
 - **Default Currency**: Default base and target currency set to **EGP** for seamless Egyptian trade calculations.
