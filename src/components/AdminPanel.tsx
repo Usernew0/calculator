@@ -122,6 +122,8 @@ import {
   ExternalLink,
   QrCode,
   Key,
+  Phone,
+  Smartphone,
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -165,6 +167,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     status: 'active' | 'suspended';
     name: string;
     email: string;
+    phone: string;
     company: string;
   }>({
     userId: '',
@@ -174,6 +177,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     status: 'active',
     name: '',
     email: '',
+    phone: '',
     company: '',
   });
 
@@ -1062,14 +1066,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         syncAllDataWithFirestore(),
         runSupabaseAutoCheck(),
       ]);
-      let userList = [...result.users];
+      let userList = deduplicateUsers([...result.users]);
       if (
         currentUser &&
-        !userList.some((u) => u.username?.toLowerCase() === currentUser.username?.toLowerCase())
+        !userList.some((u) => (u.username || u.userId)?.toLowerCase() === (currentUser.username || currentUser.userId)?.toLowerCase())
       ) {
         userList.push(currentUser);
       }
-      setUsers(userList);
+      setUsers(deduplicateUsers(userList));
       setSyncedCalculationsCount(result.calculations.length);
       setLastSyncedAt(result.syncedAt);
       setIsRealtimeConnected(true);
@@ -1119,6 +1123,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       status: 'active',
       name: '',
       email: '',
+      phone: '',
       company: '',
     });
     setIsModalOpen(true);
@@ -1134,6 +1139,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       status: user.status || 'active',
       name: user.name || '',
       email: user.email || '',
+      phone: user.phone || '',
       company: user.company || '',
     });
     setIsModalOpen(true);
@@ -1155,7 +1161,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       status: formData.status,
       name: formData.name.trim() || formData.username.trim(),
       email: formData.email.trim(),
+      phone: formData.phone.trim() || undefined,
       company: formData.company.trim(),
+      twoFactorEnabled: editingUser?.twoFactorEnabled,
+      twoFactorSecret: editingUser?.twoFactorSecret,
+      twoFactorBackupCodes: editingUser?.twoFactorBackupCodes,
       createdAt: editingUser?.createdAt || new Date().toISOString(),
       lastLoginAt: editingUser?.lastLoginAt || new Date().toISOString(),
     };
@@ -1518,7 +1528,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   // Filtered Users List
-  const filteredUsers = users.filter((u) => {
+  const filteredUsers = deduplicateUsers(users).filter((u) => {
     const q = searchQuery.toLowerCase().trim();
     const matchesSearch =
       !q ||
@@ -2956,13 +2966,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredUsers.map((user) => {
+                filteredUsers.map((user, userIdx) => {
                   const isPassVisible = visiblePasswords[user.username] || false;
                   const isCurrentLoggedIn = currentUser?.username?.toLowerCase() === user.username?.toLowerCase();
+                  const rowKey = `${(user.username || user.userId || 'user').toLowerCase().trim()}_${userIdx}`;
 
                   return (
                     <tr
-                      key={user.username || user.userId}
+                      key={rowKey}
                       className="hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors"
                     >
                       {/* Username + ID */}
@@ -3078,16 +3089,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         )}
                       </td>
 
-                      {/* Email */}
+                      {/* Email & Phone */}
                       <td className="p-3.5 text-slate-600 dark:text-slate-300">
                         {user.email ? (
                           <div className="flex items-center gap-1">
-                            <Mail className="w-3 h-3 text-slate-400" />
-                            <span>{user.email}</span>
+                            <Mail className="w-3 h-3 text-slate-400 shrink-0" />
+                            <span className="truncate max-w-[150px]">{user.email}</span>
                           </div>
-                        ) : (
-                          <span className="text-slate-400 italic">No email</span>
-                        )}
+                        ) : null}
+                        {user.phone ? (
+                          <div className="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-mono mt-0.5">
+                            <Phone className="w-3 h-3 shrink-0" />
+                            <span>{user.phone}</span>
+                          </div>
+                        ) : !user.email ? (
+                          <span className="text-slate-400 italic">No contact info</span>
+                        ) : null}
                       </td>
 
                       {/* Actions */}
@@ -3262,8 +3279,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 />
               </div>
 
-              {/* Grid: Email & Company */}
-              <div className="grid grid-cols-2 gap-3">
+              {/* Grid: Email, Phone & Company */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase mb-1">
                     {t.userEmailLabel}
@@ -3278,17 +3295,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase mb-1">
-                    {t.companyLabel}
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase mb-1 flex items-center justify-between">
+                    <span>{lang === 'ar' ? 'رقم الهاتف (SMS)' : 'Phone Number (SMS)'}</span>
+                    <span className="text-[10px] text-emerald-500 font-normal">{lang === 'ar' ? 'لاستعادة كلمة المرور' : 'For password reset'}</span>
                   </label>
                   <input
-                    type="text"
-                    value={formData.company}
-                    onChange={(e) => setFormData({ ...formData, company: e.target.value })}
-                    placeholder="Logistics Inc"
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white font-medium focus:outline-hidden"
+                    type="tel"
+                    value={formData.phone}
+                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                    placeholder="e.g. +201001234567"
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white font-mono font-medium focus:outline-hidden"
                   />
                 </div>
+              </div>
+
+              {/* Company Input */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase mb-1">
+                  {t.companyLabel}
+                </label>
+                <input
+                  type="text"
+                  value={formData.company}
+                  onChange={(e) => setFormData({ ...formData, company: e.target.value })}
+                  placeholder="Logistics Inc"
+                  className="w-full px-3.5 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white font-medium focus:outline-hidden"
+                />
               </div>
 
               {/* Modal Actions */}

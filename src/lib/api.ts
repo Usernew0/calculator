@@ -18,6 +18,7 @@ import {
   saveSiteFaviconToFirestore,
   getSiteFaviconFromFirestore,
 } from './firebase';
+import { saveUserProfileToSupabase } from './supabase';
 
 /**
  * Client-Side API Helper for Secure Backend Operations with resilient Firestore and local fallback
@@ -234,7 +235,10 @@ export async function verify2FaApi(params: {
 // 2FA Setup API (Generate new secret & URI)
 export async function setup2FaApi(username?: string): Promise<{ secret: string; uri: string; backupCodes: string[]; username: string }> {
   try {
-    return await apiFetch('/api/auth/2fa/setup', { method: 'POST' });
+    return await apiFetch('/api/auth/2fa/setup', {
+      method: 'POST',
+      body: JSON.stringify({ username }),
+    });
   } catch (err) {
     console.info('Backend 2FA setup notice, generating client-side keys:', err);
     const targetUser = username || 'admin';
@@ -248,45 +252,61 @@ export async function setup2FaApi(username?: string): Promise<{ secret: string; 
 // 2FA Enable API
 export async function enable2FaApi(params: {
   secret: string;
-  code: string;
+  code?: string;
   backupCodes?: string[];
   username?: string;
+  direct?: boolean;
 }): Promise<{ success: boolean; user: UserProfile; backupCodes: string[] }> {
+  let backendResult: any = null;
   try {
-    return await apiFetch('/api/auth/2fa/enable', {
+    backendResult = await apiFetch('/api/auth/2fa/enable', {
       method: 'POST',
       body: JSON.stringify(params),
     });
   } catch (err) {
-    console.info('Backend 2FA enable notice, applying via Firestore:', err);
-    const cleanDigits = params.code.trim().replace(/[\s-]/g, '');
-    const valid = await verifyTotpCode(cleanDigits, params.secret);
-    if (!valid) {
-      throw new Error('Invalid 6-digit authenticator code. Verification failed.');
+    console.info('Backend 2FA enable notice, applying locally & database sync:', err);
+    if (!params.direct && params.code) {
+      const cleanDigits = params.code.trim().replace(/[\s-]/g, '');
+      const valid = await verifyTotpCode(cleanDigits, params.secret);
+      if (!valid) {
+        throw new Error('Invalid 6-digit authenticator code. Verification failed.');
+      }
     }
-    const username = params.username || 'admin';
-    const existing = (await getUserProfileFromFirestore(username)) || {
-      userId: `USR-${username.toUpperCase()}`,
-      username,
-      name: username,
-      role: username === 'admin' ? 'admin' : 'user',
-      status: 'active',
-      createdAt: new Date().toISOString(),
-      lastLoginAt: new Date().toISOString(),
-    };
-
-    const backupCodes = params.backupCodes && params.backupCodes.length > 0 ? params.backupCodes : generateBackupCodes(8);
-    const updatedUser: UserProfile = {
-      ...existing,
-      lastLoginAt: existing.lastLoginAt || new Date().toISOString(),
-      twoFactorEnabled: true,
-      twoFactorSecret: params.secret,
-      twoFactorBackupCodes: backupCodes,
-      twoFactorConfirmedAt: new Date().toISOString(),
-    };
-    await saveUserProfileToFirestore(updatedUser);
-    return { success: true, user: updatedUser, backupCodes };
   }
+
+  const username = (params.username || backendResult?.user?.username || 'admin').toLowerCase().trim();
+  const existing = (await getUserProfileFromFirestore(username)) || backendResult?.user || {
+    userId: `USR-${username.toUpperCase()}`,
+    username,
+    name: username,
+    role: username === 'admin' ? 'admin' : 'user',
+    status: 'active',
+    createdAt: new Date().toISOString(),
+    lastLoginAt: new Date().toISOString(),
+  };
+
+  const backupCodes = params.backupCodes && params.backupCodes.length > 0
+    ? params.backupCodes
+    : (backendResult?.backupCodes || generateBackupCodes(8));
+
+  const updatedUser: UserProfile = {
+    ...existing,
+    ...(backendResult?.user || {}),
+    twoFactorEnabled: true,
+    twoFactorSecret: params.secret,
+    twoFactorBackupCodes: backupCodes,
+    twoFactorConfirmedAt: new Date().toISOString(),
+    lastLoginAt: existing.lastLoginAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  // Persist directly to BOTH databases (Firestore and Supabase)
+  await Promise.allSettled([
+    saveUserProfileToFirestore(updatedUser),
+    saveUserProfileToSupabase(updatedUser),
+  ]);
+
+  return { success: true, user: updatedUser, backupCodes };
 }
 
 // Supabase Health Check API
@@ -312,35 +332,41 @@ export async function disable2FaApi(params?: {
   code?: string;
   username?: string;
 }): Promise<{ success: boolean; user: UserProfile }> {
+  let res: any = null;
   try {
-    const res = await apiFetch('/api/auth/2fa/disable', {
+    res = await apiFetch('/api/auth/2fa/disable', {
       method: 'POST',
       body: JSON.stringify(params || {}),
     });
-    if (res.user) {
-      await saveUserProfileToFirestore(res.user);
-    }
-    return res;
   } catch (err) {
-    console.info('Backend 2FA disable notice, updating Firestore:', err);
-    const username = params?.username || 'admin';
-    let user = await getUserProfileFromFirestore(username);
-    if (!user) {
-      user = {
-        userId: username,
-        username: username,
-        role: 'user',
-        createdAt: new Date().toISOString(),
-        lastLoginAt: new Date().toISOString(),
-      };
-    }
-    user.twoFactorEnabled = false;
-    user.twoFactorSecret = undefined;
-    user.twoFactorConfirmedAt = undefined;
-    user.twoFactorBackupCodes = [];
-    await saveUserProfileToFirestore(user);
-    return { success: true, user };
+    console.info('Backend 2FA disable notice, updating Firestore & Supabase:', err);
   }
+
+  const username = (params?.username || res?.user?.username || 'admin').toLowerCase().trim();
+  let user = (await getUserProfileFromFirestore(username)) || res?.user || {
+    userId: username,
+    username: username,
+    role: 'user',
+    createdAt: new Date().toISOString(),
+    lastLoginAt: new Date().toISOString(),
+  };
+
+  const updated: UserProfile = {
+    ...user,
+    ...(res?.user || {}),
+    twoFactorEnabled: false,
+    twoFactorSecret: undefined,
+    twoFactorConfirmedAt: undefined,
+    twoFactorBackupCodes: [],
+    updatedAt: new Date().toISOString(),
+  };
+
+  await Promise.allSettled([
+    saveUserProfileToFirestore(updated),
+    saveUserProfileToSupabase(updated),
+  ]);
+
+  return { success: true, user: updated };
 }
 
 // 2FA Regenerate Backup Codes API
@@ -408,30 +434,52 @@ export async function updateSelfProfileApi(payload: {
   newPassword?: string;
   name?: string;
   email?: string;
+  phone?: string;
   company?: string;
   username?: string;
+  twoFactorEnabled?: boolean;
+  twoFactorSecret?: string;
+  twoFactorBackupCodes?: string[];
+  twoFactorConfirmedAt?: string;
 }): Promise<UserProfile> {
+  let backendUser: UserProfile | null = null;
   try {
     const data = await apiFetch('/api/auth/profile', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
-    return data.user;
+    if (data.user) {
+      backendUser = data.user;
+    }
   } catch (err) {
-    console.info('Backend profile update notice, writing to Firestore:', err);
-    const username = payload.username || 'admin';
-    const existing = await getUserProfileFromFirestore(username);
-    if (!existing) throw new Error('User profile not found');
-    const updated: UserProfile = {
-      ...existing,
-      name: payload.name || existing.name,
-      email: payload.email || existing.email,
-      company: payload.company || existing.company,
-      password: payload.newPassword || existing.password,
-    };
-    await saveUserProfileToFirestore(updated);
-    return updated;
+    console.info('Backend profile update notice, writing directly to databases:', err);
   }
+
+  const username = (payload.username || backendUser?.username || 'admin').toLowerCase().trim();
+  const existing = (await getUserProfileFromFirestore(username)) || backendUser;
+  if (!existing) throw new Error('User profile not found');
+
+  const updated: UserProfile = {
+    ...existing,
+    ...(backendUser || {}),
+    name: payload.name !== undefined ? payload.name : existing.name,
+    email: payload.email !== undefined ? payload.email : existing.email,
+    phone: payload.phone !== undefined ? payload.phone : existing.phone,
+    company: payload.company !== undefined ? payload.company : existing.company,
+    password: payload.newPassword || existing.password,
+    twoFactorEnabled: payload.twoFactorEnabled !== undefined ? payload.twoFactorEnabled : existing.twoFactorEnabled,
+    twoFactorSecret: payload.twoFactorSecret !== undefined ? payload.twoFactorSecret : existing.twoFactorSecret,
+    twoFactorBackupCodes: payload.twoFactorBackupCodes !== undefined ? payload.twoFactorBackupCodes : existing.twoFactorBackupCodes,
+    twoFactorConfirmedAt: payload.twoFactorConfirmedAt !== undefined ? payload.twoFactorConfirmedAt : existing.twoFactorConfirmedAt,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await Promise.allSettled([
+    saveUserProfileToFirestore(updated),
+    saveUserProfileToSupabase(updated),
+  ]);
+
+  return updated;
 }
 
 // Users Management API (Admin)
@@ -482,7 +530,7 @@ export async function deleteUserApi(username: string): Promise<boolean> {
 }
 
 // Calculations API
-export async function getCalculationsApi(userId?: string): Promise<CalculationResult[]> {
+export async function getCalculationsApi(userId?: string, userAliases?: string[]): Promise<CalculationResult[]> {
   try {
     const query = userId ? `?userId=${encodeURIComponent(userId)}` : '';
     const data = await apiFetch(`/api/calculations${query}`);
@@ -490,7 +538,7 @@ export async function getCalculationsApi(userId?: string): Promise<CalculationRe
       return data.calculations;
     }
   } catch {}
-  return (await getCalculationsFromFirestore(userId)) || [];
+  return (await getCalculationsFromFirestore(userId, userAliases)) || [];
 }
 
 export async function saveCalculationApi(calc: CalculationResult): Promise<boolean> {
@@ -723,3 +771,130 @@ export async function deleteAiKeyApi(): Promise<{ success: boolean; message: str
     method: 'DELETE',
   });
 }
+
+// ============================================================================
+// Forgot Password & Password Reset API
+// ============================================================================
+
+export interface ForgotPasswordLookupResponse {
+  success: boolean;
+  username: string;
+  maskedPhone?: string;
+  hasPhone: boolean;
+  has2Fa: boolean;
+  error?: string;
+}
+
+export async function forgotPasswordLookupApi(
+  identifier: string
+): Promise<ForgotPasswordLookupResponse> {
+  try {
+    const data = await apiFetch('/api/auth/forgot-password/lookup', {
+      method: 'POST',
+      body: JSON.stringify({ identifier }),
+    });
+    return data;
+  } catch (err: any) {
+    // Fallback: search Firestore directly
+    try {
+      const allUsers = await getAllUsersFromFirestore();
+      const lower = identifier.toLowerCase().trim();
+      const match = allUsers.find(
+        (u) =>
+          (u.username && u.username.toLowerCase() === lower) ||
+          (u.email && u.email.toLowerCase() === lower) ||
+          (u.phone && u.phone.replace(/\D/g, '') === lower.replace(/\D/g, ''))
+      );
+
+      if (!match) {
+        return {
+          success: false,
+          username: '',
+          hasPhone: false,
+          has2Fa: false,
+          error: 'No account found matching this identifier',
+        };
+      }
+
+      const hasPhone = Boolean(match.phone && match.phone.trim().length >= 8);
+      const has2Fa = Boolean(match.twoFactorEnabled || match.two_factor_enabled);
+      let maskedPhone: string | undefined = undefined;
+
+      if (hasPhone && match.phone) {
+        const raw = match.phone.trim();
+        maskedPhone =
+          raw.length > 6
+            ? `${raw.slice(0, 3)}•••••${raw.slice(-3)}`
+            : '•••-•••-••••';
+      }
+
+      return {
+        success: true,
+        username: match.username || match.userId,
+        maskedPhone,
+        hasPhone,
+        has2Fa,
+      };
+    } catch {
+      return {
+        success: false,
+        username: '',
+        hasPhone: false,
+        has2Fa: false,
+        error: err?.message || 'Failed to lookup user account',
+      };
+    }
+  }
+}
+
+export async function sendForgotPasswordPhoneOtpApi(
+  username: string
+): Promise<{ success: boolean; message: string; expiresInSeconds?: number; devOtp?: string; error?: string }> {
+  try {
+    return await apiFetch('/api/auth/forgot-password/send-phone-otp', {
+      method: 'POST',
+      body: JSON.stringify({ username }),
+    });
+  } catch (err: any) {
+    return {
+      success: false,
+      message: '',
+      error: err?.message || 'Failed to send SMS verification code',
+    };
+  }
+}
+
+export async function resetPasswordApi(payload: {
+  username: string;
+  newPassword: string;
+  resetMethod: 'phone_otp' | '2fa';
+  resetCode?: string;
+}): Promise<{ success: boolean; message: string; error?: string }> {
+  try {
+    return await apiFetch('/api/auth/forgot-password/reset', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  } catch (err: any) {
+    // Client-side Firestore fallback
+    try {
+      const user = await getUserProfileFromFirestore(payload.username);
+      if (!user) {
+        return { success: false, message: '', error: 'User account not found' };
+      }
+      user.password = payload.newPassword;
+      await saveUserProfileToFirestore(user);
+      return {
+        success: true,
+        message: 'Password reset successfully',
+      };
+    } catch (fallbackErr: any) {
+      return {
+        success: false,
+        message: '',
+        error: err?.message || fallbackErr?.message || 'Failed to reset password',
+      };
+    }
+  }
+}
+

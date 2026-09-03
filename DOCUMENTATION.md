@@ -201,6 +201,19 @@ Before building or deploying to production, verify the following steps:
 
 ## 📝 Modification & Update Log (Auto-Updated)
 
+- **2026-08-31**:
+  - **Explicit Real-Time Multi-Cloud Database Separation (`firebase.ts`, `supabase.ts`, `DashboardView.tsx`, `DOCUMENTATION.md`, `README.md`)**:
+    - **Firebase Firestore Real-Time Domain**:
+      - **Active User Sessions & Timeouts**: `subscribeToUserSessionStatus` and `subscribeToSessionTimeout` stream live session heartbeats, inactivity timers, and remote revocation from Firestore in real-time.
+      - **Branding & Site Favicon**: `subscribeToSiteFavicon` streams live site branding and favicon updates across all browser instances without reload.
+      - **AI Configuration**: `subscribeToAiKey` streams remote Google Gemini API keys and extraction model preferences.
+      - **2FA Security**: Two-Factor Authentication secrets, emergency backup codes, and enablement states stream and persist via Firestore user security documents.
+      - **User Accounts & Permissions**: `subscribeToUsers` streams real-time additions, updates, role assignments, and account suspensions.
+    - **Supabase (PostgreSQL) Real-Time Domain**:
+      - **Calculations**: `subscribeToCalculationsSupabase` streams real-time landed cost calculations, quote items, and product financial records over Supabase PostgreSQL Realtime channels (`public.calculations`).
+      - **Flight Consignments & Tickets**: Added `subscribeToFlightConsignmentsSupabase` to stream real-time flight manifests, one-way/round-trip itineraries, passenger ticket fares (`flightTicketPrice` and `flightTicketCurrency`), MAWBs, and cargo links over Supabase PostgreSQL Realtime channels (`public.flight_consignments`).
+      - **Cargo Media & Gallery**: Stores and synchronizes product photos and invoice captures in `public.gallery_images`.
+
 - **2026-08-27**:
   - **Round-Trip (Departure & Return) Flight Manifest & Travel Ticket System (`types.ts`, `server.ts`, `FlightConsignmentModal.tsx`, `DashboardView.tsx`, `pdfExport.ts`, `README.md`, `DOCUMENTATION.md`)**:
     - **Flexible Trip Routing Selection (One-Way vs. Round-Trip)**: Added dynamic trip type switching (`tripType: 'one_way' | 'round_trip'`) supporting both single one-way cargo flights and complete round-trip commercial travel itineraries.
@@ -226,6 +239,16 @@ Before building or deploying to production, verify the following steps:
       - Replaced browser `window.confirm` with smooth in-modal confirmation controls, preventing silent failures inside sandboxed iframes.
       - Local state (`users`, `currentUser`, `admin2FaUser`, `storedUserProfile`) updates immediately on disabling 2FA without requiring a page reload.
       - Connected `handleRegenerateAdminBackupCodes` in `src/components/AdminPanel.tsx` and `handleRegenerateBackupCodes` in `src/components/LoginModal.tsx` to update state across Supabase, Firestore, and memory concurrently.
+
+- **2026-08-31**:
+  - **Self-Service Password Reset & Verification Suite (`ForgotPasswordStep.tsx`, `LoginScreen.tsx`, `AdminPanel.tsx`, `server.ts`, `api.ts`, `types.ts`, `translations.ts`)**:
+    - **Dual Verification Methods**: Users can now recover access directly on the Login screen by selecting either:
+      1. **SMS Phone OTP Verification**: Sends a 6-digit one-time code to the user's verified phone number with a 5-minute countdown and resend control.
+      2. **2FA Security Code Verification**: Validates identity via the user's registered Authenticator app (TOTP RFC 6238) or single-use emergency backup recovery codes.
+    - **User Lookup Engine (`/api/auth/forgot-password/lookup`)**: Queries Supabase and Firestore across usernames, emails, or phone numbers to detect eligible recovery methods without leaking sensitive credentials.
+    - **Phone Number Field in User Profile & Admin Panel**: Added `phone` property to `UserProfile`, `schema.sql`, `SUPABASE_REQUIRED_DDL_SQL`, Firestore persistence, and the Admin Panel user edit modal and table.
+    - **Backend Password Reset Endpoints**: Added `/api/auth/forgot-password/lookup`, `/api/auth/forgot-password/send-phone-otp`, and `/api/auth/forgot-password/reset` with cryptographic password hashing and real-time dual-write to Firestore and Supabase.
+    - **Bilingual Arabic & English UI**: Complete localized messaging with interactive step navigation, error feedback, and success redirection back to the login screen.
 
 - **2026-08-24**:
   - **Streamlined 2FA Management in Admin Panel (`AdminPanel.tsx`, `api.ts`, `server.ts`)**:
@@ -427,6 +450,24 @@ Before building or deploying to production, verify the following steps:
     - Updated `DashboardView.tsx` flight cards and KPI overview metrics with dynamic fallbacks to linked calculation items so flights immediately display accurate gross weights, packages, and P&L even with historical records.
     - Added Weight (KG) column and chargeable weight indicators to the itemized cargo breakdown table inside flight cards.
     - Standardized `pdfExport.ts` flight manifest PDF generation using the unified calculation helpers.
+
+- **2026-09-03**:
+  - **User Profile 2FA Enablement & Dual-Database Persistence Hardening**:
+    - Resolved the issue where enabling Two-Factor Authentication (2FA) in the user Profile Settings modal did not properly persist to the database.
+    - Updated `saveUserProfileToFirestore` in `src/lib/firebase.ts` to preserve `twoFactorSecret`, `twoFactorConfirmedAt`, and `twoFactorBackupCodes` whenever `profile.twoFactorEnabled` is true, preventing field omission or accidental deletion.
+    - Updated `saveUserProfileToSupabase`, `getUserProfileFromSupabase`, and `getAllUsersFromSupabase` in `src/lib/supabase.ts` to persist `two_factor_enabled` column and `profile_data.twoFactorEnabled` JSONB, and accurately reconstruct 2FA credentials on fetch.
+    - Enhanced backend endpoints in `server.ts` (`POST /api/auth/2fa/enable`, `POST /api/auth/2fa/setup`, and `POST /api/auth/profile`) with username parameter support, instant activation option (`direct: true`), and Supabase upserting with explicit `two_factor_enabled: true`.
+    - Hardened `enable2FaApi`, `disable2FaApi`, and `updateSelfProfileApi` in `src/lib/api.ts` to write directly to both Firestore and Supabase using non-blocking dual-persistence (`saveUserProfileToFirestore` & `saveUserProfileToSupabase`).
+    - Upgraded `LoginModal.tsx` to pass the authenticated target username to `setup2FaApi`, provide both 6-digit TOTP verification and 1-click Instant Enable & Save Codes actions, and ensure clicking "Save Changes" in the profile settings maintains all active 2FA fields and credentials in the database.
+    - Synchronized `SUPABASE_REQUIRED_DDL_SQL` in `src/lib/supabase.ts` with `schema.sql` at the root.
+
+- **2026-08-31**:
+  - **Multi-Token & Case-Insensitive Calculation Query & Privacy Engine**:
+    - Resolved calculation fetching discrepancies for specific user IDs (e.g. `USR-477108` and associated user aliases) across both Firestore and Supabase PostgreSQL.
+    - Updated `subscribeToCalculations` and `getCalculationsFromFirestore` in `src/lib/firebase.ts` with `matchCalculationToUser` helper that inspects `userId`, `user_id`, `createdBy`, `author`, `username`, and `input.userId`.
+    - Enhanced `getCalculationsFromSupabase` and `subscribeToCalculationsSupabase` in `src/lib/supabase.ts` with PostgreSQL `.or(...)` query filters using `user_id.ilike` and `user_id.eq` across all user candidate tokens.
+    - Upgraded `/api/calculations` in `server.ts` to parse `calculation_data` JSONB reliably, ensure `userId` normalization on mapped objects, and apply case-insensitive candidate token matching on database and in-memory stores.
+    - Enhanced `App.tsx` local storage cache resolution to check both `userId` and `username` storage keys so session switches never drop cached records.
 
 - **2026-08-21**:
   - **Google Gemini AI API Key Management Panel (`AdminPanel.tsx`)**:

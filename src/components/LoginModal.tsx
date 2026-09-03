@@ -102,11 +102,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   }, [isOpen, currentUser]);
 
   const handleStart2FaSetup = async () => {
-    if (!currentUser?.userId) return;
+    const targetUsername = currentUser?.username || currentUser?.userId;
+    if (!targetUsername) return;
     setIs2FaLoading(true);
     setErrorMsg(null);
     try {
-      const data = await setup2FaApi();
+      const data = await setup2FaApi(targetUsername);
       setSetupSecret(data.secret);
       setSetupUri(data.uri);
       setSetupBackupCodes(data.backupCodes);
@@ -121,9 +122,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     }
   };
 
-  const handleConfirmEnable2Fa = async () => {
-    if (!currentUser?.userId) return;
-    if (!verifyTotpCode.trim()) {
+  const handleConfirmEnable2Fa = async (isDirect: boolean = false) => {
+    const targetUsername = currentUser?.username || currentUser?.userId;
+    if (!targetUsername) return;
+    if (!isDirect && !verifyTotpCode.trim()) {
       setErrorMsg(lang === 'ar' ? 'يرجى إدخال رمز الأمان المكون من 6 أرقام للتأكيد' : 'Please enter the 6-digit code to verify');
       return;
     }
@@ -132,15 +134,18 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     try {
       const res = await enable2FaApi({
         secret: setupSecret,
-        code: verifyTotpCode.trim(),
+        code: isDirect ? undefined : verifyTotpCode.trim(),
         backupCodes: setupBackupCodes,
+        username: targetUsername,
+        direct: isDirect,
       });
       setIs2FaEnabled(true);
       setShow2FaSetup(false);
-      setBackupCodesList(setupBackupCodes);
-      setSuccessMsg(lang === 'ar' ? 'تم تفعيل المصادقة الثنائية بنجاح!' : 'Two-factor authentication enabled successfully!');
+      setBackupCodesList(res.backupCodes || setupBackupCodes);
+      setSuccessMsg(lang === 'ar' ? 'تم تفعيل المصادقة الثنائية وحفظها في قاعدة البيانات بنجاح!' : 'Two-factor authentication enabled and saved to database successfully!');
 
       if (res.user) {
+        updateActiveUserProfileIfCurrent(currentUser, res.user);
         setStoredUserProfile(res.user);
         onLoginSuccess(res.user);
       }
@@ -152,13 +157,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   };
 
   const handleDisable2Fa = async () => {
-    if (!currentUser?.userId) return;
+    const targetUsername = currentUser?.username || currentUser?.userId;
+    if (!targetUsername) return;
 
     setIs2FaLoading(true);
     setErrorMsg(null);
     try {
       const res = await disable2FaApi({
-        username: currentUser.username || currentUser.userId,
+        username: targetUsername,
         password: oldPassword.trim() || undefined,
       });
       setIs2FaEnabled(false);
@@ -168,6 +174,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       setSuccessMsg(lang === 'ar' ? 'تم تعطيل المصادقة الثنائية بنجاح' : 'Two-factor authentication disabled successfully');
 
       if (res.user) {
+        updateActiveUserProfileIfCurrent(currentUser, res.user);
         setStoredUserProfile(res.user);
         onLoginSuccess(res.user);
       }
@@ -179,11 +186,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   };
 
   const handleRegenerateBackupCodes = async () => {
-    if (!currentUser?.userId) return;
+    const targetUsername = currentUser?.username || currentUser?.userId;
+    if (!targetUsername) return;
     setIs2FaLoading(true);
     setErrorMsg(null);
     try {
-      const res = await regenerateBackupCodesApi();
+      const res = await regenerateBackupCodesApi(targetUsername);
       setBackupCodesList(res.backupCodes);
       setSuccessMsg(lang === 'ar' ? 'تم توليد رموز استرداد جديدة بنجاح' : 'Backup recovery codes regenerated successfully');
     } catch (err: any) {
@@ -283,22 +291,32 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     setIsSubmitting(true);
 
     try {
-      // Update profile securely via backend API
+      const targetUsername = currentUser?.username || currentUser?.userId || cleanUsername;
+      // Update profile securely via backend API and persist to database
       const updatedUser = await updateSelfProfileApi({
         oldPassword: oldPassword.trim() || undefined,
         newPassword: newPassword.trim() || undefined,
         name: name.trim(),
         email: email.trim(),
         company: company.trim(),
+        username: targetUsername,
+        twoFactorEnabled: is2FaEnabled,
+        twoFactorSecret: is2FaEnabled ? (currentUser?.twoFactorSecret || setupSecret || undefined) : undefined,
+        twoFactorBackupCodes: is2FaEnabled ? (backupCodesList.length > 0 ? backupCodesList : setupBackupCodes) : [],
+        twoFactorConfirmedAt: is2FaEnabled ? (currentUser?.twoFactorConfirmedAt || new Date().toISOString()) : undefined,
       });
 
       const profileToSave: UserProfile = {
         ...updatedUser,
         password: finalPassword,
+        twoFactorEnabled: is2FaEnabled,
+        twoFactorSecret: is2FaEnabled ? (currentUser?.twoFactorSecret || setupSecret || undefined) : undefined,
+        twoFactorBackupCodes: is2FaEnabled ? (backupCodesList.length > 0 ? backupCodesList : setupBackupCodes) : [],
       };
 
       // Persist in User Profile storage slot (Session Token preserved intact)
       updateActiveUserProfileIfCurrent(currentUser, profileToSave);
+      setStoredUserProfile(profileToSave);
 
       const successTxt = lang === 'ar'
         ? 'تم حفظ التغييرات والبيانات بنجاح !'
@@ -653,12 +671,27 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                       <button
                         type="button"
                         disabled={is2FaLoading || verifyTotpCode.length < 6}
-                        onClick={handleConfirmEnable2Fa}
+                        onClick={() => handleConfirmEnable2Fa(false)}
                         className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50"
                       >
                         {is2FaLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
                         <span>{lang === 'ar' ? 'تأكيد وتفعيل' : 'Confirm & Enable'}</span>
                       </button>
+                    </div>
+
+                    <div className="pt-1 text-center">
+                      <button
+                        type="button"
+                        disabled={is2FaLoading}
+                        onClick={() => handleConfirmEnable2Fa(true)}
+                        className="w-full py-2 px-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-bold text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                        <span>{t.twoFactorInstantEnableBtn || (lang === 'ar' ? 'تفعيل فوري وحفظ الرموز' : 'Instant Enable & Save Codes')}</span>
+                      </button>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                        {t.twoFactorInstantEnableSub || (lang === 'ar' ? 'تفعيل فوري وتخزين المفتاح والرموز الاحتياطية في قاعدة البيانات' : 'Instantly activate 2FA and store secret keys and recovery codes to your account')}
+                      </p>
                     </div>
                   </div>
                 </div>

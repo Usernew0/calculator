@@ -11,6 +11,7 @@ import {
 } from '../lib/session';
 import { translations, Language } from '../data/translations';
 import { TwoFactorAuthStep } from './TwoFactorAuthStep';
+import { ForgotPasswordStep } from './ForgotPasswordStep';
 import {
   Ship,
   Lock,
@@ -33,6 +34,7 @@ import {
   Eye,
   EyeOff,
   AlertTriangle,
+  Smartphone,
 } from 'lucide-react';
 
 interface LoginScreenProps {
@@ -71,6 +73,21 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   // 2FA TOTP State
   const [is2FAPending, setIs2FAPending] = useState(false);
   const [pending2FaData, setPending2FaData] = useState<TwoFactorChallengeData | null>(null);
+
+  // Password Reset State
+  const [isForgotPasswordMode, setIsForgotPasswordMode] = useState(false);
+
+  const handleResetSuccess = (user: UserProfile, token?: string) => {
+    const profileSchema: UserProfile = {
+      ...user,
+      lastLoginAt: new Date().toISOString(),
+    };
+    saveFullSession(token || null, profileSchema, rememberMe);
+    setSuccessMsg(t.loginSuccessMsg);
+    setTimeout(() => {
+      onLoginSuccess(profileSchema);
+    }, 600);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -318,7 +335,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               <div className="p-6 bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-700 text-white flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="p-2.5 bg-white/10 rounded-xl backdrop-blur-md">
-                    {is2FAPending ? (
+                    {isForgotPasswordMode ? (
+                      <Smartphone className="w-6 h-6 text-emerald-200" />
+                    ) : is2FAPending ? (
                       <ShieldCheck className="w-6 h-6 text-emerald-200" />
                     ) : (
                       <KeyRound className="w-6 h-6 text-emerald-200" />
@@ -326,26 +345,43 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   </div>
                   <div>
                     <h2 className="text-lg font-bold leading-tight">
-                      {is2FAPending ? t.twoFactorTitle : t.loginModalTitle}
+                      {isForgotPasswordMode
+                        ? t.forgotPasswordTitle
+                        : is2FAPending
+                        ? t.twoFactorTitle
+                        : t.loginModalTitle}
                     </h2>
                     <p className="text-xs text-emerald-100/90 mt-0.5">
-                      {is2FAPending
+                      {isForgotPasswordMode
+                        ? t.forgotPasswordSub
+                        : is2FAPending
                         ? (lang === 'ar' ? 'الخطوة 2 من 2: تأكيد الهوية برمز الأمان' : 'Step 2 of 2: Confirm identity with TOTP security code')
                         : t.loginModalSub}
                     </p>
                   </div>
                 </div>
 
-                {is2FAPending && (
+                {isForgotPasswordMode ? (
+                  <span className="px-2.5 py-1 rounded-lg bg-white/15 text-emerald-200 text-xs font-bold font-mono">
+                    RESET
+                  </span>
+                ) : is2FAPending ? (
                   <span className="px-2.5 py-1 rounded-lg bg-white/15 text-emerald-200 text-xs font-bold font-mono">
                     2FA
                   </span>
-                )}
+                ) : null}
               </div>
 
-              {/* Form Body or 2FA Step */}
+              {/* Form Body or 2FA Step or Forgot Password Step */}
               <div className="p-6">
-                {is2FAPending ? (
+                {isForgotPasswordMode ? (
+                  <ForgotPasswordStep
+                    lang={lang}
+                    initialIdentifier={username.trim()}
+                    onSuccess={handleResetSuccess}
+                    onBackToLogin={() => setIsForgotPasswordMode(false)}
+                  />
+                ) : is2FAPending ? (
                   <TwoFactorAuthStep
                     lang={lang}
                     username={pending2FaData?.username || username.trim()}
@@ -413,9 +449,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       </div>
                     </div>
 
-                    {/* Remember Me Option */}
-                    <div className="flex items-center justify-between pt-0.5">
-                      <label className="flex items-center gap-2.5 text-xs font-semibold text-slate-300 cursor-pointer select-none group">
+                    {/* Remember Me Option & Forgot Password Link */}
+                    <div className="flex items-center justify-between pt-1 gap-2">
+                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-300 cursor-pointer select-none group">
                         <input
                           type="checkbox"
                           checked={rememberMe}
@@ -426,6 +462,19 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                           {t.rememberMeLabel || (lang === 'ar' ? 'تذكر بيانات الدخول' : 'Remember me on this device')}
                         </span>
                       </label>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsForgotPasswordMode(true);
+                          setErrorMsg(null);
+                          setSuccessMsg(null);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold text-emerald-400 hover:text-emerald-300 bg-emerald-950/40 hover:bg-emerald-950/70 border border-emerald-500/30 cursor-pointer transition-all shrink-0"
+                      >
+                        <KeyRound className="w-3.5 h-3.5" />
+                        <span>{t.forgotPasswordLink || (lang === 'ar' ? 'هل نسيت كلمة المرور؟' : 'Forgot Password?')}</span>
+                      </button>
                     </div>
 
                     {/* Invalidation & Security Notice */}

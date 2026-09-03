@@ -46,11 +46,16 @@ export async function saveUserProfileToSupabase(profile: UserProfile): Promise<b
       username: profile.username || docKey,
       full_name: profile.name || profile.username || '',
       email: profile.email || '',
+      phone: profile.phone || '',
       company_name: profile.company || '',
       role: profile.role || 'user',
       status: profile.status || 'active',
       password: profile.password || '',
-      profile_data: profile,
+      two_factor_enabled: Boolean(profile.twoFactorEnabled),
+      profile_data: {
+        ...profile,
+        twoFactorEnabled: Boolean(profile.twoFactorEnabled),
+      },
       updated_at: new Date().toISOString(),
     };
 
@@ -89,17 +94,28 @@ export async function getUserProfileFromSupabase(username: string): Promise<User
 
     if (data) {
       if (data.profile_data) {
-        return data.profile_data as UserProfile;
+        return {
+          ...(data.profile_data as UserProfile),
+          twoFactorEnabled: Boolean(data.two_factor_enabled ?? (data.profile_data as any)?.twoFactorEnabled ?? false),
+          twoFactorSecret: (data.profile_data as any)?.twoFactorSecret || (data as any).two_factor_secret || undefined,
+          twoFactorBackupCodes: (data.profile_data as any)?.twoFactorBackupCodes || (data as any).two_factor_backup_codes || [],
+          twoFactorConfirmedAt: (data.profile_data as any)?.twoFactorConfirmedAt || (data as any).two_factor_confirmed_at || undefined,
+        };
       }
       return {
         userId: data.user_id || data.id,
         username: data.username || data.id,
         name: data.full_name || '',
         email: data.email || '',
+        phone: data.phone || '',
         company: data.company_name || '',
         role: data.role || 'user',
         status: data.status || 'active',
         password: data.password || '',
+        twoFactorEnabled: Boolean(data.two_factor_enabled ?? false),
+        twoFactorSecret: (data as any).two_factor_secret || undefined,
+        twoFactorBackupCodes: (data as any).two_factor_backup_codes || [],
+        twoFactorConfirmedAt: (data as any).two_factor_confirmed_at || undefined,
         createdAt: data.created_at || new Date().toISOString(),
         lastLoginAt: data.updated_at || new Date().toISOString(),
       };
@@ -126,16 +142,23 @@ export async function getAllUsersFromSupabase(): Promise<UserProfile[]> {
 
     if (data && Array.isArray(data)) {
       return data.map((item) => {
-        if (item.profile_data) return item.profile_data as UserProfile;
+        if (item.profile_data) {
+          return {
+            ...(item.profile_data as UserProfile),
+            twoFactorEnabled: Boolean(item.two_factor_enabled ?? (item.profile_data as any)?.twoFactorEnabled ?? false),
+          };
+        }
         return {
           userId: item.user_id || item.id,
           username: item.username || item.id,
           name: item.full_name || '',
           email: item.email || '',
+          phone: item.phone || '',
           company: item.company_name || '',
           role: item.role || 'user',
           status: item.status || 'active',
           password: item.password || '',
+          twoFactorEnabled: Boolean(item.two_factor_enabled ?? false),
           createdAt: item.created_at || new Date().toISOString(),
           lastLoginAt: item.updated_at || new Date().toISOString(),
         };
@@ -204,12 +227,32 @@ export async function saveCalculationToSupabase(calc: CalculationResult): Promis
 
 /**
  * Get calculations from Supabase for a specific user or all
+ * Supports multi-token and case-insensitive matching for user IDs and aliases
  */
-export async function getCalculationsFromSupabase(filterUserId?: string | null): Promise<CalculationResult[]> {
+export async function getCalculationsFromSupabase(
+  filterUserId?: string | null,
+  userAliases?: string[]
+): Promise<CalculationResult[]> {
   try {
     let query = supabase.from(CALCULATIONS_TABLE).select('*');
-    if (filterUserId) {
-      query = query.eq('user_id', filterUserId);
+
+    const targetTokens = [
+      filterUserId,
+      ...(userAliases || []),
+    ]
+      .filter(Boolean)
+      .map((t) => String(t).trim());
+
+    if (targetTokens.length > 0) {
+      // Build PostgreSQL OR clause matching user_id column case-insensitively
+      const orClauses = targetTokens
+        .flatMap((token) => [
+          `user_id.ilike.${token}`,
+          `user_id.eq.${token}`,
+        ])
+        .join(',');
+
+      query = query.or(orClauses);
     }
 
     const { data, error } = await query;
@@ -220,11 +263,22 @@ export async function getCalculationsFromSupabase(filterUserId?: string | null):
 
     if (data && Array.isArray(data)) {
       const results: CalculationResult[] = data.map((item) => {
+        let calcObj: any = item;
         if (item.calculation_data) {
-          return item.calculation_data as CalculationResult;
+          calcObj =
+            typeof item.calculation_data === 'string'
+              ? JSON.parse(item.calculation_data)
+              : item.calculation_data;
         }
-        return item as unknown as CalculationResult;
+
+        return {
+          ...calcObj,
+          id: calcObj.id || item.id,
+          userId: calcObj.userId || item.user_id || filterUserId || '',
+          createdAt: calcObj.createdAt || item.created_at || new Date().toISOString(),
+        } as CalculationResult;
       });
+
       results.sort(
         (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
       );
@@ -264,7 +318,7 @@ export async function clearAllCalculationsFromSupabase(filterUserId?: string | n
   try {
     let query = supabase.from(CALCULATIONS_TABLE).delete();
     if (filterUserId) {
-      query = query.eq('user_id', filterUserId);
+      query = query.or(`user_id.ilike.${filterUserId},user_id.eq.${filterUserId}`);
     } else {
       query = query.neq('id', '');
     }
@@ -286,10 +340,11 @@ export async function clearAllCalculationsFromSupabase(filterUserId?: string | n
  */
 export function subscribeToCalculationsSupabase(
   onUpdate: (data: CalculationResult[]) => void,
-  filterUserId?: string | null
+  filterUserId?: string | null,
+  userAliases?: string[]
 ) {
   // Fetch initial data
-  getCalculationsFromSupabase(filterUserId).then((initialData) => {
+  getCalculationsFromSupabase(filterUserId, userAliases).then((initialData) => {
     onUpdate(initialData);
   });
 
@@ -301,7 +356,7 @@ export function subscribeToCalculationsSupabase(
       'postgres_changes',
       { event: '*', schema: 'public', table: CALCULATIONS_TABLE },
       () => {
-        getCalculationsFromSupabase(filterUserId).then((freshData) => {
+        getCalculationsFromSupabase(filterUserId, userAliases).then((freshData) => {
           onUpdate(freshData);
         });
       }
@@ -532,6 +587,39 @@ export async function deleteFlightConsignmentFromSupabase(id: string): Promise<b
   }
 }
 
+/**
+ * Subscribe to real-time changes in flight_consignments table in Supabase
+ */
+export function subscribeToFlightConsignmentsSupabase(
+  onUpdate: (data: FlightConsignment[]) => void,
+  userId?: string | null
+) {
+  // Fetch initial data
+  getFlightConsignmentsFromSupabase(userId || undefined).then((initialData) => {
+    if (initialData && initialData.length > 0) {
+      onUpdate(initialData);
+    }
+  });
+
+  const channelId = `flights_sub_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const channel = supabase
+    .channel(channelId)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: FLIGHTS_TABLE },
+      () => {
+        getFlightConsignmentsFromSupabase(userId || undefined).then((freshData) => {
+          onUpdate(freshData);
+        });
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}
+
 export interface SupabaseHealthReport {
   isConnected: boolean;
   usersTableOk: boolean;
@@ -565,9 +653,12 @@ CREATE TABLE IF NOT EXISTS public.users (
   username TEXT,
   full_name TEXT,
   email TEXT,
+  phone TEXT,
   company_name TEXT,
   role TEXT DEFAULT 'user',
   status TEXT DEFAULT 'active',
+  is_deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ,
   password TEXT,
   two_factor_enabled BOOLEAN DEFAULT FALSE,
   profile_data JSONB, -- Stores full UserProfile object
@@ -584,6 +675,8 @@ CREATE TABLE IF NOT EXISTS public.calculations (
   total_landed_cost NUMERIC,
   total_revenue NUMERIC,
   net_profit NUMERIC,
+  is_deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ,
   calculation_data JSONB, -- Stores complete calculation, product image (invoiceImage), SKU, and freight specs
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -626,6 +719,8 @@ CREATE TABLE IF NOT EXISTS public.flight_consignments (
   awb_number TEXT,
   document_pdf_url TEXT,
   status TEXT DEFAULT 'scheduled',
+  is_deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ,
   flight_data JSONB, -- Stores full FlightConsignment metadata, weights, and items
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()

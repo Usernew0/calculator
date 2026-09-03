@@ -129,7 +129,9 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 ---
 
 ### 6. Admin Control Panel & Website Settings
-- **TOTP 2FA Enterprise Protection & Table-Based Management**:
+- **TOTP 2FA Enterprise Protection & Self-Profile Enablement**:
+  - **User Profile 2FA Enablement**: Users can enable TOTP Two-Factor Authentication directly from their Profile Settings modal (`LoginModal.tsx`) using QR code scanning, 6-digit TOTP verification, or 1-click instant activation with emergency backup recovery codes.
+  - **Dual Database Persistence**: 2FA status and credentials write simultaneously to Supabase (`users.two_factor_enabled` column & `profile_data` JSONB) and Firestore (`twoFactorEnabled`, `twoFactorSecret`, `twoFactorBackupCodes`, `twoFactorConfirmedAt`), ensuring full cross-device synchronization and zero data loss on profile edits.
   - **Quick Header 2FA Status & Action**: Live badge in the admin navigation header displaying the admin account's current 2FA status with 1-click toggle action to configure or disable 2FA.
   - **User & Admin Table 2FA Actions**: Manage, enable (with QR code and manual key setup), disable, or reset 2FA directly per user/admin row in the User Accounts table.
   - **Interactive 2FA Modal**: Features QR Code scanning, manual Base32 key copying, and 6 single-use emergency backup recovery codes with 1-click clipboard actions.
@@ -181,6 +183,7 @@ The application implements a secure 3-tier full-stack architecture:
 
 1. **Client Tier (Vite Single Page App)**:
    - Zero database credentials or private service keys exposed in client bundles.
+   - **Self-Service Password Reset**: Recover account credentials right from the login screen via **SMS Phone OTP** (with real-time countdown & resend) or **2FA Security Codes** (TOTP Authenticator & Backup Codes).
    - **Two-Factor Authentication (TOTP - RFC 6238)**: Two-step authentication handshake with segmented 6-digit TOTP input, QR code scanning, single-use emergency backup recovery codes, and profile security management.
    - **Isolated Storage Keys (`src/lib/session.ts`)**: Session token (`cargo_session_token`) is stored in a dedicated key separate from the user profile metadata (`cargo_user_profile`), preventing administrative session corruption during user record management.
    - **Admin Session Isolation**: Modifying, creating, or toggling user accounts in the Admin Panel strictly safeguards the active administrator's session credentials.
@@ -196,10 +199,18 @@ The application implements a secure 3-tier full-stack architecture:
    - Rate Limiting: General API rate limit (500 req/1min) and generous login rate limit (60 req/1min).
    - Server-side input validation and parameter sanitization to mitigate SQL/NoSQL Injection & XSS.
 
-3. **Database Tier (Dual Engine: Cloud Firestore + Supabase PostgreSQL)**:
-   - **Google Cloud Firestore**: Primary identity, credentials, active session security, and global `site_settings` (session inactivity timeout & favicon branding). Real-time snapshot listeners for instant session invalidation.
-   - **Supabase PostgreSQL**: Relational calculation records (`calculations`), historical landed cost analytics, and media asset storage (`gallery_images`).
-   - Server-side access using `SUPABASE_SERVICE_ROLE_KEY` and Row-Level Security (RLS) policies.
+3. **Database Tier (Multi-Cloud Real-Time Separation: Cloud Firestore + Supabase PostgreSQL)**:
+   - **Google Cloud Firestore (Real-Time)**:
+     - **Active Sessions & User Security**: Streams live session heartbeats (`subscribeToUserSessionStatus`) and real-time inactivity timeout policy (`subscribeToSessionTimeout`).
+     - **Branding & Site Favicon**: Dynamic real-time favicon & visual branding synchronization (`subscribeToSiteFavicon`).
+     - **AI Configuration**: Live Gemini API key and prompt config distribution (`subscribeToAiKey`).
+     - **Two-Factor Authentication (2FA)**: High-security TOTP secrets, single-use emergency backup codes, and pairing states.
+     - **User Accounts & Roles**: Real-time user directory, credentials, roles, and status enforcement (`subscribeToUsers`).
+   - **Supabase PostgreSQL (Real-Time)**:
+     - **Calculations**: Real-time landed cost calculation records (`calculations` table), margin breakdowns, and multi-history analytics streamed via Postgres Realtime channels (`subscribeToCalculationsSupabase`).
+     - **Flight Consignments & Tickets**: Real-time flight manifests, one-way/round-trip itineraries, passenger ticket fares (`flightTicketPrice` and `flightTicketCurrency`), MAWBs, and cargo links streamed via Postgres Realtime channels (`subscribeToFlightConsignmentsSupabase`).
+     - **Cargo Media & Gallery**: Relational media asset storage (`gallery_images` table) with automated triggers on invoice photo uploads.
+     - **Quotes & Transactional Data**: Client quotes, exports, and batch data.
 
 ---
 

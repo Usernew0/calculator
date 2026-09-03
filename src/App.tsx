@@ -167,10 +167,14 @@ export default function App() {
       return;
     }
 
-    // Load isolated local cache for this specific user
+    // Load isolated local cache for this specific user (checking both userId and username keys)
     const userStorageKey = `cargo_profit_fx_history_${userProfile.userId.toLowerCase()}`;
+    const usernameStorageKey = userProfile.username ? `cargo_profit_fx_history_${userProfile.username.toLowerCase()}` : '';
     try {
-      const saved = localStorage.getItem(userStorageKey);
+      let saved = localStorage.getItem(userStorageKey);
+      if (!saved && usernameStorageKey) {
+        saved = localStorage.getItem(usernameStorageKey);
+      }
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
@@ -187,24 +191,40 @@ export default function App() {
 
     setCalculatorInitialInput(null);
 
-    const filterUserId = (userProfile.role === 'admin' || userProfile.username?.toLowerCase() === 'admin')
-      ? null
-      : userProfile.userId;
+    const isAdmin = userProfile.role === 'admin' || userProfile.username?.toLowerCase() === 'admin';
+    const filterUserId = isAdmin ? null : userProfile.userId;
+    const userAliases = isAdmin
+      ? []
+      : [userProfile.userId, userProfile.username, userProfile.email].filter(Boolean) as string[];
 
     const unsubscribe = subscribeToCalculations(
       (firestoreData) => {
         if (Array.isArray(firestoreData)) {
           if (filterUserId) {
-            const userOnly = firestoreData.filter(
-              (item) => item.userId === filterUserId || item.userId?.toLowerCase() === filterUserId.toLowerCase()
-            );
+            const userOnly = firestoreData.filter((item: any) => {
+              const itemTokens = [
+                item.userId,
+                item.user_id,
+                item.createdBy,
+                item.author,
+                item.username,
+                item.input?.userId,
+              ]
+                .filter(Boolean)
+                .map((t: string) => String(t).toLowerCase().trim());
+
+              const targetTokens = userAliases.map((t) => t.toLowerCase().trim());
+              return itemTokens.some((t) => targetTokens.includes(t));
+            });
             setHistory(userOnly);
           } else {
             setHistory(firestoreData);
           }
         }
       },
-      filterUserId
+      filterUserId,
+      undefined,
+      userAliases
     );
 
     return () => {

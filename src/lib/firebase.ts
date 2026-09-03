@@ -31,6 +31,7 @@ import {
   saveFlightConsignmentToSupabase,
   getFlightConsignmentsFromSupabase,
   deleteFlightConsignmentFromSupabase,
+  subscribeToFlightConsignmentsSupabase,
 } from "./supabase";
 
 // Initialize Firebase App
@@ -132,25 +133,35 @@ export async function seedDefaultDataToFirestore(): Promise<void> {
 }
 
 /**
- * Deduplicate users by unique userId (or lowercased username) so accounts are never duplicated in state or UI.
+ * Deduplicate users by unique userId and username so accounts are never duplicated in state or UI.
  */
 export function deduplicateUsers(usersList: UserProfile[]): UserProfile[] {
   const usersMap = new Map<string, UserProfile>();
+  const seenUsernames = new Map<string, string>(); // lowercase username -> canonical key
 
   usersList.forEach((u) => {
     if (!u) return;
-    const key = (u.userId || u.username || '').toLowerCase().trim();
-    if (!key) return;
+    const usernameNorm = (u.username || '').toLowerCase().trim();
+    const userIdNorm = (u.userId || '').toLowerCase().trim();
+    const primaryKey = usernameNorm || userIdNorm;
+    if (!primaryKey) return;
 
-    if (!usersMap.has(key)) {
-      usersMap.set(key, u);
-    } else {
-      const existing = usersMap.get(key)!;
-      usersMap.set(key, {
+    // Check if we've already recorded this user by username or userId
+    let existingKey = seenUsernames.get(usernameNorm) || (userIdNorm ? seenUsernames.get(userIdNorm) : undefined);
+
+    if (existingKey && usersMap.has(existingKey)) {
+      const existing = usersMap.get(existingKey)!;
+      usersMap.set(existingKey, {
         ...existing,
         ...u,
+        username: existing.username || u.username,
+        userId: existing.userId || u.userId,
         createdAt: existing.createdAt || u.createdAt,
       });
+    } else {
+      usersMap.set(primaryKey, u);
+      if (usernameNorm) seenUsernames.set(usernameNorm, primaryKey);
+      if (userIdNorm) seenUsernames.set(userIdNorm, primaryKey);
     }
   });
 
@@ -195,6 +206,7 @@ export async function saveUserProfileToFirestore(
       username: profile.username || docKey,
       name: profile.name ?? '',
       email: profile.email ?? '',
+      phone: profile.phone ?? '',
       company: profile.company ?? '',
       role: profile.role ?? 'user',
       status: profile.status ?? 'active',
@@ -205,12 +217,20 @@ export async function saveUserProfileToFirestore(
       twoFactorEnabled: Boolean(profile.twoFactorEnabled),
     };
 
-    if (profile.twoFactorEnabled && profile.twoFactorSecret) {
-      firestorePayload.twoFactorSecret = profile.twoFactorSecret;
-      firestorePayload.twoFactorConfirmedAt = profile.twoFactorConfirmedAt || new Date().toISOString();
-      firestorePayload.twoFactorBackupCodes = Array.isArray(profile.twoFactorBackupCodes) ? profile.twoFactorBackupCodes : [];
-    } else {
-      // Explicitly remove/delete 2FA secret and backup codes when 2FA is disabled
+    if (profile.twoFactorEnabled) {
+      if (profile.twoFactorSecret) {
+        firestorePayload.twoFactorSecret = profile.twoFactorSecret;
+      }
+      if (profile.twoFactorConfirmedAt) {
+        firestorePayload.twoFactorConfirmedAt = profile.twoFactorConfirmedAt;
+      } else {
+        firestorePayload.twoFactorConfirmedAt = new Date().toISOString();
+      }
+      if (Array.isArray(profile.twoFactorBackupCodes) && profile.twoFactorBackupCodes.length > 0) {
+        firestorePayload.twoFactorBackupCodes = profile.twoFactorBackupCodes;
+      }
+    } else if (profile.twoFactorEnabled === false) {
+      // Explicitly remove/delete 2FA secret and backup codes ONLY when 2FA is explicitly disabled
       firestorePayload.twoFactorSecret = deleteField();
       firestorePayload.twoFactorConfirmedAt = deleteField();
       firestorePayload.twoFactorBackupCodes = [];
@@ -387,13 +407,51 @@ export function subscribeToUserSessionStatus(
 }
 
 /**
+ * Helper to test whether a calculation document matches a user identifier or list of aliases
+ */
+export function matchCalculationToUser(
+  item: any,
+  filterUserId?: string | null,
+  userAliases?: string[]
+): boolean {
+  if (!filterUserId && (!userAliases || userAliases.length === 0)) return true;
+
+  const targetTokens = [
+    filterUserId,
+    ...(userAliases || []),
+  ]
+    .filter(Boolean)
+    .map((t) => String(t).toLowerCase().trim());
+
+  if (targetTokens.length === 0) return true;
+
+  const itemTokens = [
+    item.userId,
+    item.user_id,
+    item.createdBy,
+    item.created_by,
+    item.author,
+    item.traderId,
+    item.username,
+    item.input?.userId,
+    item.input?.author,
+    item.input?.username,
+  ]
+    .filter(Boolean)
+    .map((t) => String(t).toLowerCase().trim());
+
+  return itemTokens.some((token) => targetTokens.includes(token));
+}
+
+/**
  * Subscribe to real-time updates from Supabase and Firestore calculations collection
- * Supports per-user data privacy filtering via filterUserId
+ * Supports per-user data privacy filtering via filterUserId and userAliases
  */
 export function subscribeToCalculations(
   onUpdate: (data: CalculationResult[]) => void,
   filterUserId?: string | null,
-  onError?: (error: unknown) => void
+  onError?: (error: unknown) => void,
+  userAliases?: string[]
 ) {
   let unsubFirestore: (() => void) | null = null;
   let unsubSupabase: (() => void) | null = null;
@@ -405,7 +463,7 @@ export function subscribeToCalculations(
       if (supabaseData && supabaseData.length > 0) {
         onUpdate(supabaseData);
       }
-    }, filterUserId);
+    }, filterUserId, userAliases);
   } catch (err) {
     console.warn("Supabase calculations subscription notice:", err);
   }
@@ -425,13 +483,14 @@ export function subscribeToCalculations(
           (snapshot) => {
             const results: CalculationResult[] = [];
             snapshot.forEach((docSnap) => {
-              const data = docSnap.data() as CalculationResult;
-              if (
-                !filterUserId ||
-                data.userId === filterUserId ||
-                data.userId?.toLowerCase() === filterUserId.toLowerCase()
-              ) {
-                results.push(data);
+              const data = docSnap.data() as any;
+              if (matchCalculationToUser(data, filterUserId, userAliases)) {
+                // Normalize userId field
+                const normalizedItem: CalculationResult = {
+                  ...data,
+                  userId: data.userId || data.user_id || filterUserId || '',
+                };
+                results.push(normalizedItem);
               }
             });
             // Ensure client-side sorting by date desc
@@ -524,15 +583,19 @@ export async function deleteCalculationFromFirestore(id: string): Promise<void> 
 /**
  * Fetch calculation records from Firestore (with Supabase fallback)
  */
-export async function getCalculationsFromFirestore(filterUserId?: string): Promise<CalculationResult[]> {
+export async function getCalculationsFromFirestore(filterUserId?: string, userAliases?: string[]): Promise<CalculationResult[]> {
   const list: CalculationResult[] = [];
   try {
     await ensureAuth();
     const qSnap = await getDocs(query(collection(db, CALCULATIONS_COLLECTION)));
     qSnap.forEach((docSnap) => {
-      const data = docSnap.data() as CalculationResult;
-      if (!filterUserId || data.userId === filterUserId || data.userId?.toLowerCase() === filterUserId.toLowerCase()) {
-        list.push(data);
+      const data = docSnap.data() as any;
+      if (matchCalculationToUser(data, filterUserId, userAliases)) {
+        const normalizedItem: CalculationResult = {
+          ...data,
+          userId: data.userId || data.user_id || filterUserId || '',
+        };
+        list.push(normalizedItem);
       }
     });
     list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
@@ -542,7 +605,7 @@ export async function getCalculationsFromFirestore(filterUserId?: string): Promi
 
   if (list.length === 0) {
     try {
-      const supaList = await getCalculationsFromSupabase(filterUserId);
+      const supaList = await getCalculationsFromSupabase(filterUserId, userAliases);
       if (supaList && supaList.length > 0) return supaList;
     } catch {}
   }
@@ -985,37 +1048,76 @@ export async function deleteFlightConsignmentFromFirestore(id: string): Promise<
 
 /**
  * Subscribe to Flight Consignments real-time changes
+ * Supabase Postgres Realtime is prioritized for live flight & ticket manifest updates, with Firestore fallback
  */
 export function subscribeToFlightConsignments(
   callback: (flights: FlightConsignment[]) => void,
   filterUserId?: string | null
 ): () => void {
+  let unsubFirestore: (() => void) | null = null;
+  let unsubSupabase: (() => void) | null = null;
+  let isCancelled = false;
+
+  // 1. Subscribe to Supabase real-time channel
   try {
-    const q = query(collection(db, FLIGHTS_COLLECTION), orderBy('createdAt', 'desc'));
-    return onSnapshot(
-      q,
-      (snapshot) => {
-        const flights: FlightConsignment[] = [];
-        snapshot.forEach((docSnap) => {
-          const data = docSnap.data() as FlightConsignment;
-          if (
-            !filterUserId ||
-            filterUserId === 'admin' ||
-            data.userId === filterUserId ||
-            data.userId?.toLowerCase() === filterUserId.toLowerCase()
-          ) {
-            flights.push({ ...data, id: docSnap.id });
-          }
-        });
-        callback(flights);
-      },
-      (error) => {
-        console.info("Notice: Flight real-time subscription status:", error?.message || error);
+    unsubSupabase = subscribeToFlightConsignmentsSupabase((supabaseFlights) => {
+      if (supabaseFlights && supabaseFlights.length > 0) {
+        callback(supabaseFlights);
       }
-    );
+    }, filterUserId);
   } catch (err) {
-    console.info("Realtime flights subscription setup notice:", err);
-    return () => {};
+    console.warn("Supabase flights subscription notice:", err);
   }
+
+  // 2. Subscribe to Firestore onSnapshot
+  const initSubscription = async () => {
+    await ensureAuth();
+    if (isCancelled) return;
+
+    try {
+      const q = query(collection(db, FLIGHTS_COLLECTION), orderBy('createdAt', 'desc'));
+      unsubFirestore = onSnapshot(
+        q,
+        (snapshot) => {
+          const flights: FlightConsignment[] = [];
+          snapshot.forEach((docSnap) => {
+            const data = docSnap.data() as FlightConsignment;
+            if (
+              !filterUserId ||
+              filterUserId === 'admin' ||
+              data.userId === filterUserId ||
+              data.userId?.toLowerCase() === filterUserId.toLowerCase()
+            ) {
+              flights.push({ ...data, id: docSnap.id });
+            }
+          });
+          if (flights.length > 0) {
+            callback(flights);
+          }
+        },
+        (error) => {
+          console.info("Notice: Flight real-time subscription status:", error?.message || error);
+        }
+      );
+    } catch (err) {
+      console.info("Realtime flights subscription setup notice:", err);
+    }
+  };
+
+  initSubscription();
+
+  return () => {
+    isCancelled = true;
+    if (unsubSupabase) {
+      try {
+        unsubSupabase();
+      } catch {}
+    }
+    if (unsubFirestore) {
+      try {
+        unsubFirestore();
+      } catch {}
+    }
+  };
 }
 

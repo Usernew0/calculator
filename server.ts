@@ -385,6 +385,7 @@ app.post("/api/auth/login", async (req, res) => {
             username: data.username || data.email || cleanUsername,
             name: data.full_name || data.name || data.username || cleanUsername,
             email: data.email || "",
+            phone: data.phone || data.profile_data?.phone || "",
             company: data.company_name || data.company || "",
             role: (cleanUsername === "admin" || data.role === "admin") ? "admin" : "user",
             status: data.status === "suspended" ? "suspended" : "active",
@@ -644,9 +645,12 @@ app.post("/api/auth/2fa/verify", async (req, res) => {
 app.post("/api/auth/2fa/setup", requireAuth, async (req, res) => {
   try {
     const authUser = (req as any).authUser;
-    const usernameKey = authUser.username.toLowerCase().trim();
+    const requestedUsername = req.body?.username ? String(req.body.username).toLowerCase().trim() : '';
+    const username = (requestedUsername && (authUser.role === 'admin' || requestedUsername === authUser.username.toLowerCase()))
+      ? requestedUsername
+      : authUser.username;
     const secret = generateTotpSecret(20);
-    const uri = generateTotpUri(authUser.username, secret);
+    const uri = generateTotpUri(username, secret);
     const backupCodes = generateBackupCodes(6);
 
     res.json({
@@ -654,7 +658,7 @@ app.post("/api/auth/2fa/setup", requireAuth, async (req, res) => {
       secret,
       uri,
       backupCodes,
-      username: authUser.username,
+      username,
     });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to generate 2FA setup details: " + (err?.message || "") });
@@ -665,24 +669,34 @@ app.post("/api/auth/2fa/setup", requireAuth, async (req, res) => {
 app.post("/api/auth/2fa/enable", requireAuth, async (req, res) => {
   try {
     const authUser = (req as any).authUser;
-    const usernameKey = authUser.username.toLowerCase().trim();
-    const { secret, code, backupCodes } = req.body || {};
+    const requestedUsername = req.body?.username ? String(req.body.username).toLowerCase().trim() : '';
+    const username = (requestedUsername && (authUser.role === 'admin' || requestedUsername === authUser.username.toLowerCase()))
+      ? requestedUsername
+      : authUser.username;
+    const usernameKey = username.toLowerCase().trim();
+    const { secret, code, backupCodes, direct } = req.body || {};
 
-    if (!secret || !code) {
-      return res.status(400).json({ error: "Secret and 6-digit confirmation code are required." });
+    if (!secret) {
+      return res.status(400).json({ error: "Secret key is required to enable 2FA." });
     }
 
-    const cleanCode = String(code).trim().replace(/[\s-]/g, "");
-    const isValid = await verifyTotpCode(cleanCode, String(secret).trim());
+    if (!direct) {
+      if (!code) {
+        return res.status(400).json({ error: "Secret and 6-digit confirmation code are required." });
+      }
 
-    if (!isValid) {
-      return res.status(400).json({ error: "Invalid 6-digit confirmation code. Please check your Authenticator app and try again." });
+      const cleanCode = String(code).trim().replace(/[\s-]/g, "");
+      const isValid = await verifyTotpCode(cleanCode, String(secret).trim());
+
+      if (!isValid) {
+        return res.status(400).json({ error: "Invalid 6-digit confirmation code. Please check your Authenticator app and try again." });
+      }
     }
 
     let existingUser = serverUsersStore[usernameKey];
     if (!existingUser) {
       try {
-        const { data } = await supabase.from("users").select("*").eq("id", usernameKey).maybeSingle();
+        const { data } = await supabase.from("users").select("*").or(`id.ilike.${usernameKey},username.ilike.${usernameKey}`).maybeSingle();
         if (data && data.profile_data) existingUser = data.profile_data;
       } catch {}
     }
@@ -690,7 +704,7 @@ app.post("/api/auth/2fa/enable", requireAuth, async (req, res) => {
     if (!existingUser) {
       existingUser = {
         userId: authUser.userId || usernameKey,
-        username: authUser.username,
+        username: username,
         role: authUser.role || "user",
       };
     }
@@ -713,6 +727,7 @@ app.post("/api/auth/2fa/enable", requireAuth, async (req, res) => {
         id: usernameKey,
         username: usernameKey,
         user_id: updatedUser.userId || usernameKey,
+        two_factor_enabled: true,
         profile_data: updatedUser,
         updated_at: new Date().toISOString(),
       });
@@ -723,7 +738,10 @@ app.post("/api/auth/2fa/enable", requireAuth, async (req, res) => {
     res.json({
       success: true,
       message: "Two-Factor Authentication successfully enabled.",
-      user: sanitizeUser(updatedUser),
+      user: {
+        ...updatedUser,
+        password: "", // hide password, but keep twoFactorSecret & 2FA fields
+      },
       backupCodes: finalBackupCodes,
     });
   } catch (err: any) {
@@ -885,7 +903,18 @@ app.get("/api/auth/me", requireAuth, async (req, res) => {
 app.post("/api/auth/profile", requireAuth, async (req, res) => {
   try {
     const authUser = (req as any).authUser;
-    const { oldPassword, newPassword, name, email, company } = req.body || {};
+    const { 
+      oldPassword, 
+      newPassword, 
+      name, 
+      email, 
+      phone, 
+      company,
+      twoFactorEnabled,
+      twoFactorSecret,
+      twoFactorBackupCodes,
+      twoFactorConfirmedAt,
+    } = req.body || {};
 
     const key = authUser.username.toLowerCase();
     let existingUser = serverUsersStore[key];
@@ -893,7 +922,7 @@ app.post("/api/auth/profile", requireAuth, async (req, res) => {
     // Try fetching from Supabase if not in store
     if (!existingUser) {
       try {
-        const { data } = await supabase.from("users").select("*").eq("id", key).maybeSingle();
+        const { data } = await supabase.from("users").select("*").or(`id.ilike.${key},username.ilike.${key}`).maybeSingle();
         if (data && data.profile_data) existingUser = data.profile_data;
       } catch {}
     }
@@ -915,8 +944,13 @@ app.post("/api/auth/profile", requireAuth, async (req, res) => {
       ...existingUser,
       name: name !== undefined ? String(name).trim() : existingUser.name,
       email: email !== undefined ? String(email).trim() : existingUser.email,
+      phone: phone !== undefined ? String(phone).trim() : existingUser.phone,
       company: company !== undefined ? String(company).trim() : existingUser.company,
       password: updatedPassword,
+      twoFactorEnabled: twoFactorEnabled !== undefined ? Boolean(twoFactorEnabled) : existingUser.twoFactorEnabled,
+      twoFactorSecret: twoFactorSecret !== undefined ? twoFactorSecret : existingUser.twoFactorSecret,
+      twoFactorBackupCodes: twoFactorBackupCodes !== undefined ? twoFactorBackupCodes : existingUser.twoFactorBackupCodes,
+      twoFactorConfirmedAt: twoFactorConfirmedAt !== undefined ? twoFactorConfirmedAt : existingUser.twoFactorConfirmedAt,
       updatedAt: new Date().toISOString(),
     };
 
@@ -930,8 +964,10 @@ app.post("/api/auth/profile", requireAuth, async (req, res) => {
         user_id: updatedUser.userId || key,
         full_name: updatedUser.name,
         email: updatedUser.email,
+        phone: updatedUser.phone,
         company_name: updatedUser.company,
         password: updatedUser.password,
+        two_factor_enabled: Boolean(updatedUser.twoFactorEnabled),
         profile_data: updatedUser,
         updated_at: new Date().toISOString(),
       });
@@ -939,7 +975,7 @@ app.post("/api/auth/profile", requireAuth, async (req, res) => {
       console.warn("Supabase profile sync warning:", err);
     }
 
-    res.json({ success: true, user: sanitizeUser(updatedUser) });
+    res.json({ success: true, user: { ...updatedUser, password: "" } });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to update profile" });
   }
@@ -959,6 +995,7 @@ app.get("/api/users", requireAdmin, async (_req, res) => {
             username: item.username || item.id,
             name: item.full_name || "",
             email: item.email || "",
+            phone: item.phone || "",
             company: item.company_name || "",
             role: item.role || "user",
             status: item.status || "active",
@@ -984,7 +1021,7 @@ app.get("/api/users", requireAdmin, async (_req, res) => {
 // POST /api/users (Admin Only - Create or Update User)
 app.post("/api/users", requireAdmin, async (req, res) => {
   try {
-    const { username, name, email, company, role, status, password, oldUsername } = req.body || {};
+    const { username, name, email, phone, company, role, status, password, oldUsername } = req.body || {};
 
     const cleanUsername = String(username || "").trim().toLowerCase();
     if (!cleanUsername) {
@@ -1012,10 +1049,14 @@ app.post("/api/users", requireAdmin, async (req, res) => {
       username: cleanUsername,
       name: String(name || "").trim(),
       email: String(email || "").trim(),
+      phone: String(phone || "").trim(),
       company: String(company || "").trim(),
       role: role === "admin" ? "admin" : "user",
       status: status === "suspended" ? "suspended" : "active",
       password: finalPassword,
+      twoFactorEnabled: existing.twoFactorEnabled,
+      twoFactorSecret: existing.twoFactorSecret,
+      twoFactorBackupCodes: existing.twoFactorBackupCodes,
       createdAt: existing.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -1029,6 +1070,7 @@ app.post("/api/users", requireAdmin, async (req, res) => {
         username: cleanUsername,
         full_name: newUser.name,
         email: newUser.email,
+        phone: newUser.phone,
         company_name: newUser.company,
         role: newUser.role,
         status: newUser.status,
@@ -1122,25 +1164,68 @@ app.post("/api/admin/users/:username/reset-2fa", requireAdmin, async (req, res) 
 app.get("/api/calculations", requireAuth, async (req, res) => {
   try {
     const authUser = (req as any).authUser;
-    const filterUserId = authUser.role === "admin" ? (req.query.userId as string) : authUser.userId;
+    const requestedUserId = req.query.userId as string;
+    const filterUserId = authUser.role === "admin" ? requestedUserId : authUser.userId;
 
     let calcs: any[] = [];
 
+    const candidateTokens = [
+      filterUserId,
+      authUser.userId,
+      authUser.username,
+      requestedUserId,
+    ]
+      .filter(Boolean)
+      .map((t) => String(t).trim());
+
     try {
       let query = supabase.from("calculations").select("*");
-      if (filterUserId && authUser.role !== "admin") {
-        query = query.eq("user_id", filterUserId);
+      if (candidateTokens.length > 0 && authUser.role !== "admin") {
+        const orClauses = candidateTokens
+          .flatMap((token) => [
+            `user_id.ilike.${token}`,
+            `user_id.eq.${token}`,
+          ])
+          .join(",");
+        query = query.or(orClauses);
       }
       const { data, error } = await query;
       if (!error && Array.isArray(data)) {
-        calcs = data.map((item) => item.calculation_data || item);
+        calcs = data.map((item) => {
+          let calcObj: any = item;
+          if (item.calculation_data) {
+            calcObj =
+              typeof item.calculation_data === "string"
+                ? JSON.parse(item.calculation_data)
+                : item.calculation_data;
+          }
+          return {
+            ...calcObj,
+            id: calcObj.id || item.id,
+            userId: calcObj.userId || item.user_id || authUser.userId || "",
+            createdAt: calcObj.createdAt || item.created_at || new Date().toISOString(),
+          };
+        });
       }
-    } catch {}
+    } catch (dbErr) {
+      console.warn("[Server get calculations notice]:", dbErr);
+    }
 
     if (calcs.length === 0) {
-      calcs = Object.values(serverCalculationsStore).filter((item) => {
+      const lowerTokens = candidateTokens.map((t) => t.toLowerCase());
+      calcs = Object.values(serverCalculationsStore).filter((item: any) => {
         if (authUser.role === "admin") return true;
-        return item.userId === authUser.userId || item.userId === authUser.username;
+        const itemTokens = [
+          item.userId,
+          item.user_id,
+          item.createdBy,
+          item.username,
+          item.input?.userId,
+        ]
+          .filter(Boolean)
+          .map((t: string) => String(t).toLowerCase().trim());
+
+        return itemTokens.some((t: string) => lowerTokens.includes(t));
       });
     }
 

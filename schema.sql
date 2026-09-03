@@ -12,9 +12,12 @@ CREATE TABLE IF NOT EXISTS public.users (
   username TEXT,
   full_name TEXT,
   email TEXT,
+  phone TEXT,
   company_name TEXT,
   role TEXT DEFAULT 'user',
   status TEXT DEFAULT 'active',
+  is_deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ,
   password TEXT,
   two_factor_enabled BOOLEAN DEFAULT FALSE,
   profile_data JSONB, -- Stores full UserProfile object
@@ -31,6 +34,8 @@ CREATE TABLE IF NOT EXISTS public.calculations (
   total_landed_cost NUMERIC,
   total_revenue NUMERIC,
   net_profit NUMERIC,
+  is_deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ,
   calculation_data JSONB, -- Stores complete calculation, product image (invoiceImage), SKU, and freight specs
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -73,12 +78,16 @@ CREATE TABLE IF NOT EXISTS public.flight_consignments (
   awb_number TEXT,
   document_pdf_url TEXT,
   status TEXT DEFAULT 'scheduled',
+  is_deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ,
   flight_data JSONB, -- Stores full FlightConsignment metadata, weights, and items
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 6. Optimization Indexes (Enables instant searching by Product SKU, Title, Trade Direction & Cargo Media)
+CREATE INDEX IF NOT EXISTS idx_users_is_deleted ON public.users (is_deleted);
+CREATE INDEX IF NOT EXISTS idx_calculations_is_deleted ON public.calculations (is_deleted);
 CREATE INDEX IF NOT EXISTS idx_calculations_user_id ON public.calculations (user_id);
 CREATE INDEX IF NOT EXISTS idx_calculations_created_at ON public.calculations (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_calculations_product_sku ON public.calculations ((calculation_data->'input'->>'skuSupplier'));
@@ -90,6 +99,7 @@ CREATE INDEX IF NOT EXISTS idx_gallery_images_calculation_id ON public.gallery_i
 CREATE INDEX IF NOT EXISTS idx_gallery_images_sku ON public.gallery_images (sku);
 CREATE INDEX IF NOT EXISTS idx_gallery_images_created_at ON public.gallery_images (created_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_flight_consignments_is_deleted ON public.flight_consignments (is_deleted);
 CREATE INDEX IF NOT EXISTS idx_flight_consignments_user_id ON public.flight_consignments (user_id);
 CREATE INDEX IF NOT EXISTS idx_flight_consignments_flight_date ON public.flight_consignments (flight_date DESC);
 CREATE INDEX IF NOT EXISTS idx_flight_consignments_flight_num ON public.flight_consignments (flight_number);

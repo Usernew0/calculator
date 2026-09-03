@@ -123,6 +123,9 @@ export interface FlightConsignment {
   notes?: string;
   status?: 'scheduled' | 'in_transit' | 'customs_clearance' | 'arrived' | 'cleared' | 'delivered' | 'cancelled';
   calculationIds: string[]; // Linked calculation records
+  isDeleted?: boolean; // Soft delete flag
+  userDeleted?: boolean; // Tagged when owner user is soft-deleted
+  deletedAt?: string; // ISO timestamp of soft deletion
   createdAt: string;
   updatedAt?: string;
 }
@@ -207,6 +210,9 @@ export interface CalculationResult {
   actualMarkupPercentage: number; // % over landed cost
   roiPercentage: number; // % return on investment
   userId?: string; // Optional ID of trader / user who performed calculation
+  isDeleted?: boolean; // Soft delete flag
+  userDeleted?: boolean; // Tagged when owner user is soft-deleted
+  deletedAt?: string; // ISO timestamp of soft deletion
 }
 
 export interface UserProfile {
@@ -214,9 +220,13 @@ export interface UserProfile {
   username: string; // Username for login
   password?: string; // Password stored in database schema
   role?: 'admin' | 'user'; // User permission level
-  status?: 'active' | 'suspended'; // User status
+  status?: 'active' | 'suspended' | 'deleted'; // User status
+  isDeleted?: boolean; // Soft delete status flag
+  deletedAt?: string; // Timestamp of soft deletion
+  deletedBy?: string; // Admin who performed soft delete
   name?: string;
   email?: string;
+  phone?: string; // Phone number for SMS OTP password reset
   company?: string;
   createdAt: string;
   lastLoginAt: string;
@@ -227,6 +237,7 @@ export interface UserProfile {
   two_factor_enabled?: boolean;
   two_factor_secret?: string;
   two_factor_enabled_at?: string;
+  updatedAt?: string;
 }
 
 export interface TwoFactorChallengeData {

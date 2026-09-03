@@ -2943,11 +2943,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       {lang === 'ar' ? 'لا توجد حسبات محددة مربوطة بالرحلة' : 'No specific calculation records linked.'}
                     </div>
                   ) : (
-                    (selectedFlightForView.calculationIds || []).map((calcId) => {
+                    (selectedFlightForView.calculationIds || []).map((calcId, idx) => {
                       const item = history.find((h) => h.id === calcId);
                       if (!item) {
                         return (
-                          <div key={calcId} className="p-3 text-xs text-slate-400 font-mono">
+                          <div key={`calc_${calcId}_${idx}`} className="p-3 text-xs text-slate-400 font-mono">
                             ID: {calcId} (Archived record)
                           </div>
                         );
@@ -2957,7 +2957,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       const volumeCbm = getCalculationVolumeCBM(item);
 
                       return (
-                        <div key={item.id} className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:bg-white dark:hover:bg-slate-800 transition-colors">
+                        <div key={`item_${item.id}_${idx}`} className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:bg-white dark:hover:bg-slate-800 transition-colors">
                           <div className="flex items-center gap-3">
                             {item.input.invoiceImage ? (
                               <img
