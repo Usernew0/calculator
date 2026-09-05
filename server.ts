@@ -21,6 +21,21 @@ app.use((err: any, _req: express.Request, res: express.Response, next: express.N
   next(err);
 });
 
+// Universal CORS & Preflight Middleware for Vercel & Production
+app.use((req, res, next) => {
+  const origin = req.headers.origin || "*";
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-Username, X-User-Id, Accept, Origin, Cache-Control, Pragma");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Max-Age", "86400");
+
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+  next();
+});
+
 // Security Headers Middleware
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -34,7 +49,7 @@ app.use((_req, res, next) => {
 function createRateLimiter(maxRequests = 120, windowMs = 60 * 1000, keyPrefix = "gen") {
   const store = new Map<string, { count: number; resetAt: number }>();
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (process.env.NODE_ENV === "test" || process.env.npm_lifecycle_event === "test") {
+    if (req.method === "OPTIONS" || process.env.NODE_ENV === "test" || process.env.npm_lifecycle_event === "test") {
       return next();
     }
     const forwarded = req.headers["x-forwarded-for"];
@@ -63,6 +78,129 @@ app.use("/api/auth/", authRateLimiter);
 
 // General rate limiter for standard data API routes (500 requests / 1 min window)
 app.use("/api/", createRateLimiter(500, 60 * 1000, "api"));
+
+// Server-Side Supabase Client (Protected Secrets from Environment)
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://vpopmufbiennknognoth.supabase.co";
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZwb3BtdWZiaWVubmtub2dub3RoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU5MzI1OTQsImV4cCI6MjEwMTUwODU5NH0.7suCLGIj75KRqDyVm7PCPFMS5GFvVeWBcUoDh6ofZns";
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// Server-Side In-Memory Cache Store for Data
+let serverUsersStore: Record<string, any> = {};
+
+// Universal User Lookup from Cache Store or Supabase with Multi-Field Matching
+async function fetchUserFromStoreOrDb(...rawCandidates: (string | undefined | null)[]): Promise<any> {
+  const candidates: string[] = [];
+  for (const c of rawCandidates) {
+    if (typeof c === "string" && c.trim()) {
+      const val = c.trim();
+      if (!candidates.includes(val)) candidates.push(val);
+    }
+  }
+
+  if (candidates.length === 0) return null;
+
+  // 1. Check in-memory store
+  for (const cand of candidates) {
+    const key = cand.toLowerCase();
+    if (serverUsersStore[key]) return serverUsersStore[key];
+    const match = Object.values(serverUsersStore).find((u: any) =>
+      u.username?.toLowerCase() === key ||
+      u.userId?.toLowerCase() === key ||
+      u.id?.toLowerCase() === key ||
+      u.email?.toLowerCase() === key
+    );
+    if (match) return match;
+  }
+
+  // 2. Query Supabase
+  try {
+    const orClauses = candidates
+      .flatMap((raw) => {
+        const key = raw.toLowerCase();
+        return [
+          `id.ilike.${key}`,
+          `username.ilike.${key}`,
+          `user_id.ilike.${key}`,
+          `email.ilike.${key}`,
+          `id.eq.${raw}`,
+          `username.eq.${raw}`,
+          `user_id.eq.${raw}`,
+        ];
+      })
+      .join(",");
+
+    const { data, error } = await supabase
+      .from("users")
+      .select("*")
+      .or(orClauses)
+      .limit(1)
+      .maybeSingle();
+
+    if (!error && data) {
+      let resolvedUser: any = null;
+      if (data.profile_data && typeof data.profile_data === "object") {
+        resolvedUser = {
+          ...data.profile_data,
+          userId: data.user_id || data.profile_data.userId || data.id,
+          username: data.username || data.profile_data.username || data.id,
+          name: data.full_name || data.name || data.profile_data.name || data.username || "",
+          email: data.email || data.profile_data.email || "",
+          phone: data.phone || data.profile_data.phone || "",
+          company: data.company_name || data.company || data.profile_data.company || "",
+          role: (data.username === "admin" || data.profile_data.role === "admin" || data.role === "admin") ? "admin" : (data.profile_data.role || "user"),
+          status: data.status || data.profile_data.status || "active",
+          password: data.password || data.password_hash || data.profile_data.password || "",
+          twoFactorEnabled: Boolean(data.two_factor_enabled ?? data.profile_data.twoFactorEnabled ?? false),
+          twoFactorSecret: data.two_factor_secret || data.profile_data.twoFactorSecret || "",
+          twoFactorBackupCodes: Array.isArray(data.two_factor_backup_codes)
+            ? data.two_factor_backup_codes
+            : (Array.isArray(data.profile_data?.twoFactorBackupCodes) ? data.profile_data.twoFactorBackupCodes : []),
+          twoFactorConfirmedAt: data.two_factor_confirmed_at || data.profile_data?.twoFactorConfirmedAt || null,
+        };
+      } else {
+        resolvedUser = {
+          userId: data.user_id || data.id || `USR-${(data.username || candidates[0]).toUpperCase()}`,
+          username: data.username || candidates[0],
+          name: data.full_name || data.name || data.username || candidates[0],
+          email: data.email || "",
+          phone: data.phone || "",
+          company: data.company_name || data.company || "",
+          role: (data.username === "admin" || data.role === "admin") ? "admin" : "user",
+          status: data.status === "suspended" ? "suspended" : "active",
+          password: data.password || data.password_hash || "",
+          createdAt: data.created_at || new Date().toISOString(),
+          twoFactorEnabled: Boolean(data.two_factor_enabled ?? false),
+          twoFactorSecret: data.two_factor_secret || "",
+          twoFactorBackupCodes: Array.isArray(data.two_factor_backup_codes) ? data.two_factor_backup_codes : [],
+          twoFactorConfirmedAt: data.two_factor_confirmed_at || null,
+        };
+      }
+
+      if (resolvedUser) {
+        if (resolvedUser.username) serverUsersStore[resolvedUser.username.toLowerCase()] = resolvedUser;
+        if (resolvedUser.userId) serverUsersStore[resolvedUser.userId.toLowerCase()] = resolvedUser;
+        return resolvedUser;
+      }
+    }
+  } catch (dbErr) {
+    console.warn("[Supabase fetchUserFromStoreOrDb notice]:", dbErr);
+  }
+
+  // 3. Fallback for admin
+  if (candidates.some((c) => c.toLowerCase() === "admin")) {
+    return {
+      userId: "admin",
+      username: "admin",
+      name: "Administrator",
+      role: "admin",
+      status: "active",
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  return null;
+}
 
 // Server-Side Password Hashing & Verification (Crypto)
 function hashPassword(password: string): string {
@@ -190,70 +328,67 @@ async function requireAuth(req: express.Request, res: express.Response, next: ex
     const authHeader = req.headers.authorization;
     let authUser = verifyToken(authHeader);
 
-    // Resilient fallback: Check headers or body for active user session identity
-    if (!authUser) {
-      const headerUser = (req.headers["x-username"] || req.headers["x-user-id"] || req.body?.oldUsername || req.body?.username) as string | undefined;
-      if (headerUser && typeof headerUser === "string") {
-        const uKey = headerUser.toLowerCase().trim();
-        let user = serverUsersStore[uKey] || Object.values(serverUsersStore).find((u: any) =>
-          u.userId?.toLowerCase() === uKey || u.username?.toLowerCase() === uKey
-        );
-        if (!user && uKey) {
-          try {
-            const { data } = await supabase
-              .from("users")
-              .select("*")
-              .or(`id.ilike.${uKey},username.ilike.${uKey}`)
-              .maybeSingle();
-            if (data) {
-              user = data.profile_data || {
-                userId: data.user_id || data.id,
-                username: data.username || uKey,
-                role: data.role || "user",
-                status: data.status || "active",
-                password: data.password || data.password_hash || "",
-              };
-              serverUsersStore[uKey] = user;
-            }
-          } catch {}
-        }
+    const headerUsername = req.headers["x-username"] as string | undefined;
+    const headerUserId = req.headers["x-user-id"] as string | undefined;
+    const bodyUsername = (req.body?.oldUsername || req.body?.username) as string | undefined;
 
-        if (user || uKey === "admin") {
-          authUser = {
-            userId: user?.userId || uKey,
-            username: user?.username || uKey,
-            role: (uKey === "admin" || user?.role === "admin") ? "admin" : (user?.role || "user"),
-            iat: Date.now(),
-          };
-        }
+    const candidates = [
+      headerUsername,
+      headerUserId,
+      authUser?.username,
+      authUser?.userId,
+      bodyUsername,
+    ].filter(Boolean);
+
+    let user = await fetchUserFromStoreOrDb(...candidates);
+
+    if (user) {
+      if (!authUser) {
+        authUser = {
+          userId: user.userId || user.id || headerUserId || `USR-${user.username.toUpperCase()}`,
+          username: user.username,
+          role: user.role || "user",
+          iat: Date.now(),
+        };
+      } else {
+        // Upgrade authUser with authentic DB attributes
+        authUser.username = user.username || headerUsername || authUser.username;
+        authUser.userId = user.userId || headerUserId || authUser.userId;
+        authUser.role = user.role || authUser.role;
       }
+    } else if (!authUser && candidates.some((c) => c && c.toLowerCase() === "admin")) {
+      authUser = {
+        userId: "admin",
+        username: "admin",
+        role: "admin",
+        iat: Date.now(),
+      };
     }
 
     if (!authUser) {
       return res.status(401).json({ error: "Unauthorized access. Valid token required.", code: "INVALID_TOKEN" });
     }
 
-    const usernameKey = (authUser.username || "").toLowerCase().trim();
-    let user = serverUsersStore[usernameKey];
+    if (!user && authUser) {
+      const bestUsername = (headerUsername && !headerUsername.startsWith("USR-"))
+        ? headerUsername
+        : (!authUser.username.startsWith("USR-") ? authUser.username : (headerUsername || authUser.username || "user"));
+      const bestUserId = (headerUserId && headerUserId.startsWith("USR-"))
+        ? headerUserId
+        : (authUser.userId.startsWith("USR-") ? authUser.userId : (headerUserId || `USR-${bestUsername.toUpperCase()}`));
 
-    if (!user) {
-      try {
-        const { data } = await supabase
-          .from("users")
-          .select("*")
-          .or(`id.ilike.${usernameKey},username.ilike.${usernameKey}`)
-          .maybeSingle();
-        if (data) {
-          user = data.profile_data || {
-            userId: data.user_id || data.id,
-            username: data.username || usernameKey,
-            role: data.role || "user",
-            status: data.status || "active",
-            password: data.password || data.password_hash || "",
-          };
-          serverUsersStore[usernameKey] = user;
-        }
-      } catch {}
+      user = {
+        userId: bestUserId,
+        username: bestUsername,
+        name: bestUsername,
+        role: (bestUsername.toLowerCase() === "admin" || authUser.role === "admin") ? "admin" : "user",
+        status: "active",
+        createdAt: new Date().toISOString(),
+      };
+
+      authUser.username = bestUsername;
+      authUser.userId = bestUserId;
+      authUser.role = user.role;
     }
 
     if (user) {
@@ -275,6 +410,7 @@ async function requireAuth(req: express.Request, res: express.Response, next: ex
     }
 
     (req as any).authUser = authUser;
+    (req as any).userRecord = user;
     next();
   } catch (err: any) {
     console.error("[requireAuth middleware notice]:", err);
@@ -295,15 +431,6 @@ async function requireAdmin(req: express.Request, res: express.Response, next: e
     return res.status(403).json({ error: "Forbidden. Administrative permissions required.", code: "FORBIDDEN" });
   }
 }
-
-// Server-Side Supabase Client (Protected Secrets from Environment)
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://vpopmufbiennknognoth.supabase.co";
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZwb3BtdWZiaWVubmtub2dub3RoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU5MzI1OTQsImV4cCI6MjEwMTUwODU5NH0.7suCLGIj75KRqDyVm7PCPFMS5GFvVeWBcUoDh6ofZns";
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-
-// Server-Side In-Memory Cache Store for Data
-let serverUsersStore: Record<string, any> = {};
 
 // Temporary in-memory store for pending 2FA login challenges (5-minute expiration)
 const twoFactorPendingStore = new Map<string, {
@@ -774,13 +901,7 @@ app.post("/api/auth/2fa/enable", requireAuth, async (req, res) => {
       }
     }
 
-    let existingUser = serverUsersStore[usernameKey];
-    if (!existingUser) {
-      try {
-        const { data } = await supabase.from("users").select("*").or(`id.ilike.${usernameKey},username.ilike.${usernameKey}`).maybeSingle();
-        if (data && data.profile_data) existingUser = data.profile_data;
-      } catch {}
-    }
+    let existingUser = await fetchUserFromStoreOrDb(usernameKey, requestedUsername, authUser.username, authUser.userId);
 
     if (!existingUser) {
       existingUser = {
@@ -839,13 +960,7 @@ app.post("/api/auth/2fa/disable", requireAuth, async (req, res) => {
     const usernameKey = (authUser.role === 'admin' && requestedUsername) ? requestedUsername : authUser.username.toLowerCase().trim();
     const { password, code } = req.body || {};
 
-    let existingUser = serverUsersStore[usernameKey];
-    if (!existingUser) {
-      try {
-        const { data } = await supabase.from("users").select("*").or(`id.ilike.${usernameKey},username.ilike.${usernameKey}`).maybeSingle();
-        if (data && data.profile_data) existingUser = data.profile_data;
-      } catch {}
-    }
+    let existingUser = await fetchUserFromStoreOrDb(usernameKey, requestedUsername, authUser.username, authUser.userId);
 
     if (!existingUser) {
       existingUser = {
@@ -918,13 +1033,7 @@ app.post("/api/auth/2fa/backup-codes/regenerate", requireAuth, async (req, res) 
     const requestedUsername = req.body?.username ? String(req.body.username).toLowerCase().trim() : '';
     const usernameKey = (authUser.role === 'admin' && requestedUsername) ? requestedUsername : authUser.username.toLowerCase().trim();
 
-    let existingUser = serverUsersStore[usernameKey];
-    if (!existingUser) {
-      try {
-        const { data } = await supabase.from("users").select("*").or(`id.ilike.${usernameKey},username.ilike.${usernameKey}`).maybeSingle();
-        if (data && data.profile_data) existingUser = data.profile_data;
-      } catch {}
-    }
+    let existingUser = await fetchUserFromStoreOrDb(usernameKey, requestedUsername, authUser.username, authUser.userId);
 
     if (!existingUser || !existingUser.twoFactorEnabled) {
       return res.status(400).json({ error: "2FA is not enabled for this account." });
@@ -962,22 +1071,26 @@ app.post("/api/auth/2fa/backup-codes/regenerate", requireAuth, async (req, res) 
 
 // GET /api/auth/me
 app.get("/api/auth/me", requireAuth, async (req, res) => {
-  const authUser = (req as any).authUser;
-  const usernameKey = authUser.username.toLowerCase().trim();
-  let user = serverUsersStore[usernameKey];
-  if (!user) {
-    try {
-      const { data } = await supabase
-        .from("users")
-        .select("*")
-        .or(`id.ilike.${usernameKey},username.ilike.${usernameKey}`)
-        .maybeSingle();
-      if (data) {
-        user = data.profile_data || data;
-      }
-    } catch {}
+  try {
+    const authUser = (req as any).authUser;
+    let user = (req as any).userRecord;
+    if (!user) {
+      const candidates = [
+        req.headers["x-username"] as string,
+        req.headers["x-user-id"] as string,
+        authUser?.username,
+        authUser?.userId,
+      ].filter(Boolean);
+      user = await fetchUserFromStoreOrDb(...candidates);
+    }
+    const cleanUser = sanitizeUser(user);
+    res.json({
+      success: true,
+      user: cleanUser ? { ...authUser, ...cleanUser } : authUser,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to resolve authenticated profile: " + (err?.message || "") });
   }
-  res.json({ success: true, user: sanitizeUser(user) || authUser });
 });
 
 // POST /api/auth/profile (Update self profile)
@@ -1004,29 +1117,7 @@ app.post("/api/auth/profile", requireAuth, async (req, res) => {
       twoFactorConfirmedAt,
     } = req.body || {};
 
-    let existingUser =
-      serverUsersStore[oldKey] ||
-      serverUsersStore[requestedOldUsername] ||
-      serverUsersStore[authUsername] ||
-      serverUsersStore[authUserId] ||
-      Object.values(serverUsersStore).find((u: any) =>
-        (oldKey && (u.username?.toLowerCase() === oldKey || u.userId?.toLowerCase() === oldKey || u.id?.toLowerCase() === oldKey)) ||
-        (requestedOldUsername && (u.username?.toLowerCase() === requestedOldUsername || u.userId?.toLowerCase() === requestedOldUsername || u.id?.toLowerCase() === requestedOldUsername)) ||
-        (authUsername && (u.username?.toLowerCase() === authUsername || u.userId?.toLowerCase() === authUsername || u.id?.toLowerCase() === authUsername)) ||
-        (authUserId && (u.userId?.toLowerCase() === authUserId || u.username?.toLowerCase() === authUserId || u.id?.toLowerCase() === authUserId))
-      );
-
-    // Try fetching from Supabase if not in store
-    if (!existingUser) {
-      try {
-        const orClauses = [oldKey, requestedOldUsername, authUsername, authUserId]
-          .filter(Boolean)
-          .map((k) => `id.ilike.${k},username.ilike.${k}`)
-          .join(",");
-        const { data } = await supabase.from("users").select("*").or(orClauses).maybeSingle();
-        if (data && data.profile_data) existingUser = data.profile_data;
-      } catch {}
-    }
+    let existingUser = await fetchUserFromStoreOrDb(oldKey, requestedOldUsername, authUsername, authUserId);
 
     if (!existingUser) {
       if (oldKey === "admin" || authUser.role === "admin" || authUsername === "admin") {
@@ -1477,6 +1568,8 @@ app.get("/api/calculations", requireAuth, async (req, res) => {
       authUser.userId,
       authUser.username,
       requestedUserId,
+      req.headers["x-username"] as string,
+      req.headers["x-user-id"] as string,
     ]
       .filter(Boolean)
       .map((t) => String(t).trim());
@@ -1663,10 +1756,20 @@ app.get("/api/flights", requireAuth, async (req, res) => {
 
     let flights: any[] = [];
 
+    const candidateFlightTokens = [
+      filterUserId,
+      authUser.userId,
+      authUser.username,
+      req.headers["x-username"] as string,
+      req.headers["x-user-id"] as string,
+    ]
+      .filter(Boolean)
+      .map((t) => String(t).trim());
+
     try {
       let query = supabase.from("flight_consignments").select("*");
-      if (filterUserId && authUser.role !== "admin") {
-        query = query.eq("user_id", filterUserId);
+      if (candidateFlightTokens.length > 0 && authUser.role !== "admin") {
+        query = query.in("user_id", candidateFlightTokens);
       }
       const { data, error } = await query;
       if (!error && Array.isArray(data)) {
@@ -1698,9 +1801,11 @@ app.get("/api/flights", requireAuth, async (req, res) => {
     } catch {}
 
     if (flights.length === 0) {
-      flights = Object.values(serverFlightsStore).filter((item) => {
+      const lowerFlightTokens = candidateFlightTokens.map((t) => t.toLowerCase());
+      flights = Object.values(serverFlightsStore).filter((item: any) => {
         if (authUser.role === "admin") return true;
-        return item.userId === authUser.userId || item.userId === authUser.username;
+        const u = String(item.userId || item.user_id || "").toLowerCase();
+        return lowerFlightTokens.includes(u);
       });
     }
 
@@ -1783,10 +1888,20 @@ app.get("/api/gallery", requireAuth, async (req, res) => {
 
     let galleryList: any[] = [];
 
+    const candidateGalleryTokens = [
+      filterUserId,
+      authUser.userId,
+      authUser.username,
+      req.headers["x-username"] as string,
+      req.headers["x-user-id"] as string,
+    ]
+      .filter(Boolean)
+      .map((t) => String(t).trim());
+
     try {
       let query = supabase.from("gallery_images").select("*");
-      if (filterUserId && authUser.role !== "admin") {
-        query = query.eq("user_id", filterUserId);
+      if (candidateGalleryTokens.length > 0 && authUser.role !== "admin") {
+        query = query.in("user_id", candidateGalleryTokens);
       }
       const { data, error } = await query.order("created_at", { ascending: false });
       if (!error && Array.isArray(data)) {
@@ -1795,9 +1910,11 @@ app.get("/api/gallery", requireAuth, async (req, res) => {
     } catch {}
 
     if (galleryList.length === 0) {
+      const lowerGalleryTokens = candidateGalleryTokens.map((t) => t.toLowerCase());
       galleryList = Object.values(serverGalleryStore).filter((item) => {
         if (authUser.role === "admin") return true;
-        return item.user_id === authUser.userId || item.user_id === authUser.username;
+        const u = String(item.user_id || "").toLowerCase();
+        return lowerGalleryTokens.includes(u);
       });
     }
 

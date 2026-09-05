@@ -271,6 +271,8 @@ npm start
 | **Iframe Preview Sandbox** | Replaces native `window.confirm` with in-app React modals | Full screen or embedded iframe compatible | Buttons and actions trigger reliably without browser security suppression |
 | **High-Resolution Camera Uploads** | Compressed via HTML5 Canvas | Compressed via HTML5 Canvas | Downscales 15MB+ camera photos to ~150KB JPEGs to prevent storage quota limits |
 | **Profile Update & Username Conflicts** | Cross-checks multi-identifier sets (`userId`, `username`, `id`, `oldUsername`) | Dual verification in `/api/auth/profile` and client fallback | Eliminates false-positive collision alerts; cleanly purges old aliases on actual rename |
+| **Vercel Production CORS & Preflight (`/api/*`)** | Handles cross-origin requests & preflight OPTIONS | Returns 204 with complete CORS access headers | Eliminates 405/401 CORS blocking on production serverless endpoints |
+| **Multi-Format Client Tokens (`client_USR-*` / `client_username_*`)** | Auto-detected & parsed in `requireAuth` | Resolves via `fetchUserFromStoreOrDb` | Guarantees seamless session continuity even if user ID or username is used as token identifier |
 
 ---
 

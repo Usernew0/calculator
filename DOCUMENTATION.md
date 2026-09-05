@@ -231,6 +231,16 @@ Before building or deploying to production, verify the following steps:
 ## 📝 Modification & Update Log (Auto-Updated)
 
 - **2026-09-05**:
+  - **Production API Authentication, CORS Preflight & Multi-Field Identity Resolution Engine**:
+    - **Vercel & Production CORS & OPTIONS Handling**: Added dedicated Express CORS middleware that guarantees `Access-Control-Allow-Origin: *`, `Access-Control-Allow-Headers` (`Authorization`, `Content-Type`, `X-Username`, `X-User-Id`, `Accept`, `Origin`, etc.), and immediately resolves `OPTIONS` preflight requests with `204 No Content` before reaching route handlers or rate limiters.
+    - **Multi-Field Identity Resolution (`fetchUserFromStoreOrDb`)**:
+      - Unified account retrieval across both in-memory store and Supabase PostgreSQL with broad matching against `id.ilike`, `username.ilike`, `user_id.ilike`, and `email.ilike`.
+      - Supports dual token formats (`client_${userId}_${timestamp}` and `client_${username}_${timestamp}`) and seamlessly honors `x-username` and `x-user-id` HTTP request headers.
+    - **`GET /api/auth/me` Resilience**:
+      - Resolves and sanitizes user profile records directly from database records or session credentials, returning complete account profile fields (`userId`, `username`, `name`, `role`, `status`, `twoFactorEnabled`).
+      - Restored user account `ebrahim` (`user_id: USR-947144`) in Supabase so historical calculations link smoothly across sessions.
+    - **Universal Multi-Token Data Matching across APIs**:
+      - `/api/calculations`, `/api/flights`, and `/api/gallery` now evaluate candidate tokens (`filterUserId`, `authUser.userId`, `authUser.username`, `req.headers["x-username"]`, `req.headers["x-user-id"]`) ensuring records created under either user ID or username are consistently accessible.
   - **Two-Factor Authentication (2FA) Preservation on Account Suspension & Updates**:
     - **Zero-Reset Guarantee on Status Changes**: Resolved issue where updating a user account's status to `suspended` (or toggling between `active` and `suspended`) inadvertently cleared the user's Two-Factor Authentication credentials (secret, backup codes, and confirmation status).
     - **Backend API Hardening (`POST /api/users` in `server.ts`)**:
