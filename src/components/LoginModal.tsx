@@ -2,12 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { UserProfile } from '../types';
 import {
   updateSelfProfileApi,
+  loginUserApi,
   setup2FaApi,
   enable2FaApi,
   disable2FaApi,
   regenerateBackupCodesApi,
 } from '../lib/api';
-import { updateActiveUserProfileIfCurrent, setStoredUserProfile } from '../lib/session';
+import { updateActiveUserProfileIfCurrent, setStoredUserProfile, getSessionToken, setSessionToken } from '../lib/session';
 import { generateQrCodeDataUrl, formatTotpSecret } from '../lib/totp';
 import { Language, translations } from '../data/translations';
 import {
@@ -34,6 +35,7 @@ import {
   Check,
   RefreshCw,
   Key,
+  Phone,
 } from 'lucide-react';
 
 interface LoginModalProps {
@@ -64,6 +66,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
   const [name, setName] = useState(currentUser?.name || '');
   const [email, setEmail] = useState(currentUser?.email || '');
+  const [phone, setPhone] = useState(currentUser?.phone || '');
   const [company, setCompany] = useState(currentUser?.company || '');
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -92,6 +95,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       setConfirmPassword('');
       setName(currentUser?.name || '');
       setEmail(currentUser?.email || '');
+      setPhone(currentUser?.phone || '');
       setCompany(currentUser?.company || '');
       setIs2FaEnabled(currentUser?.twoFactorEnabled || false);
       setBackupCodesList(currentUser?.twoFactorBackupCodes || []);
@@ -218,6 +222,24 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       return;
     }
 
+    if (cleanUsername.length < 3) {
+      setErrorMsg(
+        lang === 'ar'
+          ? 'يجب أن يتكون اسم المستخدم من 3 أحرف على الأقل'
+          : 'Username must be at least 3 characters long'
+      );
+      return;
+    }
+
+    if (!/^[a-zA-Z0-9_.-]+$/.test(cleanUsername)) {
+      setErrorMsg(
+        lang === 'ar'
+          ? 'اسم المستخدم يمكن أن يحتوي فقط على أحرف وأرقام وشرطة ونقطة'
+          : 'Username can only contain alphanumeric characters, underscores, dashes, and dots'
+      );
+      return;
+    }
+
     let finalPassword = currentUser?.password || '';
 
     // Validation for changing password
@@ -265,7 +287,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         }
       }
     } else {
-      // New login / registration flow
+      // New login / registration flow when not authenticated
       if (newPassword.trim() || confirmPassword.trim()) {
         if (newPassword.trim() !== confirmPassword.trim()) {
           setErrorMsg(
@@ -290,37 +312,84 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
     setIsSubmitting(true);
 
+    // If not authenticated, execute user login directly
+    if (!currentUser) {
+      try {
+        const loginRes = await loginUserApi(cleanUsername, finalPassword);
+        if ('requires2FA' in loginRes && loginRes.requires2FA) {
+          setErrorMsg(
+            lang === 'ar'
+              ? 'هذا الحساب يتطلب التحقق بخطوتين (2FA). يرجى تسجيل الدخول من الشاشة الرئيسية.'
+              : 'This account requires Two-Factor Authentication. Please sign in via the main screen.'
+          );
+          setIsSubmitting(false);
+          return;
+        }
+        if ('user' in loginRes && loginRes.user) {
+          onLoginSuccess(loginRes.user);
+          setIsSubmitting(false);
+          onClose();
+          return;
+        }
+      } catch (loginErr: any) {
+        setIsSubmitting(false);
+        setErrorMsg(
+          loginErr?.message ||
+          (lang === 'ar' ? 'اسم المستخدم أو كلمة المرور غير صحيحة' : 'Invalid username or password')
+        );
+        return;
+      }
+    }
+
     try {
-      const targetUsername = currentUser?.username || currentUser?.userId || cleanUsername;
+      const oldUsername = (currentUser?.username || currentUser?.userId || '').trim().toLowerCase();
+
+      // Ensure active session token exists before updating profile
+      const activeToken = getSessionToken();
+      if (!activeToken && currentUser) {
+        const fallbackToken = `client_${currentUser.username || currentUser.userId}_${Date.now()}`;
+        setSessionToken(fallbackToken, true);
+      }
+
       // Update profile securely via backend API and persist to database
-      const updatedUser = await updateSelfProfileApi({
+      const res = await updateSelfProfileApi({
         oldPassword: oldPassword.trim() || undefined,
         newPassword: newPassword.trim() || undefined,
         name: name.trim(),
         email: email.trim(),
+        phone: phone.trim(),
         company: company.trim(),
-        username: targetUsername,
+        username: cleanUsername,
+        oldUsername: oldUsername || undefined,
         twoFactorEnabled: is2FaEnabled,
         twoFactorSecret: is2FaEnabled ? (currentUser?.twoFactorSecret || setupSecret || undefined) : undefined,
         twoFactorBackupCodes: is2FaEnabled ? (backupCodesList.length > 0 ? backupCodesList : setupBackupCodes) : [],
         twoFactorConfirmedAt: is2FaEnabled ? (currentUser?.twoFactorConfirmedAt || new Date().toISOString()) : undefined,
       });
 
+      const updatedUser = res.user;
+
       const profileToSave: UserProfile = {
         ...updatedUser,
-        password: finalPassword,
+        username: cleanUsername,
+        name: name.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+        company: company.trim(),
+        password: finalPassword || currentUser?.password || undefined,
         twoFactorEnabled: is2FaEnabled,
         twoFactorSecret: is2FaEnabled ? (currentUser?.twoFactorSecret || setupSecret || undefined) : undefined,
         twoFactorBackupCodes: is2FaEnabled ? (backupCodesList.length > 0 ? backupCodesList : setupBackupCodes) : [],
+        updatedAt: new Date().toISOString(),
       };
 
       // Persist in User Profile storage slot (Session Token preserved intact)
-      updateActiveUserProfileIfCurrent(currentUser, profileToSave);
+      updateActiveUserProfileIfCurrent(currentUser, profileToSave, oldUsername);
       setStoredUserProfile(profileToSave);
 
       const successTxt = lang === 'ar'
-        ? 'تم حفظ التغييرات والبيانات بنجاح !'
-        : 'User information and changes saved successfully!';
+        ? 'تم حفظ جميع البيانات وتحديث اسم المستخدم بنجاح في قاعدة البيانات!'
+        : 'All profile inputs and username updated successfully in the database!';
 
       setSuccessMsg(successTxt);
 
@@ -395,6 +464,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 className="w-full ltr:pl-9 rtl:pr-9 ltr:pr-3 rtl:pl-3 py-2.5 text-sm rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-semibold focus:outline-hidden focus:ring-2 focus:ring-emerald-500/30"
               />
             </div>
+            {currentUser && (
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                {lang === 'ar'
+                  ? 'يمكنك تعديل اسم المستخدم؛ سيتم تحديث هويتك في قاعدة البيانات وجلستك فوراً.'
+                  : 'You can change your username; your account identity will update in the database immediately.'}
+              </p>
+            )}
           </div>
 
           {/* Password Section */}
@@ -512,7 +588,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             </div>
           </div>
 
-          {/* Grid: Email & Company Name */}
+          {/* Grid: Email, Phone & Company Name */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
@@ -533,6 +609,24 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             </div>
 
             <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
+                {lang === 'ar' ? 'رقم الهاتف / الجوال' : 'Phone Number'}
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 ltr:left-0 rtl:right-0 ltr:pl-3 rtl:pr-3 flex items-center pointer-events-none text-slate-400">
+                  <Phone className="w-4 h-4 text-slate-400" />
+                </div>
+                <input
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder={lang === 'ar' ? '0501234567 أو +966' : '+1 (555) 012-3456'}
+                  className="w-full ltr:pl-9 rtl:pr-9 ltr:pr-3 rtl:pl-3 py-2 text-sm rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-medium focus:outline-hidden focus:ring-2 focus:ring-emerald-500/30"
+                />
+              </div>
+            </div>
+
+            <div className="sm:col-span-2">
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
                 {lang === 'ar' ? 'اسم الشركة' : 'Company Name'}
               </label>

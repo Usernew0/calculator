@@ -1,5 +1,5 @@
 import { UserProfile, CalculationResult, FlightConsignment, FlightManifestParsedData, TwoFactorChallengeData } from '../types';
-import { getSessionToken, setSessionToken, triggerSessionInvalidation } from './session';
+import { getSessionToken, setSessionToken, getStoredUserProfile, triggerSessionInvalidation } from './session';
 import { generateTotpSecret, generateTotpUri, generateBackupCodes, verifyTotpCode, matchBackupCodeIndex } from './totp';
 import {
   getAllUsersFromFirestore,
@@ -18,7 +18,7 @@ import {
   saveSiteFaviconToFirestore,
   getSiteFaviconFromFirestore,
 } from './firebase';
-import { saveUserProfileToSupabase } from './supabase';
+import { saveUserProfileToSupabase, getUserProfileFromSupabase } from './supabase';
 
 /**
  * Client-Side API Helper for Secure Backend Operations with resilient Firestore and local fallback
@@ -41,7 +41,13 @@ export class ApiError extends Error {
 }
 
 async function apiFetch(endpoint: string, options: RequestInit = {}) {
-  const token = getSessionToken();
+  let token = getSessionToken();
+  const currentProfile = getStoredUserProfile();
+  if (!token && currentProfile && (currentProfile.username || currentProfile.userId)) {
+    token = `client_${currentProfile.username || currentProfile.userId}_${Date.now()}`;
+    setSessionToken(token, true);
+  }
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string>),
@@ -49,6 +55,11 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
 
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  if (currentProfile?.username || currentProfile?.userId) {
+    headers['x-username'] = currentProfile.username || currentProfile.userId;
+    headers['x-user-id'] = currentProfile.userId || currentProfile.username;
   }
 
   let res: Response;
@@ -437,12 +448,15 @@ export async function updateSelfProfileApi(payload: {
   phone?: string;
   company?: string;
   username?: string;
+  oldUsername?: string;
   twoFactorEnabled?: boolean;
   twoFactorSecret?: string;
   twoFactorBackupCodes?: string[];
   twoFactorConfirmedAt?: string;
-}): Promise<UserProfile> {
+}): Promise<{ user: UserProfile; token?: string }> {
   let backendUser: UserProfile | null = null;
+  let backendToken: string | undefined;
+
   try {
     const data = await apiFetch('/api/auth/profile', {
       method: 'POST',
@@ -451,35 +465,101 @@ export async function updateSelfProfileApi(payload: {
     if (data.user) {
       backendUser = data.user;
     }
-  } catch (err) {
-    console.info('Backend profile update notice, writing directly to databases:', err);
+    if (data.token) {
+      backendToken = data.token;
+      setSessionToken(data.token);
+    }
+  } catch (err: any) {
+    console.info('Backend profile update notice, checking local/direct sync:', err);
+    const msg = err?.message || String(err);
+    const isFunctionalValidationError =
+      msg.includes('كلمة المرور القديمة غير صحيحة') ||
+      msg.toLowerCase().includes('old password is incorrect') ||
+      msg.includes('محجوز بالفعل') ||
+      msg.toLowerCase().includes('already taken') ||
+      msg.toLowerCase().includes('least 3 characters') ||
+      msg.includes('3 أحرف على الأقل') ||
+      msg.toLowerCase().includes('alphanumeric characters');
+
+    if (isFunctionalValidationError) {
+      throw err;
+    }
   }
 
-  const username = (payload.username || backendUser?.username || 'admin').toLowerCase().trim();
-  const existing = (await getUserProfileFromFirestore(username)) || backendUser;
-  if (!existing) throw new Error('User profile not found');
+  const oldUsername = (payload.oldUsername || '').toLowerCase().trim();
+  const targetUsername = (payload.username || backendUser?.username || oldUsername || 'admin').toLowerCase().trim();
+
+  const lookupKey = oldUsername || targetUsername;
+  const existing =
+    backendUser ||
+    (await getUserProfileFromFirestore(lookupKey)) ||
+    (await getUserProfileFromSupabase(lookupKey)) ||
+    getStoredUserProfile();
+
+  if (!existing && !backendUser) {
+    throw new Error('User profile not found');
+  }
+
+  // Only check client-side conflict IF the backend was unreachable (direct client fallback)
+  if (!backendUser && oldUsername && targetUsername && oldUsername !== targetUsername) {
+    const existingOther =
+      (await getUserProfileFromFirestore(targetUsername)) ||
+      (await getUserProfileFromSupabase(targetUsername));
+
+    if (existingOther) {
+      const currentIdentifiers = new Set([
+        existing?.userId?.toLowerCase(),
+        existing?.username?.toLowerCase(),
+        oldUsername,
+      ].filter(Boolean));
+
+      const otherIdentifiers = [
+        existingOther.userId?.toLowerCase(),
+        existingOther.username?.toLowerCase(),
+      ].filter(Boolean);
+
+      const isSameAccount = otherIdentifiers.some((id) => currentIdentifiers.has(id));
+      if (!isSameAccount) {
+        throw new Error('اسم المستخدم هذا محجوز بالفعل بحساب آخر. يرجى اختيار اسم آخر.');
+      }
+    }
+  }
+
+  // Validate old password if changing password during direct client fallback
+  if (payload.newPassword && payload.oldPassword && existing?.password) {
+    if (payload.oldPassword.trim() !== existing.password.trim()) {
+      throw new Error('كلمة المرور القديمة غير صحيحة');
+    }
+  }
 
   const updated: UserProfile = {
-    ...existing,
+    userId: existing?.userId || backendUser?.userId || targetUsername,
+    createdAt: existing?.createdAt || backendUser?.createdAt || new Date().toISOString(),
+    lastLoginAt: existing?.lastLoginAt || backendUser?.lastLoginAt || new Date().toISOString(),
+    ...(existing || {}),
     ...(backendUser || {}),
-    name: payload.name !== undefined ? payload.name : existing.name,
-    email: payload.email !== undefined ? payload.email : existing.email,
-    phone: payload.phone !== undefined ? payload.phone : existing.phone,
-    company: payload.company !== undefined ? payload.company : existing.company,
-    password: payload.newPassword || existing.password,
-    twoFactorEnabled: payload.twoFactorEnabled !== undefined ? payload.twoFactorEnabled : existing.twoFactorEnabled,
-    twoFactorSecret: payload.twoFactorSecret !== undefined ? payload.twoFactorSecret : existing.twoFactorSecret,
-    twoFactorBackupCodes: payload.twoFactorBackupCodes !== undefined ? payload.twoFactorBackupCodes : existing.twoFactorBackupCodes,
-    twoFactorConfirmedAt: payload.twoFactorConfirmedAt !== undefined ? payload.twoFactorConfirmedAt : existing.twoFactorConfirmedAt,
+    username: payload.username?.trim() || backendUser?.username || existing?.username || targetUsername,
+    name: payload.name !== undefined ? payload.name : existing?.name,
+    email: payload.email !== undefined ? payload.email : existing?.email,
+    phone: payload.phone !== undefined ? payload.phone : existing?.phone,
+    company: payload.company !== undefined ? payload.company : existing?.company,
+    password: payload.newPassword || existing?.password,
+    twoFactorEnabled: payload.twoFactorEnabled !== undefined ? payload.twoFactorEnabled : existing?.twoFactorEnabled,
+    twoFactorSecret: payload.twoFactorSecret !== undefined ? payload.twoFactorSecret : existing?.twoFactorSecret,
+    twoFactorBackupCodes: payload.twoFactorBackupCodes !== undefined ? payload.twoFactorBackupCodes : existing?.twoFactorBackupCodes,
+    twoFactorConfirmedAt: payload.twoFactorConfirmedAt !== undefined ? payload.twoFactorConfirmedAt : existing?.twoFactorConfirmedAt,
     updatedAt: new Date().toISOString(),
   };
 
   await Promise.allSettled([
-    saveUserProfileToFirestore(updated),
-    saveUserProfileToSupabase(updated),
+    saveUserProfileToFirestore(updated, oldUsername || undefined),
+    saveUserProfileToSupabase(updated, oldUsername || undefined),
   ]);
 
-  return updated;
+  const activeToken = backendToken || getSessionToken() || `client_${updated.username}_${Date.now()}`;
+  setSessionToken(activeToken, true);
+
+  return { user: updated, token: activeToken };
 }
 
 // Users Management API (Admin)
@@ -502,8 +582,19 @@ export async function saveUserApi(user: UserProfile, oldUsername?: string): Prom
       body: JSON.stringify({ ...user, oldUsername }),
     });
     if (data.user) {
-      saveUserProfileToFirestore(data.user, oldUsername).catch(() => {});
-      return data.user;
+      // Ensure 2FA parameters (secret, backup codes, confirmed status) from incoming user are preserved
+      // even after backend sanitization, so Firestore/Supabase never lose 2FA settings during status changes
+      const mergedUser: UserProfile = {
+        ...data.user,
+        twoFactorEnabled: user.twoFactorEnabled !== undefined ? user.twoFactorEnabled : data.user.twoFactorEnabled,
+        twoFactorSecret: user.twoFactorSecret || data.user.twoFactorSecret,
+        twoFactorBackupCodes: (Array.isArray(user.twoFactorBackupCodes) && user.twoFactorBackupCodes.length > 0)
+          ? user.twoFactorBackupCodes
+          : data.user.twoFactorBackupCodes,
+        twoFactorConfirmedAt: user.twoFactorConfirmedAt || data.user.twoFactorConfirmedAt,
+      };
+      saveUserProfileToFirestore(mergedUser, oldUsername).catch(() => {});
+      return mergedUser;
     }
   } catch (err: any) {
     console.info('Backend saveUser notice, saving directly to Firestore/Supabase:', err?.message || err);

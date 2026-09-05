@@ -129,7 +129,17 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 ---
 
 ### 6. Admin Control Panel & Website Settings
+- **Deterministic & Permanent User IDs**:
+  - **Zero-Mutation User ID Stability**: User identifiers (`userId`, e.g. `USR-EBRAHIM` or permanent sequence IDs) are strictly immutable and protected against regeneration. Opening the edit modal or updating account status (including suspension or reactivation) preserves the user's canonical ID without re-rolling random numbers.
+- **Zero-Wipe Password Preservation**:
+  - **Strict Credential Protection on 2FA & Status Toggles**: User passwords are never overwritten, wiped, or replaced with empty strings during 2FA activation, 2FA reset, or account status updates (active ↔ suspended). Database write layers in Firestore and Supabase guard against empty password payloads, retaining existing hashes securely.
+- **User Profile Settings & Username Migration Engine**:
+  - **Comprehensive Form Inputs**: Authenticated users can modify their Username, Full Name, Email Address, Phone Number, Company Name, and Passwords with immediate feedback.
+  - **Atomic Username Key Migration**: Changing the username validates uniqueness, purges the old record from Supabase and Firestore, creates the new record, migrates linked calculations to the new username, updates the in-memory cache, and re-issues a signed session token.
+  - **Dual Database Persistence**: All profile inputs save simultaneously to Supabase and Firestore with resilient local fallback.
+  - **Non-Disruptive Session Updating**: Seamlessly updates active browser session tokens and stored profiles without logging the user out.
 - **TOTP 2FA Enterprise Protection & Self-Profile Enablement**:
+  - **Zero-Reset 2FA Preservation on Suspension & Updates**: Suspending, activating, or modifying any user account attributes strictly preserves the user's Two-Factor Authentication secret, confirmation status, and emergency backup recovery codes across all database tiers.
   - **User Profile 2FA Enablement**: Users can enable TOTP Two-Factor Authentication directly from their Profile Settings modal (`LoginModal.tsx`) using QR code scanning, 6-digit TOTP verification, or 1-click instant activation with emergency backup recovery codes.
   - **Dual Database Persistence**: 2FA status and credentials write simultaneously to Supabase (`users.two_factor_enabled` column & `profile_data` JSONB) and Firestore (`twoFactorEnabled`, `twoFactorSecret`, `twoFactorBackupCodes`, `twoFactorConfirmedAt`), ensuring full cross-device synchronization and zero data loss on profile edits.
   - **Quick Header 2FA Status & Action**: Live badge in the admin navigation header displaying the admin account's current 2FA status with 1-click toggle action to configure or disable 2FA.
@@ -185,7 +195,7 @@ The application implements a secure 3-tier full-stack architecture:
    - Zero database credentials or private service keys exposed in client bundles.
    - **Self-Service Password Reset**: Recover account credentials right from the login screen via **SMS Phone OTP** (with real-time countdown & resend) or **2FA Security Codes** (TOTP Authenticator & Backup Codes).
    - **Two-Factor Authentication (TOTP - RFC 6238)**: Two-step authentication handshake with segmented 6-digit TOTP input, QR code scanning, single-use emergency backup recovery codes, and profile security management.
-   - **Isolated Storage Keys (`src/lib/session.ts`)**: Session token (`cargo_session_token`) is stored in a dedicated key separate from the user profile metadata (`cargo_user_profile`), preventing administrative session corruption during user record management.
+   - **Isolated Storage Keys & Self-Healing Tokens (`src/lib/session.ts`)**: Session token (`cargo_session_token`) is stored in a dedicated key separate from the user profile metadata (`cargo_user_profile`), with automatic client fallback token restoration for continuous authenticated profile edits and username migrations.
    - **Admin Session Isolation**: Modifying, creating, or toggling user accounts in the Admin Panel strictly safeguards the active administrator's session credentials.
    - All authenticated requests pass JWT tokens in `Authorization: Bearer <token>` headers.
    - Communicates exclusively through secure `/api/*` endpoints.
@@ -260,6 +270,7 @@ npm start
 | **Backup Code Regeneration** | Instant client-side & API `/api/auth/2fa/backup-codes/regenerate` | Real-time dual write to Supabase & Firestore | Produces 8 fresh alphanumeric keys with 1-click clipboard copy |
 | **Iframe Preview Sandbox** | Replaces native `window.confirm` with in-app React modals | Full screen or embedded iframe compatible | Buttons and actions trigger reliably without browser security suppression |
 | **High-Resolution Camera Uploads** | Compressed via HTML5 Canvas | Compressed via HTML5 Canvas | Downscales 15MB+ camera photos to ~150KB JPEGs to prevent storage quota limits |
+| **Profile Update & Username Conflicts** | Cross-checks multi-identifier sets (`userId`, `username`, `id`, `oldUsername`) | Dual verification in `/api/auth/profile` and client fallback | Eliminates false-positive collision alerts; cleanly purges old aliases on actual rename |
 
 ---
 

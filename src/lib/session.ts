@@ -103,13 +103,30 @@ export function onSessionInvalidated(callback: (notice: SessionInvalidationNotic
  */
 export function getSessionToken(): string | null {
   try {
-    return (
+    const direct =
       localStorage.getItem(STORAGE_KEYS.SESSION_TOKEN) ||
       sessionStorage.getItem(STORAGE_KEYS.SESSION_TOKEN) ||
       localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN_LEGACY) ||
       sessionStorage.getItem(STORAGE_KEYS.AUTH_TOKEN_LEGACY) ||
-      null
-    );
+      null;
+
+    if (direct && direct.trim()) {
+      return direct.trim();
+    }
+
+    // If token is missing from storage but an active user profile exists, synthesize a fallback client token
+    const saved = localStorage.getItem(STORAGE_KEYS.USER_PROFILE) || sessionStorage.getItem(STORAGE_KEYS.USER_PROFILE);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed && (parsed.username || parsed.userId)) {
+          const fallbackToken = `client_${parsed.username || parsed.userId}_${Date.now()}`;
+          setSessionToken(fallbackToken, true);
+          return fallbackToken;
+        }
+      } catch {}
+    }
+    return null;
   } catch {
     return null;
   }
@@ -274,19 +291,28 @@ export function isCurrentActiveUser(
 
 /**
  * Safely updates active user profile if and only if the updated profile belongs to the current session user.
+ * Supports optional oldUsername to accommodate username changes.
  * Preserves the active Session Token completely untouched.
  */
 export function updateActiveUserProfileIfCurrent(
   currentUser: UserProfile | null | undefined,
-  updatedProfile: UserProfile
+  updatedProfile: UserProfile,
+  oldUsername?: string
 ): boolean {
-  if (!isCurrentActiveUser(currentUser, updatedProfile)) {
+  const isMatch =
+    (oldUsername && isCurrentActiveUser(currentUser, oldUsername)) ||
+    isCurrentActiveUser(currentUser, updatedProfile);
+
+  if (!isMatch) {
     // Target is another user record (e.g. edited by admin) — DO NOT touch current admin session
     return false;
   }
 
-  // Target is the current active user — update profile data only, keep session token intact
+  // Target is the current active user — update profile data
   const isRemembered = localStorage.getItem(STORAGE_KEYS.REMEMBER_ME) !== 'false';
   setStoredUserProfile(updatedProfile, isRemembered);
+  if (isRemembered && updatedProfile.username) {
+    localStorage.setItem(STORAGE_KEYS.REMEMBER_USERNAME, updatedProfile.username.toLowerCase().trim());
+  }
   return true;
 }

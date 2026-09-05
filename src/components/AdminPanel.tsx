@@ -1131,8 +1131,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const handleOpenEditModal = (user: UserProfile) => {
     setEditingUser(user);
+    const stableUserId = user.userId || `USR-${(user.username || '').toUpperCase()}`;
     setFormData({
-      userId: user.userId || 'USR-' + Math.floor(100000 + Math.random() * 900000),
+      userId: stableUserId,
       username: user.username || '',
       password: user.password || '',
       role: user.role || 'user',
@@ -1147,16 +1148,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.username.trim() || !formData.password.trim()) {
+    if (!formData.username.trim() || (!editingUser && !formData.password.trim())) {
       showNotification('error', lang === 'ar' ? 'يرجى ملء اسم المستخدم وكلمة المرور' : 'Username and Password are required');
       return;
     }
 
     setIsSaving(true);
+    const cleanUsername = formData.username.trim().toLowerCase();
+    const stableUserId =
+      editingUser?.userId ||
+      formData.userId ||
+      `USR-${cleanUsername.toUpperCase()}`;
+
     const updatedProfile: UserProfile = {
-      userId: formData.userId || 'USR-' + Math.floor(100000 + Math.random() * 900000),
-      username: formData.username.trim().toLowerCase(),
-      password: formData.password.trim(),
+      userId: stableUserId,
+      username: cleanUsername,
+      password: formData.password.trim() || editingUser?.password || undefined,
       role: formData.role,
       status: formData.status,
       name: formData.name.trim() || formData.username.trim(),
@@ -1166,6 +1173,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       twoFactorEnabled: editingUser?.twoFactorEnabled,
       twoFactorSecret: editingUser?.twoFactorSecret,
       twoFactorBackupCodes: editingUser?.twoFactorBackupCodes,
+      twoFactorConfirmedAt: editingUser?.twoFactorConfirmedAt,
       createdAt: editingUser?.createdAt || new Date().toISOString(),
       lastLoginAt: editingUser?.lastLoginAt || new Date().toISOString(),
     };
@@ -1246,10 +1254,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
 
     const newStatus = user.status === 'suspended' ? 'active' : 'suspended';
-    const updated: UserProfile = { ...user, status: newStatus };
+    const updated: UserProfile = {
+      ...user,
+      status: newStatus,
+      twoFactorEnabled: user.twoFactorEnabled,
+      twoFactorSecret: user.twoFactorSecret,
+      twoFactorBackupCodes: user.twoFactorBackupCodes,
+      twoFactorConfirmedAt: user.twoFactorConfirmedAt,
+    };
     try {
-      await saveUserApi(updated);
-      await saveUserProfileToFirestore(updated);
+      const savedUser = await saveUserApi(updated);
+      await saveUserProfileToFirestore(savedUser || updated);
       showNotification(
         'success',
         lang === 'ar'
@@ -3073,7 +3088,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             title={lang === 'ar' ? 'انقر لتفعيل وإعداد المصادقة الثنائية (TOTP)' : 'Click to setup Two-Factor Authentication'}
                           >
                             <Lock className="w-3 h-3 text-slate-400" />
-                            <span>{lang === 'ar' ? 'معطل (إعداد)' : 'Disabled (+Setup)'}</span>
+                            <span>{lang === 'ar' ? 'معطل' : 'Disabled'}</span>
                           </button>
                         )}
                       </td>
@@ -3222,14 +3237,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               {/* Password Input */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase mb-1">
-                  {t.passwordLabel} <span className="text-rose-500">*</span>
+                  {t.passwordLabel} {!editingUser && <span className="text-rose-500">*</span>}
+                  {editingUser && <span className="text-[10px] font-normal text-slate-500 dark:text-slate-400 lowercase ml-1">{lang === 'ar' ? '(اتركه فارغاً للاحتفاظ بكلمة المرور الحالية)' : '(leave blank to keep current password)'}</span>}
                 </label>
                 <input
                   type="text"
-                  required
+                  required={!editingUser}
                   value={formData.password}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  placeholder="Set account password"
+                  placeholder={editingUser ? (lang === 'ar' ? 'اتركه فارغاً للاحتفاظ بكلمة المرور الحالية' : 'Leave blank to retain current password') : 'Set account password'}
                   className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white font-mono font-bold focus:outline-hidden focus:ring-2 focus:ring-emerald-500/40"
                 />
               </div>
@@ -3297,7 +3313,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase mb-1 flex items-center justify-between">
                     <span>{lang === 'ar' ? 'رقم الهاتف (SMS)' : 'Phone Number (SMS)'}</span>
-                    <span className="text-[10px] text-emerald-500 font-normal">{lang === 'ar' ? 'لاستعادة كلمة المرور' : 'For password reset'}</span>
                   </label>
                   <input
                     type="tel"

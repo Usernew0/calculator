@@ -151,15 +151,34 @@ export function deduplicateUsers(usersList: UserProfile[]): UserProfile[] {
 
     if (existingKey && usersMap.has(existingKey)) {
       const existing = usersMap.get(existingKey)!;
+      const canonicalUserId =
+        (existing.userId && existing.userId.startsWith('USR-'))
+          ? existing.userId
+          : ((u.userId && u.userId.startsWith('USR-')) ? u.userId : (existing.userId || u.userId || (usernameNorm ? `USR-${usernameNorm.toUpperCase()}` : '')));
+
       usersMap.set(existingKey, {
         ...existing,
         ...u,
         username: existing.username || u.username,
-        userId: existing.userId || u.userId,
+        userId: canonicalUserId,
+        password: u.password || existing.password || '',
         createdAt: existing.createdAt || u.createdAt,
+        // Crucial: preserve 2FA configuration if either instance has it
+        twoFactorEnabled: u.twoFactorEnabled !== undefined ? u.twoFactorEnabled : existing.twoFactorEnabled,
+        twoFactorSecret: u.twoFactorSecret || existing.twoFactorSecret,
+        twoFactorBackupCodes: (Array.isArray(u.twoFactorBackupCodes) && u.twoFactorBackupCodes.length > 0)
+          ? u.twoFactorBackupCodes
+          : (existing.twoFactorBackupCodes || []),
+        twoFactorConfirmedAt: u.twoFactorConfirmedAt || existing.twoFactorConfirmedAt,
       });
     } else {
-      usersMap.set(primaryKey, u);
+      const stableU: UserProfile = {
+        ...u,
+        userId: (u.userId && u.userId.startsWith('USR-'))
+          ? u.userId
+          : (u.userId || (usernameNorm ? `USR-${usernameNorm.toUpperCase()}` : primaryKey)),
+      };
+      usersMap.set(primaryKey, stableU);
       if (usernameNorm) seenUsernames.set(usernameNorm, primaryKey);
       if (userIdNorm) seenUsernames.set(userIdNorm, primaryKey);
     }
@@ -189,7 +208,7 @@ export async function saveUserProfileToFirestore(
 
   // Save to Supabase
   try {
-    await saveUserProfileToSupabase(profile);
+    await saveUserProfileToSupabase(profile, oldUsername);
   } catch (err) {
     console.warn("Supabase user save notice:", err);
   }
@@ -210,12 +229,20 @@ export async function saveUserProfileToFirestore(
       company: profile.company ?? '',
       role: profile.role ?? 'user',
       status: profile.status ?? 'active',
-      password: profile.password ?? '',
       createdAt: profile.createdAt || new Date().toISOString(),
       lastLoginAt: profile.lastLoginAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      twoFactorEnabled: Boolean(profile.twoFactorEnabled),
     };
+
+    // CRITICAL: NEVER overwrite or wipe an existing password if the incoming profile does not specify a non-empty password.
+    // Client-side profiles, sanitized responses, and status/2FA updates intentionally omit passwords for security.
+    if (profile.password && String(profile.password).trim().length > 0) {
+      firestorePayload.password = String(profile.password).trim();
+    }
+
+    if (profile.twoFactorEnabled !== undefined) {
+      firestorePayload.twoFactorEnabled = Boolean(profile.twoFactorEnabled);
+    }
 
     if (profile.twoFactorEnabled) {
       if (profile.twoFactorSecret) {
@@ -229,8 +256,8 @@ export async function saveUserProfileToFirestore(
       if (Array.isArray(profile.twoFactorBackupCodes) && profile.twoFactorBackupCodes.length > 0) {
         firestorePayload.twoFactorBackupCodes = profile.twoFactorBackupCodes;
       }
-    } else if (profile.twoFactorEnabled === false) {
-      // Explicitly remove/delete 2FA secret and backup codes ONLY when 2FA is explicitly disabled
+    } else if (profile.twoFactorEnabled === false && (profile.twoFactorSecret === null || profile.twoFactorSecret === '')) {
+      // Explicitly remove/delete 2FA secret and backup codes ONLY when 2FA is explicitly disabled or reset
       firestorePayload.twoFactorSecret = deleteField();
       firestorePayload.twoFactorConfirmedAt = deleteField();
       firestorePayload.twoFactorBackupCodes = [];

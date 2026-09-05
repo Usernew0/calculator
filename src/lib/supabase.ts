@@ -35,12 +35,71 @@ function handleSupabaseError(context: string, error: any) {
 }
 
 /**
- * Save user profile to Supabase
+ * Save user profile to Supabase.
+ * If oldUsername is provided and differs from the new username, purges the old user row.
  */
-export async function saveUserProfileToSupabase(profile: UserProfile): Promise<boolean> {
+export async function saveUserProfileToSupabase(profile: UserProfile, oldUsername?: string): Promise<boolean> {
   try {
     const docKey = (profile.username || profile.userId).toLowerCase().trim();
-    const payload = {
+
+    // If username changed, delete the old user row from Supabase
+    if (oldUsername && oldUsername.toLowerCase().trim() !== docKey) {
+      try {
+        await deleteUserFromSupabase(oldUsername.toLowerCase().trim());
+      } catch (delErr) {
+        console.warn('Supabase delete old user row notice:', delErr);
+      }
+    }
+
+    // Lookup existing row to preserve 2FA credentials if not explicitly passed
+    let existingRecord: any = null;
+    if (profile.twoFactorSecret === undefined || profile.twoFactorEnabled === undefined) {
+      try {
+        const { data: existingData } = await supabase
+          .from(USERS_TABLE)
+          .select('*')
+          .eq('id', docKey)
+          .maybeSingle();
+        if (existingData) {
+          existingRecord = existingData;
+        }
+      } catch {}
+    }
+
+    const preservedTwoFactorEnabled = profile.twoFactorEnabled !== undefined
+      ? Boolean(profile.twoFactorEnabled)
+      : Boolean(existingRecord?.two_factor_enabled ?? (existingRecord?.profile_data as any)?.twoFactorEnabled ?? false);
+
+    const preservedTwoFactorSecret = profile.twoFactorSecret !== undefined
+      ? profile.twoFactorSecret
+      : (existingRecord?.two_factor_secret || (existingRecord?.profile_data as any)?.twoFactorSecret || null);
+
+    const preservedTwoFactorBackupCodes = Array.isArray(profile.twoFactorBackupCodes)
+      ? profile.twoFactorBackupCodes
+      : (Array.isArray(existingRecord?.two_factor_backup_codes)
+          ? existingRecord.two_factor_backup_codes
+          : ((existingRecord?.profile_data as any)?.twoFactorBackupCodes || []));
+
+    const preservedTwoFactorConfirmedAt = profile.twoFactorConfirmedAt !== undefined
+      ? profile.twoFactorConfirmedAt
+      : (existingRecord?.two_factor_confirmed_at || (existingRecord?.profile_data as any)?.twoFactorConfirmedAt || null);
+
+    const existingPassword = existingRecord?.password || (existingRecord?.profile_data as any)?.password || '';
+    const resolvedPassword = (profile.password && String(profile.password).trim().length > 0)
+      ? String(profile.password).trim()
+      : existingPassword;
+
+    const fullProfileData = {
+      ...((existingRecord?.profile_data as any) || {}),
+      ...profile,
+      password: resolvedPassword,
+      twoFactorEnabled: preservedTwoFactorEnabled,
+      twoFactorSecret: preservedTwoFactorSecret,
+      twoFactorBackupCodes: preservedTwoFactorBackupCodes,
+      twoFactorConfirmedAt: preservedTwoFactorConfirmedAt,
+    };
+
+    const payload: any = {
       id: docKey,
       user_id: profile.userId || docKey,
       username: profile.username || docKey,
@@ -50,12 +109,12 @@ export async function saveUserProfileToSupabase(profile: UserProfile): Promise<b
       company_name: profile.company || '',
       role: profile.role || 'user',
       status: profile.status || 'active',
-      password: profile.password || '',
-      two_factor_enabled: Boolean(profile.twoFactorEnabled),
-      profile_data: {
-        ...profile,
-        twoFactorEnabled: Boolean(profile.twoFactorEnabled),
-      },
+      password: resolvedPassword,
+      two_factor_enabled: preservedTwoFactorEnabled,
+      two_factor_secret: preservedTwoFactorSecret,
+      two_factor_backup_codes: preservedTwoFactorBackupCodes,
+      two_factor_confirmed_at: preservedTwoFactorConfirmedAt,
+      profile_data: fullProfileData,
       updated_at: new Date().toISOString(),
     };
 
@@ -142,25 +201,25 @@ export async function getAllUsersFromSupabase(): Promise<UserProfile[]> {
 
     if (data && Array.isArray(data)) {
       return data.map((item) => {
-        if (item.profile_data) {
-          return {
-            ...(item.profile_data as UserProfile),
-            twoFactorEnabled: Boolean(item.two_factor_enabled ?? (item.profile_data as any)?.twoFactorEnabled ?? false),
-          };
-        }
+        const pData = (item.profile_data as any) || {};
         return {
-          userId: item.user_id || item.id,
-          username: item.username || item.id,
-          name: item.full_name || '',
-          email: item.email || '',
-          phone: item.phone || '',
-          company: item.company_name || '',
-          role: item.role || 'user',
-          status: item.status || 'active',
-          password: item.password || '',
-          twoFactorEnabled: Boolean(item.two_factor_enabled ?? false),
-          createdAt: item.created_at || new Date().toISOString(),
-          lastLoginAt: item.updated_at || new Date().toISOString(),
+          userId: item.user_id || item.id || pData.userId,
+          username: item.username || item.id || pData.username,
+          name: item.full_name || pData.name || '',
+          email: item.email || pData.email || '',
+          phone: item.phone || pData.phone || '',
+          company: item.company_name || pData.company || '',
+          role: item.role || pData.role || 'user',
+          status: item.status || pData.status || 'active',
+          password: item.password || pData.password || '',
+          twoFactorEnabled: Boolean(item.two_factor_enabled ?? pData.twoFactorEnabled ?? false),
+          twoFactorSecret: item.two_factor_secret || pData.twoFactorSecret || undefined,
+          twoFactorBackupCodes: Array.isArray(item.two_factor_backup_codes) 
+            ? item.two_factor_backup_codes 
+            : (Array.isArray(pData.twoFactorBackupCodes) ? pData.twoFactorBackupCodes : []),
+          twoFactorConfirmedAt: item.two_factor_confirmed_at || pData.twoFactorConfirmedAt || undefined,
+          createdAt: item.created_at || pData.createdAt || new Date().toISOString(),
+          lastLoginAt: item.updated_at || pData.lastLoginAt || new Date().toISOString(),
         };
       });
     }
@@ -661,6 +720,9 @@ CREATE TABLE IF NOT EXISTS public.users (
   deleted_at TIMESTAMPTZ,
   password TEXT,
   two_factor_enabled BOOLEAN DEFAULT FALSE,
+  two_factor_secret TEXT,
+  two_factor_backup_codes JSONB,
+  two_factor_confirmed_at TIMESTAMPTZ,
   profile_data JSONB, -- Stores full UserProfile object
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -845,6 +907,11 @@ CREATE POLICY "Allow anon read write site_settings" ON public.site_settings FOR 
 
 DROP POLICY IF EXISTS "Allow anon read write flight_consignments" ON public.flight_consignments;
 CREATE POLICY "Allow anon read write flight_consignments" ON public.flight_consignments FOR ALL USING (true) WITH CHECK (true);
+
+-- 9. Add columns if not exists (Migrations safe for existing tables)
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS two_factor_secret TEXT;
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS two_factor_backup_codes JSONB;
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS two_factor_confirmed_at TIMESTAMPTZ;
 `;
 
 /**

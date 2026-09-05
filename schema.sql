@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS public.users (
   deleted_at TIMESTAMPTZ,
   password TEXT,
   two_factor_enabled BOOLEAN DEFAULT FALSE,
+  two_factor_secret TEXT,
+  two_factor_backup_codes JSONB,
+  two_factor_confirmed_at TIMESTAMPTZ,
   profile_data JSONB, -- Stores full UserProfile object
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -207,4 +210,9 @@ CREATE POLICY "Allow anon read write site_settings" ON public.site_settings FOR 
 
 DROP POLICY IF EXISTS "Allow anon read write flight_consignments" ON public.flight_consignments;
 CREATE POLICY "Allow anon read write flight_consignments" ON public.flight_consignments FOR ALL USING (true) WITH CHECK (true);
+
+-- 9. Add columns if not exists (Migrations safe for existing tables)
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS two_factor_secret TEXT;
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS two_factor_backup_codes JSONB;
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS two_factor_confirmed_at TIMESTAMPTZ;
 
