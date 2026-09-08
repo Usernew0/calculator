@@ -21,6 +21,7 @@ import {
   getAllUsersApi,
   saveUserApi,
   deleteUserApi,
+  restoreUserApi,
   saveSiteFaviconApi,
   getSiteFaviconApi,
   saveSessionTimeoutApi,
@@ -318,7 +319,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith('image/') && !file.name.toLowerCase().endsWith('.ico')) {
+    if (!file.type.startsWith('image/') && !(file.name || '').toLowerCase().endsWith('.ico')) {
       showNotification(
         'error',
         lang === 'ar'
@@ -1201,13 +1202,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const [userToDelete, setUserToDelete] = useState<UserProfile | null>(null);
+  const [deleteMode, setDeleteMode] = useState<'soft' | 'hard'>('soft');
+  const [hardDeleteConfirmed, setHardDeleteConfirmed] = useState<boolean>(false);
   const [isDeletingUser, setIsDeletingUser] = useState<boolean>(false);
 
   const handleDeleteUser = (user: UserProfile) => {
     setUserToDelete(user);
+    setDeleteMode('soft'); // Default to safe soft delete
+    setHardDeleteConfirmed(false);
   };
 
-  const confirmDeleteUser = async () => {
+  const executeDeleteUser = async (mode: 'soft' | 'hard') => {
     if (!userToDelete) return;
 
     // Safety guard: prevent admin from deleting currently active session account
@@ -1215,29 +1220,86 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       showNotification(
         'error',
         lang === 'ar'
-          ? 'لا يمكن حذف حساب مدير النظام النشط حالياً أثناء استخدامه'
-          : 'Cannot delete the active administrator account currently in use'
+          ? 'لا يمكن حذف أو تعليق حساب مدير النظام النشط حالياً أثناء استخدامه'
+          : 'Cannot delete or suspend the active administrator account currently in use'
       );
       setUserToDelete(null);
       return;
     }
 
+    if (mode === 'hard' && !hardDeleteConfirmed) {
+      showNotification(
+        'error',
+        lang === 'ar'
+          ? 'يرجى تفعيل مربع تأكيد الحذف النهائي ومسح كافة الحسابات والبيانات'
+          : 'Please check the confirmation box to proceed with hard delete and data purge'
+      );
+      return;
+    }
+
     setIsDeletingUser(true);
     try {
-      await deleteUserApi(userToDelete.username);
-      await deleteUserFromFirestore(userToDelete.username);
+      const tokens = [
+        userToDelete.username,
+        userToDelete.userId,
+        (userToDelete as any).user_id,
+      ].filter(Boolean) as string[];
+
+      const res = await deleteUserApi(userToDelete.username, {
+        mode,
+        userId: userToDelete.userId,
+        adminUsername: currentUser?.username || 'admin',
+        userAliases: tokens,
+      });
+
+      if (mode === 'soft') {
+        showNotification(
+          'success',
+          lang === 'ar'
+            ? `تم تنفيذ الحذف الناعم لحساب "${userToDelete.username}" بنجاح (تم تعليق الحساب والحفاظ على كافة الحسابات والبيانات)`
+            : `User account "${userToDelete.username}" soft-deleted successfully (account suspended, all calculations preserved)`
+        );
+      } else {
+        const calcsMsg = res.deletedCalculationsCount !== undefined
+          ? (lang === 'ar' ? ` وتم مسح ${res.deletedCalculationsCount} عملية حسابية مرتبطة به` : ` and purged ${res.deletedCalculationsCount} associated calculations`)
+          : (lang === 'ar' ? ' وتم مسح كافة الحسابات والعمليات المرتبطة به' : ' and purged all associated calculations');
+
+        showNotification(
+          'success',
+          lang === 'ar'
+            ? `تم الحذف النهائي لحساب "${userToDelete.username}"${calcsMsg} نهائياً`
+            : `Hard delete completed for "${userToDelete.username}"${calcsMsg} from database`
+        );
+      }
+
+      setUserToDelete(null);
+      setHardDeleteConfirmed(false);
+      await fetchUsers();
+    } catch (err: any) {
+      showNotification(
+        'error',
+        err?.message || (lang === 'ar' ? 'حدث خطأ أثناء معالجة الطلب' : 'Failed to process account deletion')
+      );
+    } finally {
+      setIsDeletingUser(false);
+    }
+  };
+
+  const handleRestoreUser = async (user: UserProfile) => {
+    try {
+      await restoreUserApi(user.username);
       showNotification(
         'success',
         lang === 'ar'
-          ? `تم حذف حساب المستخدم "${userToDelete.username}" بنجاح من قاعدة البيانات`
-          : `User account "${userToDelete.username}" deleted from database successfully`
+          ? `تم استعادة وتنشيط حساب "${user.username}" بنجاح`
+          : `User account "${user.username}" restored and activated successfully`
       );
-      setUserToDelete(null);
       await fetchUsers();
     } catch (err: any) {
-      showNotification('error', err?.message || (lang === 'ar' ? 'حدث خطأ أثناء حذف الحساب' : 'Failed to delete user account'));
-    } finally {
-      setIsDeletingUser(false);
+      showNotification(
+        'error',
+        err?.message || (lang === 'ar' ? 'حدث خطأ أثناء استعادة الحساب' : 'Failed to restore user account')
+      );
     }
   };
 
@@ -3049,15 +3111,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           type="button"
                           onClick={() => handleToggleStatus(user)}
                           className={`px-2.5 py-1 rounded-full text-[11px] font-extrabold cursor-pointer border flex items-center gap-1 transition-all ${
-                            (user.status || 'active') === 'active'
+                            (user.status || 'active') === 'active' && !user.isDeleted
                               ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20'
+                              : user.isDeleted
+                              ? 'bg-amber-500/15 border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25'
                               : 'bg-rose-500/10 border-rose-500/30 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20'
                           }`}
+                          title={
+                            user.isDeleted
+                              ? (lang === 'ar' ? 'حساب معلّق (حذف ناعم - الحسابات محفوظة)' : 'Suspended Account (Soft Deleted - Calculations Preserved)')
+                              : undefined
+                          }
                         >
-                          {(user.status || 'active') === 'active' ? (
+                          {(user.status || 'active') === 'active' && !user.isDeleted ? (
                             <>
                               <UserCheck className="w-3 h-3" />
                               <span>ACTIVE</span>
+                            </>
+                          ) : user.isDeleted ? (
+                            <>
+                              <UserX className="w-3 h-3 text-amber-500" />
+                              <span>{lang === 'ar' ? 'معلق (حذف ناعم)' : 'SOFT DELETED'}</span>
                             </>
                           ) : (
                             <>
@@ -3107,18 +3181,34 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       {/* Email & Phone */}
                       <td className="p-3.5 text-slate-600 dark:text-slate-300">
                         {user.email ? (
-                          <div className="flex items-center gap-1">
-                            <Mail className="w-3 h-3 text-slate-400 shrink-0" />
-                            <span className="truncate max-w-[150px]">{user.email}</span>
+                          <div>
+                            <a
+                              id={`user-email-link-${user.userId || user.username}`}
+                              href={`mailto:${user.email}`}
+                              title={lang === 'ar' ? `إرسال بريد إلكتروني إلى: ${user.email}` : `Send email to: ${user.email}`}
+                              className="inline-flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-200 hover:text-amber-600 dark:hover:text-amber-400 hover:underline transition-colors group"
+                            >
+                              <Mail className="w-3 h-3 text-slate-400 group-hover:text-amber-500 shrink-0 transition-colors" />
+                              <span className="truncate max-w-[160px] font-medium">{user.email}</span>
+                            </a>
                           </div>
                         ) : null}
                         {user.phone ? (
-                          <div className="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-mono mt-0.5">
-                            <Phone className="w-3 h-3 shrink-0" />
-                            <span>{user.phone}</span>
+                          <div className={user.email ? "mt-1" : ""}>
+                            <a
+                              id={`user-tel-link-${user.userId || user.username}`}
+                              href={`tel:${user.phone.replace(/[^\d+]/g, '') || user.phone}`}
+                              title={lang === 'ar' ? `اتصال هاتفي بالرقم: ${user.phone}` : `Call phone number: ${user.phone}`}
+                              className="inline-flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400 font-mono hover:text-emerald-700 dark:hover:text-emerald-300 hover:underline transition-colors group"
+                            >
+                              <Phone className="w-3 h-3 shrink-0 group-hover:scale-110 transition-transform" />
+                              <span dir="ltr">{user.phone}</span>
+                            </a>
                           </div>
                         ) : !user.email ? (
-                          <span className="text-slate-400 italic">No contact info</span>
+                          <span className="text-slate-400 dark:text-slate-500 italic text-xs">
+                            {lang === 'ar' ? 'لا توجد معلومات اتصال' : 'No contact info'}
+                          </span>
                         ) : null}
                       </td>
 
@@ -3166,13 +3256,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             <Edit className="w-3.5 h-3.5" />
                           </button>
 
+                          {/* Restore Button (for Soft-Deleted / Suspended Accounts) */}
+                          {((user.status || 'active') === 'suspended' || user.isDeleted) && (
+                            <button
+                              type="button"
+                              onClick={() => handleRestoreUser(user)}
+                              className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500 text-emerald-600 dark:text-emerald-400 hover:text-white border border-emerald-500/30 transition-colors cursor-pointer"
+                              title={lang === 'ar' ? 'استعادة وتنشيط الحساب (إلغاء الحذف الناعم)' : 'Restore & Activate Account (Undo Soft Delete)'}
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+
                           {/* Delete Button */}
                           <button
                             type="button"
                             onClick={() => handleDeleteUser(user)}
                             disabled={isCurrentLoggedIn}
                             className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-rose-600 hover:text-white text-rose-600 dark:text-rose-400 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                            title={isCurrentLoggedIn ? 'Cannot delete current logged in account' : 'Delete user account'}
+                            title={isCurrentLoggedIn ? 'Cannot delete current logged in account' : 'Delete user account (Soft or Hard)'}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -3939,22 +4041,30 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         </div>
       )}
 
-      {/* Delete User Confirmation Modal */}
+      {/* Delete User Confirmation Modal (Soft Delete vs. Hard Delete) */}
       {userToDelete && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-3xl border border-rose-500/30 shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-xl rounded-3xl border border-slate-700 shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
             {/* Modal Header */}
-            <div className="p-5 bg-gradient-to-r from-rose-950 via-slate-900 to-slate-900 border-b border-rose-900/40 text-white flex items-center justify-between">
+            <div className={`p-5 border-b text-white flex items-center justify-between transition-colors ${
+              deleteMode === 'soft'
+                ? 'bg-gradient-to-r from-amber-950 via-slate-900 to-slate-900 border-amber-900/40'
+                : 'bg-gradient-to-r from-rose-950 via-slate-900 to-slate-900 border-rose-900/40'
+            }`}>
               <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
-                  <Trash2 className="w-5 h-5" />
+                <div className={`p-2.5 rounded-2xl border ${
+                  deleteMode === 'soft'
+                    ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                    : 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                }`}>
+                  {deleteMode === 'soft' ? <UserX className="w-5 h-5" /> : <Trash2 className="w-5 h-5" />}
                 </div>
                 <div>
-                  <h3 className="text-base font-black text-rose-100">
-                    {lang === 'ar' ? 'تأكيد حذف حساب المستخدم' : 'Confirm Delete Account'}
+                  <h3 className="text-base font-black text-slate-100">
+                    {lang === 'ar' ? 'خيارات حذف وتعليق الحساب' : 'Account Deletion & Suspension Options'}
                   </h3>
-                  <p className="text-[11px] text-rose-300/80 font-medium">
-                    {lang === 'ar' ? 'إجراء غير قابل للتراجع من قاعدة البيانات' : 'Irreversible Firestore Operation'}
+                  <p className="text-[11px] text-slate-400 font-medium">
+                    {lang === 'ar' ? 'اختر بين الحذف الناعم (حفظ الحسابات) أو الحذف النهائي (مسح شامل)' : 'Choose between Soft Delete (Keep Calculations) or Hard Delete (Purge All)'}
                   </p>
                 </div>
               </div>
@@ -3968,47 +4078,156 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
 
             {/* Modal Body */}
-            <div className="p-6 space-y-4">
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-500 dark:text-slate-400 font-bold">{lang === 'ar' ? 'اسم المستخدم:' : 'Username:'}</span>
+            <div className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+              {/* User Identity Card */}
+              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-bold">{lang === 'ar' ? 'اسم المستخدم:' : 'Username:'}</span>
                   <span className="font-mono font-black text-slate-900 dark:text-white text-sm">
                     {userToDelete.username}
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-500 dark:text-slate-400 font-bold">{lang === 'ar' ? 'معرف الحساب:' : 'User ID:'}</span>
-                  <span className="font-mono text-slate-600 dark:text-slate-300 font-bold">
+                <div>
+                  <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-bold">{lang === 'ar' ? 'معرف الحساب:' : 'User ID:'}</span>
+                  <span className="font-mono text-slate-700 dark:text-slate-300 font-bold truncate block">
                     {userToDelete.userId}
                   </span>
                 </div>
                 {userToDelete.name && (
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-500 dark:text-slate-400 font-bold">{lang === 'ar' ? 'الاسم:' : 'Name:'}</span>
+                  <div>
+                    <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-bold">{lang === 'ar' ? 'الاسم:' : 'Name:'}</span>
                     <span className="text-slate-800 dark:text-slate-200 font-bold">
                       {userToDelete.name}
                     </span>
                   </div>
                 )}
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-500 dark:text-slate-400 font-bold">{lang === 'ar' ? 'الصلاحية:' : 'Role:'}</span>
+                <div>
+                  <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-bold">{lang === 'ar' ? 'الصلاحية الحالية:' : 'Current Role:'}</span>
                   <span className="font-bold uppercase text-amber-500">
                     {userToDelete.role}
                   </span>
                 </div>
               </div>
 
-              <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-700 dark:text-rose-300 text-xs font-semibold flex items-start gap-2.5">
-                <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
-                <span>
-                  {lang === 'ar'
-                    ? `هل أنت متأكد من حذف حساب المستخدم "${userToDelete.username}"؟ سيتم مسح بيانات الحساب تماماً من قاعدة البيانات ولن تتمكن من استعادتها.`
-                    : `Are you sure you want to permanently delete user account "${userToDelete.username}" from Firestore? This action cannot be undone.`}
-                </span>
+              {/* Mode Selection Cards */}
+              <div className="space-y-3">
+                <label className="text-xs font-black text-slate-700 dark:text-slate-300 block">
+                  {lang === 'ar' ? 'حدد نوع إجراء الحذف:' : 'Select Deletion Mode:'}
+                </label>
+
+                {/* Option 1: Soft Delete */}
+                <div
+                  onClick={() => {
+                    setDeleteMode('soft');
+                    setHardDeleteConfirmed(false);
+                  }}
+                  className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${
+                    deleteMode === 'soft'
+                      ? 'border-amber-500 bg-amber-500/10 shadow-md shadow-amber-950/20 dark:bg-amber-500/15 ring-2 ring-amber-500/20'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-amber-400/50 bg-slate-50/50 dark:bg-slate-800/40'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <div className={`p-2 rounded-xl mt-0.5 ${
+                        deleteMode === 'soft' ? 'bg-amber-500 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-300'
+                      }`}>
+                        <UserX className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-black text-slate-900 dark:text-white">
+                            {lang === 'ar' ? 'حذف ناعم (تعليق الحساب)' : 'Soft Delete (Suspend Account)'}
+                          </h4>
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                            {lang === 'ar' ? 'الاحتفاظ بالحسابات 100%' : 'Preserves Calculations'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                          {lang === 'ar'
+                            ? 'يتم تعليق الحساب فوراً وإلغاء صلاحية تسجيل الدخول لكافة الجلسات. لن يتمكن المستخدم من الدخول للنظام، ولكن تظل كافة العمليات الحسابية وعروض الأسعار وسجلات الشحن محفوظة بالكامل في النظام والإدارة.'
+                            : 'Suspends the account immediately and invalidates all login sessions. The user cannot access the system, but all calculations, quotes, and cargo consignments are safely kept intact.'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 mt-1 ${
+                      deleteMode === 'soft' ? 'border-amber-500 bg-amber-500' : 'border-slate-400'
+                    }`}>
+                      {deleteMode === 'soft' && <div className="w-2 h-2 rounded-full bg-white" />}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Option 2: Hard Delete */}
+                <div
+                  onClick={() => setDeleteMode('hard')}
+                  className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${
+                    deleteMode === 'hard'
+                      ? 'border-rose-500 bg-rose-500/10 shadow-md shadow-rose-950/20 dark:bg-rose-500/15 ring-2 ring-rose-500/20'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-rose-400/50 bg-slate-50/50 dark:bg-slate-800/40'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <div className={`p-2 rounded-xl mt-0.5 ${
+                        deleteMode === 'hard' ? 'bg-rose-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-300'
+                      }`}>
+                        <Trash2 className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-black text-slate-900 dark:text-white">
+                            {lang === 'ar' ? 'حذف نهائي شامل (مسح الحساب والحسابات)' : 'Hard Delete (Purge Account & All Calculations)'}
+                          </h4>
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30">
+                            {lang === 'ar' ? 'مسح شامل غير قابل للاسترجاع' : 'Permanent Wipe'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                          {lang === 'ar'
+                            ? 'مسح حساب المستخدم نهائياً من قاعدة البيانات، وحذف وإزالة كافة العمليات الحسابية وعروض الأسعار وسجلات الشحن والصور المرتبطة بهذا الحساب بشكل نهائي وغير قابل للتراجع.'
+                            : 'Permanently removes the account from the database and irrevocably deletes all calculations, quotes, consignments, and product images created by this account.'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 mt-1 ${
+                      deleteMode === 'hard' ? 'border-rose-500 bg-rose-500' : 'border-slate-400'
+                    }`}>
+                      {deleteMode === 'hard' && <div className="w-2 h-2 rounded-full bg-white" />}
+                    </div>
+                  </div>
+                </div>
               </div>
 
+              {/* Hard Delete Double Confirmation Checkbox */}
+              {deleteMode === 'hard' && (
+                <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 space-y-2">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                    <p className="text-xs text-rose-700 dark:text-rose-300 font-semibold leading-relaxed">
+                      {lang === 'ar'
+                        ? 'تنبيه أمني صارم: هذا الإجراء سيقوم بحذف كافة الحسابات والبيانات التابعة لهذا المستخدم ولن يمكن استرجاعها مطلقاً.'
+                        : 'Strict Security Warning: This action will permanently purge all calculations and records of this user and cannot be undone.'}
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-2.5 pt-1 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={hardDeleteConfirmed}
+                      onChange={(e) => setHardDeleteConfirmed(e.target.checked)}
+                      className="w-4 h-4 rounded text-rose-600 focus:ring-rose-500 cursor-pointer"
+                    />
+                    <span className="text-xs font-black text-rose-800 dark:text-rose-200">
+                      {lang === 'ar'
+                        ? 'أقر وأؤكد رغبتي في مسح الحساب وكافة الحسابات والبيانات التابعة له نهائياً'
+                        : 'I confirm that I want to permanently delete the account and all its calculations'}
+                    </span>
+                  </label>
+                </div>
+              )}
+
               {/* Modal Actions */}
-              <div className="flex items-center justify-end gap-2.5 pt-2">
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setUserToDelete(null)}
@@ -4018,15 +4237,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   {lang === 'ar' ? 'إلغاء' : 'Cancel'}
                 </button>
 
-                <button
-                  type="button"
-                  onClick={confirmDeleteUser}
-                  disabled={isDeletingUser}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer shadow-lg shadow-rose-950/50 disabled:opacity-50"
-                >
-                  {isDeletingUser ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                  <span>{lang === 'ar' ? 'تأكيد الحذف النهائى' : 'Confirm Delete'}</span>
-                </button>
+                {deleteMode === 'soft' ? (
+                  <button
+                    type="button"
+                    onClick={() => executeDeleteUser('soft')}
+                    disabled={isDeletingUser}
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer shadow-lg shadow-amber-950/40 disabled:opacity-50"
+                  >
+                    {isDeletingUser ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserX className="w-4 h-4" />}
+                    <span>{lang === 'ar' ? 'تأكيد الحذف الناعم (تعليق الحساب)' : 'Confirm Soft Delete (Suspend)'}</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => executeDeleteUser('hard')}
+                    disabled={isDeletingUser || !hardDeleteConfirmed}
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer shadow-lg shadow-rose-950/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isDeletingUser ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                    <span>{lang === 'ar' ? 'تأكيد الحذف النهائي الشامل ومسح الحسابات' : 'Confirm Hard Delete & Purge All'}</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>

@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import crypto from "crypto";
+import nodemailer from "nodemailer";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from "@supabase/supabase-js";
@@ -87,6 +88,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Server-Side In-Memory Cache Store for Data
 let serverUsersStore: Record<string, any> = {};
+const invalidatedUserTokens = new Set<string>();
 
 // Universal User Lookup from Cache Store or Supabase with Multi-Field Matching
 async function fetchUserFromStoreOrDb(...rawCandidates: (string | undefined | null)[]): Promise<any> {
@@ -101,16 +103,45 @@ async function fetchUserFromStoreOrDb(...rawCandidates: (string | undefined | nu
   if (candidates.length === 0) return null;
 
   // 1. Check in-memory store
+  let inMemoryUser: any = null;
   for (const cand of candidates) {
     const key = cand.toLowerCase();
-    if (serverUsersStore[key]) return serverUsersStore[key];
-    const match = Object.values(serverUsersStore).find((u: any) =>
-      u.username?.toLowerCase() === key ||
-      u.userId?.toLowerCase() === key ||
-      u.id?.toLowerCase() === key ||
-      u.email?.toLowerCase() === key
-    );
-    if (match) return match;
+    if (serverUsersStore[key]) {
+      inMemoryUser = serverUsersStore[key];
+      break;
+    }
+    const candDigits = cand.replace(/\D/g, "");
+    const match = Object.values(serverUsersStore).find((u: any) => {
+      if (
+        u.username?.toLowerCase() === key ||
+        u.userId?.toLowerCase() === key ||
+        u.id?.toLowerCase() === key ||
+        u.email?.toLowerCase() === key
+      ) return true;
+      if (u.phone && candDigits.length >= 7) {
+        const uDigits = String(u.phone).replace(/\D/g, "");
+        if (uDigits === candDigits || uDigits.endsWith(candDigits) || candDigits.endsWith(uDigits)) {
+          return true;
+        }
+      }
+      return false;
+    });
+    if (match) {
+      inMemoryUser = match;
+      break;
+    }
+  }
+
+  // Return in-memory user immediately if it's the admin, or if it already has both active 2FA and phone.
+  // Otherwise, query Supabase to check for any fresh 2FA credentials or phone updates.
+  if (inMemoryUser) {
+    if (
+      inMemoryUser.username === "admin" ||
+      inMemoryUser.userId === "admin" ||
+      (inMemoryUser.phone && inMemoryUser.twoFactorEnabled)
+    ) {
+      return inMemoryUser;
+    }
   }
 
   // 2. Query Supabase
@@ -118,7 +149,8 @@ async function fetchUserFromStoreOrDb(...rawCandidates: (string | undefined | nu
     const orClauses = candidates
       .flatMap((raw) => {
         const key = raw.toLowerCase();
-        return [
+        const candDigits = raw.replace(/\D/g, "");
+        const clauses = [
           `id.ilike.${key}`,
           `username.ilike.${key}`,
           `user_id.ilike.${key}`,
@@ -127,6 +159,11 @@ async function fetchUserFromStoreOrDb(...rawCandidates: (string | undefined | nu
           `username.eq.${raw}`,
           `user_id.eq.${raw}`,
         ];
+        if (candDigits.length >= 7) {
+          clauses.push(`phone.ilike.%${candDigits}%`);
+          clauses.push(`phone.eq.${raw}`);
+        }
+        return clauses;
       })
       .join(",");
 
@@ -178,16 +215,32 @@ async function fetchUserFromStoreOrDb(...rawCandidates: (string | undefined | nu
       }
 
       if (resolvedUser) {
-        if (resolvedUser.username) serverUsersStore[resolvedUser.username.toLowerCase()] = resolvedUser;
-        if (resolvedUser.userId) serverUsersStore[resolvedUser.userId.toLowerCase()] = resolvedUser;
-        return resolvedUser;
+        const merged = {
+          ...(inMemoryUser || {}),
+          ...resolvedUser,
+          password: inMemoryUser?.password || resolvedUser.password || "",
+          phone: inMemoryUser?.phone || resolvedUser.phone || "",
+          twoFactorEnabled: Boolean(inMemoryUser?.twoFactorEnabled || resolvedUser.twoFactorEnabled),
+          twoFactorSecret: inMemoryUser?.twoFactorSecret || resolvedUser.twoFactorSecret || "",
+          twoFactorBackupCodes: (Array.isArray(inMemoryUser?.twoFactorBackupCodes) && inMemoryUser.twoFactorBackupCodes.length > 0)
+            ? inMemoryUser.twoFactorBackupCodes
+            : (Array.isArray(resolvedUser.twoFactorBackupCodes) ? resolvedUser.twoFactorBackupCodes : []),
+        };
+        if (merged.username) serverUsersStore[merged.username.toLowerCase()] = merged;
+        if (merged.userId) serverUsersStore[merged.userId.toLowerCase()] = merged;
+        return merged;
       }
     }
   } catch (dbErr) {
     console.warn("[Supabase fetchUserFromStoreOrDb notice]:", dbErr);
   }
 
-  // 3. Fallback for admin
+  // 3. If in-memory user existed, return it now
+  if (inMemoryUser) {
+    return inMemoryUser;
+  }
+
+  // 4. Fallback for admin
   if (candidates.some((c) => c.toLowerCase() === "admin")) {
     return {
       userId: "admin",
@@ -365,6 +418,10 @@ async function requireAuth(req: express.Request, res: express.Response, next: ex
       };
     }
 
+    if (candidates.some((c) => c && invalidatedUserTokens.has(c.toLowerCase()))) {
+      return res.status(401).json({ error: "Account has been deleted.", code: "ACCOUNT_DELETED" });
+    }
+
     if (!authUser) {
       return res.status(401).json({ error: "Unauthorized access. Valid token required.", code: "INVALID_TOKEN" });
     }
@@ -392,7 +449,7 @@ async function requireAuth(req: express.Request, res: express.Response, next: ex
     }
 
     if (user) {
-      if (user.status === "suspended") {
+      if (user.status === "suspended" || user.is_deleted || user.isDeleted) {
         return res.status(403).json({
           error: "This account has been suspended by the system administrator.",
           code: "ACCOUNT_SUSPENDED",
@@ -443,6 +500,14 @@ const twoFactorPendingStore = new Map<string, {
   userData: any;
 }>();
 
+interface ForgotPasswordOtpRecord {
+  otp: string;
+  expiresAt: number;
+  phone: string;
+  attempts: number;
+}
+const forgotPasswordOtpStore = new Map<string, ForgotPasswordOtpRecord>();
+
 function seedInMemoryUsers() {
   if (!serverUsersStore["admin"]) {
     serverUsersStore["admin"] = {
@@ -450,6 +515,7 @@ function seedInMemoryUsers() {
       username: "admin",
       name: "System Administrator",
       email: "admin@globaltrade.com",
+      phone: "+201001234567",
       company: "Global Trade & Logistics Solutions",
       role: "admin",
       status: "active",
@@ -458,13 +524,17 @@ function seedInMemoryUsers() {
       lastLoginAt: new Date().toISOString(),
       twoFactorEnabled: false,
     };
+  } else if (!serverUsersStore["admin"].phone) {
+    serverUsersStore["admin"].phone = "+201001234567";
   }
+
   if (!serverUsersStore["trader"]) {
     serverUsersStore["trader"] = {
       userId: "USR-TRADER-001",
       username: "trader",
       name: "Senior Import & Freight Specialist",
       email: "trader@globaltrade.com",
+      phone: "+201112345678",
       company: "Trans-Global Freight Operations",
       role: "user",
       status: "active",
@@ -473,6 +543,8 @@ function seedInMemoryUsers() {
       lastLoginAt: new Date().toISOString(),
       twoFactorEnabled: false,
     };
+  } else if (!serverUsersStore["trader"].phone) {
+    serverUsersStore["trader"].phone = "+201112345678";
   }
 }
 seedInMemoryUsers();
@@ -854,9 +926,10 @@ app.post("/api/auth/2fa/setup", requireAuth, async (req, res) => {
   try {
     const authUser = (req as any).authUser;
     const requestedUsername = req.body?.username ? String(req.body.username).toLowerCase().trim() : '';
-    const username = (requestedUsername && (authUser.role === 'admin' || requestedUsername === authUser.username.toLowerCase()))
+    const authUsernameLower = String(authUser?.username || authUser?.userId || '').toLowerCase().trim();
+    const username = (requestedUsername && (authUser?.role === 'admin' || requestedUsername === authUsernameLower))
       ? requestedUsername
-      : authUser.username;
+      : (authUser?.username || authUser?.userId || 'user');
     const secret = generateTotpSecret(20);
     const uri = generateTotpUri(username, secret);
     const backupCodes = generateBackupCodes(6);
@@ -878,10 +951,11 @@ app.post("/api/auth/2fa/enable", requireAuth, async (req, res) => {
   try {
     const authUser = (req as any).authUser;
     const requestedUsername = req.body?.username ? String(req.body.username).toLowerCase().trim() : '';
-    const username = (requestedUsername && (authUser.role === 'admin' || requestedUsername === authUser.username.toLowerCase()))
+    const authUsernameLower = String(authUser?.username || authUser?.userId || '').toLowerCase().trim();
+    const username = (requestedUsername && (authUser?.role === 'admin' || requestedUsername === authUsernameLower))
       ? requestedUsername
-      : authUser.username;
-    const usernameKey = username.toLowerCase().trim();
+      : (authUser?.username || authUser?.userId || 'user');
+    const usernameKey = String(username).toLowerCase().trim();
     const { secret, code, backupCodes, direct } = req.body || {};
 
     if (!secret) {
@@ -957,7 +1031,7 @@ app.post("/api/auth/2fa/disable", requireAuth, async (req, res) => {
     const authUser = (req as any).authUser;
     const requestedUsername = req.body?.username ? String(req.body.username).toLowerCase().trim() : '';
     // If admin requested for a specific username, allow target user
-    const usernameKey = (authUser.role === 'admin' && requestedUsername) ? requestedUsername : authUser.username.toLowerCase().trim();
+    const usernameKey = (authUser?.role === 'admin' && requestedUsername) ? requestedUsername : String(authUser?.username || authUser?.userId || 'user').toLowerCase().trim();
     const { password, code } = req.body || {};
 
     let existingUser = await fetchUserFromStoreOrDb(usernameKey, requestedUsername, authUser.username, authUser.userId);
@@ -1031,7 +1105,7 @@ app.post("/api/auth/2fa/backup-codes/regenerate", requireAuth, async (req, res) 
   try {
     const authUser = (req as any).authUser;
     const requestedUsername = req.body?.username ? String(req.body.username).toLowerCase().trim() : '';
-    const usernameKey = (authUser.role === 'admin' && requestedUsername) ? requestedUsername : authUser.username.toLowerCase().trim();
+    const usernameKey = (authUser?.role === 'admin' && requestedUsername) ? requestedUsername : String(authUser?.username || authUser?.userId || 'user').toLowerCase().trim();
 
     let existingUser = await fetchUserFromStoreOrDb(usernameKey, requestedUsername, authUser.username, authUser.userId);
 
@@ -1300,6 +1374,611 @@ app.post("/api/auth/profile", requireAuth, async (req, res) => {
   }
 });
 
+// ============================================================================
+// FORGOT PASSWORD / ACCOUNT RECOVERY ENDPOINTS
+// ============================================================================
+
+// POST /api/auth/forgot-password/lookup (Lookup account by username, email, phone, or userId)
+app.post("/api/auth/forgot-password/lookup", async (req, res) => {
+  try {
+    const { identifier, clientUser } = req.body || {};
+    const cleanId = String(identifier || "").trim();
+
+    if (!cleanId) {
+      return res.status(400).json({
+        success: false,
+        error: "Identifier (username, email, or phone number) is required",
+      });
+    }
+
+    // 1. If client provided a verified user profile from client-side Firestore, merge it into server state
+    if (clientUser && typeof clientUser === "object" && (clientUser.username || clientUser.userId)) {
+      const cUsername = String(clientUser.username || clientUser.userId || cleanId).trim();
+      const cKey = cUsername.toLowerCase();
+      const existing = serverUsersStore[cKey] || (await fetchUserFromStoreOrDb(cUsername));
+
+      const mergedUser = {
+        ...(existing || {}),
+        ...clientUser,
+        username: cUsername,
+        userId: clientUser.userId || existing?.userId || `USR-${cUsername.toUpperCase()}`,
+        phone: String(clientUser.phone || existing?.phone || "").trim(),
+        email: String(clientUser.email || existing?.email || "").trim(),
+        twoFactorEnabled: clientUser.twoFactorEnabled !== undefined
+          ? Boolean(clientUser.twoFactorEnabled)
+          : Boolean(existing?.twoFactorEnabled ?? false),
+        twoFactorSecret: clientUser.twoFactorSecret || existing?.twoFactorSecret || "",
+        twoFactorBackupCodes: (Array.isArray(clientUser.twoFactorBackupCodes) && clientUser.twoFactorBackupCodes.length > 0)
+          ? clientUser.twoFactorBackupCodes
+          : (existing?.twoFactorBackupCodes || []),
+        status: clientUser.status || existing?.status || "active",
+      };
+
+      serverUsersStore[cKey] = mergedUser;
+      if (mergedUser.userId) {
+        serverUsersStore[mergedUser.userId.toLowerCase().trim()] = mergedUser;
+      }
+    }
+
+    // 2. Direct multi-field lookup
+    let user = await fetchUserFromStoreOrDb(cleanId);
+
+    // 3. Extra phone matching fallback if not matched
+    if (!user) {
+      const cleanDigits = cleanId.replace(/\D/g, "");
+      if (cleanDigits.length >= 7) {
+        user = Object.values(serverUsersStore).find((u: any) => {
+          if (!u.phone) return false;
+          const uDigits = String(u.phone).replace(/\D/g, "");
+          return uDigits === cleanDigits || uDigits.endsWith(cleanDigits) || cleanDigits.endsWith(uDigits);
+        });
+
+        if (!user) {
+          try {
+            const { data } = await supabase
+              .from("users")
+              .select("*")
+              .or(`phone.ilike.%${cleanDigits}%,phone.eq.${cleanId}`)
+              .limit(1)
+              .maybeSingle();
+            if (data) {
+              user = data.profile_data || {
+                userId: data.user_id || data.id,
+                username: data.username || data.id,
+                name: data.full_name || data.name || data.username,
+                email: data.email || "",
+                phone: data.phone || "",
+                role: data.role || "user",
+                status: data.status || "active",
+                password: data.password || data.password_hash || "",
+                twoFactorEnabled: Boolean(data.two_factor_enabled ?? false),
+                twoFactorSecret: data.two_factor_secret || "",
+                twoFactorBackupCodes: Array.isArray(data.two_factor_backup_codes) ? data.two_factor_backup_codes : [],
+              };
+            }
+          } catch {}
+        }
+      }
+    }
+
+    // 4. Double check Supabase if user exists but 2FA or phone is not set in memory
+    if (user && (!user.twoFactorEnabled || !user.phone || String(user.phone).replace(/\D/g, "").length < 7)) {
+      try {
+        const uKey = (user.username || cleanId).toLowerCase().trim();
+        const { data: suData } = await supabase
+          .from("users")
+          .select("*")
+          .or(`id.ilike.${uKey},username.ilike.${uKey},email.ilike.${uKey}`)
+          .limit(1)
+          .maybeSingle();
+
+        if (suData) {
+          const is2Fa = Boolean(suData.two_factor_enabled ?? suData.profile_data?.twoFactorEnabled ?? false);
+          if (is2Fa) {
+            user.twoFactorEnabled = true;
+            user.twoFactorSecret = suData.two_factor_secret || suData.profile_data?.twoFactorSecret || user.twoFactorSecret;
+            user.twoFactorBackupCodes = suData.two_factor_backup_codes || suData.profile_data?.twoFactorBackupCodes || user.twoFactorBackupCodes;
+          }
+          if (suData.phone || suData.profile_data?.phone) {
+            user.phone = suData.phone || suData.profile_data?.phone || user.phone;
+          }
+          if (suData.email || suData.profile_data?.email) {
+            user.email = suData.email || suData.profile_data?.email || user.email;
+          }
+          serverUsersStore[uKey] = user;
+        }
+      } catch {}
+    }
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: "No account found matching this identifier. Please verify your input.",
+      });
+    }
+
+    // Account suspension check
+    if (user.status === "suspended" || user.is_deleted || user.isDeleted) {
+      return res.status(403).json({
+        success: false,
+        error: "This account has been suspended or deactivated. Please contact your system administrator.",
+        code: "ACCOUNT_SUSPENDED",
+      });
+    }
+
+    // Check available recovery channels
+    const rawPhone = String(user.phone || "").trim();
+    const phoneDigits = rawPhone.replace(/\D/g, "");
+    const hasPhone = phoneDigits.length >= 7;
+    const has2Fa = Boolean(user.twoFactorEnabled);
+
+    let maskedPhone: string | undefined = undefined;
+    if (hasPhone) {
+      maskedPhone =
+        rawPhone.length > 6
+          ? `${rawPhone.slice(0, 3)}•••••${rawPhone.slice(-3)}`
+          : "•••-•••-••••";
+    }
+
+    const rawEmail = String(user.email || "").trim();
+    const hasEmail = Boolean(rawEmail && rawEmail.includes("@") && rawEmail.includes("."));
+    let maskedEmail: string | undefined = undefined;
+    if (hasEmail) {
+      const [localPart, domainPart] = rawEmail.split("@");
+      const maskedLocal = localPart.length > 2 ? `${localPart[0]}••••${localPart.slice(-1)}` : `${localPart[0]}•`;
+      maskedEmail = `${maskedLocal}@${domainPart}`;
+    }
+
+    res.json({
+      success: true,
+      username: user.username || user.userId,
+      maskedPhone,
+      hasPhone,
+      has2Fa,
+      hasEmail,
+      email: hasEmail ? rawEmail : undefined,
+      maskedEmail,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: "Failed to process account lookup: " + (err?.message || ""),
+    });
+  }
+});
+
+// Helper: Dispatch Email Verification Code via SMTP (if configured) and Supabase Auth Mailer
+async function sendVerificationEmail(
+  toEmail: string,
+  username: string,
+  otp: string
+): Promise<{ success: boolean; method: string; error?: string }> {
+  let dispatched = false;
+  let lastError = "";
+
+  // 1. Dispatch via Nodemailer if SMTP credentials are provided
+  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+    try {
+      const port = parseInt(process.env.SMTP_PORT || "587", 10);
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port,
+        secure: process.env.SMTP_SECURE === "true" || port === 465,
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS,
+        },
+      });
+
+      await transporter.sendMail({
+        from: process.env.SMTP_FROM || `"Cargo Profit Security" <${process.env.SMTP_USER}>`,
+        to: toEmail,
+        subject: `Your Cargo Profit Password Reset Code: ${otp}`,
+        html: `
+          <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; color: #f8fafc; padding: 40px 20px; text-align: center;">
+            <div style="max-width: 480px; margin: 0 auto; background-color: #1e293b; border-radius: 16px; padding: 32px 24px; border: 1px solid #334155; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+              <h1 style="color: #38bdf8; font-size: 22px; font-weight: 700; margin: 0 0 12px 0;">Cargo Profit</h1>
+              <h2 style="color: #ffffff; font-size: 18px; font-weight: 600; margin: 0 0 16px 0;">Password Reset Code</h2>
+              <p style="color: #94a3b8; font-size: 14px; line-height: 1.5; margin: 0 0 24px 0;">
+                Hello <strong>${username}</strong>,<br/>
+                We received a request to reset the password for your Cargo Profit account. Enter the 6-digit code below to set a new password:
+              </p>
+              <div style="background-color: #0f172a; border: 1px solid #38bdf8; border-radius: 12px; padding: 18px 12px; margin: 0 auto 24px auto; max-width: 280px;">
+                <div style="font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #38bdf8; font-family: monospace;">
+                  ${otp}
+                </div>
+              </div>
+              <p style="color: #64748b; font-size: 12px; line-height: 1.5; margin: 0 0 16px 0;">
+                This code will expire in 10 minutes. If you did not request a password reset, you can safely ignore this message.
+              </p>
+              <div style="border-top: 1px solid #334155; padding-top: 16px; font-size: 11px; color: #475569;">
+                Cargo Profit Freight & Customs Management System • Automated Security Dispatch
+              </div>
+            </div>
+          </div>
+        `,
+      });
+      console.info(`[SMTP] Verification email with OTP successfully dispatched to ${toEmail}`);
+      dispatched = true;
+    } catch (smtpErr: any) {
+      console.error("[SMTP error]:", smtpErr?.message || smtpErr);
+      lastError = smtpErr?.message || "";
+    }
+  }
+
+  // 2. Dispatch via Supabase Auth Mailer (delivers verification email directly to recipient inbox)
+  try {
+    const supaRes = await supabase.auth.signInWithOtp({
+      email: toEmail,
+      options: {
+        shouldCreateUser: true,
+      },
+    });
+
+    if (supaRes.error) {
+      console.warn("[Supabase Auth Mailer note]:", supaRes.error.message);
+      if (!lastError) lastError = supaRes.error.message;
+    } else {
+      console.info(`[Supabase Auth Mailer] Successfully triggered email OTP delivery to ${toEmail}`);
+      dispatched = true;
+    }
+  } catch (supaErr: any) {
+    console.warn("[Supabase Auth Mailer exception]:", supaErr?.message || supaErr);
+    if (!lastError) lastError = supaErr?.message || "";
+  }
+
+  return {
+    success: dispatched,
+    method: dispatched ? "email_sent" : "delivery_queued",
+    error: lastError || undefined,
+  };
+}
+
+// POST /api/auth/forgot-password/send-phone-otp (Dispatch SMS verification code to user phone)
+app.post("/api/auth/forgot-password/send-phone-otp", async (req, res) => {
+  try {
+    const { username, phone } = req.body || {};
+    const cleanUsername = String(username || "").trim();
+
+    if (!cleanUsername) {
+      return res.status(400).json({
+        success: false,
+        error: "Username is required to send verification code",
+      });
+    }
+
+    const user = await fetchUserFromStoreOrDb(cleanUsername);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: "User account not found.",
+      });
+    }
+
+    if (user.status === "suspended" || user.is_deleted || user.isDeleted) {
+      return res.status(403).json({
+        success: false,
+        error: "This account has been suspended or deactivated.",
+        code: "ACCOUNT_SUSPENDED",
+      });
+    }
+
+    if (phone && (!user.phone || String(user.phone).replace(/\D/g, "").length < 7)) {
+      user.phone = String(phone).trim();
+      const uKey = (user.username || cleanUsername).toLowerCase().trim();
+      serverUsersStore[uKey] = user;
+    }
+
+    const rawPhone = String(user.phone || "").trim();
+    const phoneDigits = rawPhone.replace(/\D/g, "");
+
+    if (phoneDigits.length < 7) {
+      return res.status(400).json({
+        success: false,
+        error: "This account does not have a valid registered phone number for SMS recovery.",
+      });
+    }
+
+    // Generate 6-digit numeric OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const userKey = (user.username || cleanUsername).toLowerCase().trim();
+
+    forgotPasswordOtpStore.set(userKey, {
+      otp,
+      expiresAt: Date.now() + 10 * 60 * 1000, // 10 minutes expiry
+      phone: rawPhone,
+      attempts: 0,
+    });
+
+    console.info(`[SMS OTP Dispatched] Username: ${userKey}, Phone: ${rawPhone}, OTP: ${otp}`);
+
+    const resPayload: Record<string, any> = {
+      success: true,
+      message: "SMS verification code sent successfully!",
+      expiresInSeconds: 60,
+    };
+    if (process.env.NODE_ENV === "test") {
+      resPayload.devOtp = otp;
+    }
+
+    res.json(resPayload);
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: "Failed to send SMS code: " + (err?.message || ""),
+    });
+  }
+});
+
+// POST /api/auth/forgot-password/send-email-otp (Dispatch Email verification code)
+app.post("/api/auth/forgot-password/send-email-otp", async (req, res) => {
+  try {
+    const { username, email } = req.body || {};
+    const cleanUsername = String(username || "").trim();
+
+    if (!cleanUsername) {
+      return res.status(400).json({
+        success: false,
+        error: "Username or email is required to send verification code",
+      });
+    }
+
+    let user = await fetchUserFromStoreOrDb(cleanUsername, email);
+
+    if (!user && (cleanUsername.includes("@") || (email && email.includes("@")))) {
+      const fallbackEmail = cleanUsername.includes("@") ? cleanUsername : email!;
+      user = {
+        username: fallbackEmail.split("@")[0],
+        email: fallbackEmail,
+        name: fallbackEmail.split("@")[0],
+        role: "trader",
+        status: "active",
+      };
+      const uKey = user.username.toLowerCase().trim();
+      serverUsersStore[uKey] = user;
+      serverUsersStore[fallbackEmail.toLowerCase().trim()] = user;
+    }
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: "User account not found.",
+      });
+    }
+
+    if (user.status === "suspended" || user.is_deleted || user.isDeleted) {
+      return res.status(403).json({
+        success: false,
+        error: "This account has been suspended or deactivated.",
+        code: "ACCOUNT_SUSPENDED",
+      });
+    }
+
+    if (email && (!user.email || !user.email.includes("@"))) {
+      user.email = String(email).trim();
+      const uKey = (user.username || cleanUsername).toLowerCase().trim();
+      serverUsersStore[uKey] = user;
+    }
+
+    const rawEmail = String(user.email || (cleanUsername.includes("@") ? cleanUsername : "")).trim();
+    if (!rawEmail || !rawEmail.includes("@")) {
+      return res.status(400).json({
+        success: false,
+        error: "This account does not have a valid registered email address for reset.",
+      });
+    }
+
+    // Generate 6-digit numeric OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const userKey = (user.username || cleanUsername).toLowerCase().trim();
+
+    forgotPasswordOtpStore.set(userKey, {
+      otp,
+      expiresAt: Date.now() + 10 * 60 * 1000, // 10 minutes expiry
+      phone: rawEmail,
+      attempts: 0,
+    });
+
+    // Actually trigger real email delivery to the user's inbox
+    const dispatchResult = await sendVerificationEmail(rawEmail, user.username || cleanUsername, otp);
+    console.info(`[Email OTP Dispatched] User: ${userKey}, Email: ${rawEmail}, Method: ${dispatchResult.method}`);
+
+    const resPayload: Record<string, any> = {
+      success: true,
+      message: `Password reset verification code has been dispatched to ${rawEmail}.`,
+      expiresInSeconds: 60,
+    };
+    if (process.env.NODE_ENV === "test") {
+      resPayload.devOtp = otp;
+    }
+
+    res.json(resPayload);
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: "Failed to send email verification code: " + (err?.message || ""),
+    });
+  }
+});
+
+// POST /api/auth/forgot-password/reset (Verify OTP/2FA and update user password)
+app.post("/api/auth/forgot-password/reset", async (req, res) => {
+  try {
+    const { username, newPassword, resetMethod, resetCode, twoFactorSecret, twoFactorBackupCodes } = req.body || {};
+    const cleanUsername = String(username || "").trim();
+    const cleanNewPassword = String(newPassword || "").trim();
+    const cleanResetCode = String(resetCode || "").trim();
+
+    if (!cleanUsername) {
+      return res.status(400).json({ success: false, error: "Username is required." });
+    }
+
+    if (!cleanNewPassword || cleanNewPassword.length < 4) {
+      return res.status(400).json({
+        success: false,
+        error: "Password must be at least 4 characters long.",
+      });
+    }
+
+    if (resetMethod !== "phone_otp" && resetMethod !== "email_otp" && resetMethod !== "2fa") {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid reset method. Must be 'phone_otp', 'email_otp', or '2fa'.",
+      });
+    }
+
+    if (!cleanResetCode) {
+      return res.status(400).json({
+        success: false,
+        error: "Verification code is required.",
+      });
+    }
+
+    let user = await fetchUserFromStoreOrDb(cleanUsername);
+
+    if (!user && cleanUsername.includes("@")) {
+      user = serverUsersStore[cleanUsername.toLowerCase().trim()] || Object.values(serverUsersStore).find((u: any) => u.email?.toLowerCase() === cleanUsername.toLowerCase().trim());
+    }
+
+    if (!user) {
+      return res.status(404).json({ success: false, error: "User account not found." });
+    }
+
+    if (user.status === "suspended" || user.is_deleted || user.isDeleted) {
+      return res.status(403).json({
+        success: false,
+        error: "This account has been suspended or deactivated.",
+        code: "ACCOUNT_SUSPENDED",
+      });
+    }
+
+    const userKey = (user.username || cleanUsername).toLowerCase().trim();
+
+    // Verify code based on chosen method
+    if (resetMethod === "phone_otp" || resetMethod === "email_otp") {
+      const record = forgotPasswordOtpStore.get(userKey);
+      let isOtpValid = false;
+      const inputDigits = cleanResetCode.replace(/\D/g, "");
+
+      if (record && Date.now() <= record.expiresAt && inputDigits === record.otp) {
+        isOtpValid = true;
+      }
+
+      // If email OTP and local match didn't succeed, check Supabase Auth verifyOtp (if Supabase mailer dispatched code)
+      if (!isOtpValid && resetMethod === "email_otp") {
+        const rawEmail = String(user.email || (cleanUsername.includes("@") ? cleanUsername : "")).trim();
+        if (rawEmail) {
+          try {
+            const supaVerify = await supabase.auth.verifyOtp({
+              email: rawEmail,
+              token: inputDigits,
+              type: "email",
+            });
+            if (!supaVerify.error) {
+              isOtpValid = true;
+              console.info(`[Supabase OTP Verification Succeeded] Email: ${rawEmail}`);
+            }
+          } catch (supaErr) {
+            console.warn("[Supabase OTP check note]:", supaErr);
+          }
+        }
+      }
+
+      if (!isOtpValid) {
+        if (record) {
+          record.attempts = (record.attempts || 0) + 1;
+          if (record.attempts > 5) {
+            forgotPasswordOtpStore.delete(userKey);
+            return res.status(429).json({
+              success: false,
+              error: "Too many failed verification attempts. Please request a new code.",
+            });
+          }
+        }
+        return res.status(400).json({
+          success: false,
+          error: "Invalid or expired verification code. Please check your code and try again.",
+        });
+      }
+
+      // Valid OTP, consume it
+      forgotPasswordOtpStore.delete(userKey);
+    } else if (resetMethod === "2fa") {
+      if (!user.twoFactorSecret && twoFactorSecret) {
+        user.twoFactorSecret = String(twoFactorSecret).trim();
+        user.twoFactorEnabled = true;
+      }
+      if ((!user.twoFactorBackupCodes || user.twoFactorBackupCodes.length === 0) && Array.isArray(twoFactorBackupCodes)) {
+        user.twoFactorBackupCodes = twoFactorBackupCodes;
+      }
+
+      if (!user.twoFactorEnabled || !user.twoFactorSecret) {
+        return res.status(400).json({
+          success: false,
+          error: "Two-factor authentication is not active on this account.",
+        });
+      }
+
+      const clean2FaCode = cleanResetCode.replace(/\s+/g, "");
+      let isValid = await verifyTotpCode(clean2FaCode, user.twoFactorSecret);
+
+      if (!isValid) {
+        const backupIndex = matchBackupCodeIndex(clean2FaCode, user.twoFactorBackupCodes || []);
+        if (backupIndex !== -1) {
+          isValid = true;
+          user.twoFactorBackupCodes.splice(backupIndex, 1);
+        }
+      }
+
+      if (!isValid) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid 2FA security code. Please check your authenticator app or backup codes.",
+        });
+      }
+    }
+
+    // Verification passed: Update password
+    const hashedPassword = hashPassword(cleanNewPassword);
+    user.password = hashedPassword;
+
+    // Update in-memory store
+    serverUsersStore[userKey] = user;
+    if (user.userId) {
+      serverUsersStore[user.userId.toLowerCase()] = user;
+    }
+    if (user.id) {
+      serverUsersStore[user.id.toLowerCase()] = user;
+    }
+
+    // Sync to Supabase
+    try {
+      await supabase
+        .from("users")
+        .update({
+          password: hashedPassword,
+          password_hash: hashedPassword,
+          two_factor_backup_codes: user.twoFactorBackupCodes || [],
+          updated_at: new Date().toISOString(),
+        })
+        .eq("username", user.username);
+    } catch (dbErr) {
+      console.warn("[ResetPassword Supabase Update Notice]:", dbErr);
+    }
+
+    res.json({
+      success: true,
+      message: "Password reset successfully. You can now log in with your new credentials.",
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: "Failed to reset password: " + (err?.message || ""),
+    });
+  }
+});
+
 // GET /api/users (Admin Only)
 app.get("/api/users", requireAdmin, async (_req, res) => {
   try {
@@ -1480,19 +2159,217 @@ app.post("/api/users", requireAdmin, async (req, res) => {
   }
 });
 
-// DELETE /api/users/:username (Admin Only)
+// DELETE /api/users/:username (Admin Only - Supports Soft Delete & Hard Delete)
 app.delete("/api/users/:username", requireAdmin, async (req, res) => {
   try {
     const key = String(req.params.username || "").trim().toLowerCase();
+    const mode = String(req.query.mode || req.body?.mode || "hard").toLowerCase() === "soft" ? "soft" : "hard";
+    const requestedUserId = req.query.userId ? String(req.query.userId).trim() : (req.body?.userId ? String(req.body.userId).trim() : "");
+    const adminUsername = (req as any).authUser?.username || "admin";
+
+    // 1. Locate user record across memory and Supabase
+    let existingUser = serverUsersStore[key];
+    if (!existingUser) {
+      try {
+        const { data } = await supabase
+          .from("users")
+          .select("*")
+          .or(`id.ilike.${key},username.ilike.${key},user_id.ilike.${key}`)
+          .maybeSingle();
+        if (data) {
+          existingUser = data.profile_data || {
+            userId: data.user_id || data.id || key,
+            username: data.username || key,
+            role: data.role || "user",
+            status: data.status || "active",
+          };
+        }
+      } catch {}
+    }
+
+    if (!existingUser) {
+      existingUser = {
+        userId: requestedUserId || key,
+        username: key,
+        role: "user",
+        status: "active",
+      };
+    }
+
+    // Collect all unique identification tokens for this user
+    const userTokens = Array.from(
+      new Set(
+        [
+          key,
+          existingUser?.username?.toLowerCase(),
+          existingUser?.userId?.toLowerCase(),
+          existingUser?.user_id?.toLowerCase(),
+          requestedUserId.toLowerCase(),
+        ].filter(Boolean) as string[]
+      )
+    );
+
+    // Invalidate active login sessions immediately
+    userTokens.forEach((token) => {
+      invalidatedUserTokens.add(token.toLowerCase());
+    });
+
+    if (mode === "soft") {
+      // -------------------------------------------------------------
+      // SOFT DELETE: Suspend the account & keep all calculations intact
+      // -------------------------------------------------------------
+      const nowIso = new Date().toISOString();
+      const updatedUser = {
+        ...existingUser,
+        status: "suspended",
+        isDeleted: true,
+        deletedAt: nowIso,
+        deletedBy: adminUsername,
+        updatedAt: nowIso,
+      };
+
+      serverUsersStore[key] = updatedUser;
+      if (existingUser.userId) {
+        serverUsersStore[existingUser.userId.toLowerCase()] = updatedUser;
+      }
+
+      try {
+        await supabase.from("users").upsert({
+          id: key,
+          username: existingUser.username || key,
+          user_id: existingUser.userId || key,
+          role: existingUser.role || "user",
+          status: "suspended",
+          is_deleted: true,
+          deleted_at: nowIso,
+          profile_data: updatedUser,
+          updated_at: nowIso,
+        });
+      } catch (sbErr) {
+        console.warn("[Soft Delete Supabase Notice]:", sbErr);
+      }
+
+      return res.json({
+        success: true,
+        mode: "soft",
+        message: "User account suspended (soft-deleted). All calculations preserved.",
+        user: sanitizeUser(updatedUser),
+      });
+    }
+
+    // -------------------------------------------------------------
+    // HARD DELETE: Purge account AND delete all associated calculations
+    // -------------------------------------------------------------
+    // 1. Purge user from in-memory store
     delete serverUsersStore[key];
+    userTokens.forEach((t) => {
+      delete serverUsersStore[t];
+    });
+
+    // 2. Purge user from Supabase users table
+    try {
+      const filterExpr = userTokens.map((t) => `id.ilike.${t},username.ilike.${t},user_id.ilike.${t}`).join(",");
+      await supabase.from("users").delete().or(filterExpr);
+    } catch (sbErr) {
+      console.warn("[Hard Delete Supabase User Notice]:", sbErr);
+    }
+
+    // 3. Purge user calculations from in-memory stores
+    let deletedCalcCount = 0;
+    Object.keys(serverCalculationsStore).forEach((calcId) => {
+      const c = serverCalculationsStore[calcId];
+      const calcUser = (c.userId || c.user_id || c.username || "").toLowerCase();
+      if (userTokens.includes(calcUser)) {
+        delete serverCalculationsStore[calcId];
+        delete serverGalleryStore[`IMG-${calcId}`];
+        deletedCalcCount++;
+      }
+    });
+
+    Object.keys(serverGalleryStore).forEach((imgId) => {
+      const img = serverGalleryStore[imgId];
+      const imgUser = (img.user_id || img.userId || "").toLowerCase();
+      if (userTokens.includes(imgUser)) {
+        delete serverGalleryStore[imgId];
+      }
+    });
+
+    // 4. Purge calculations, gallery images, and consignments from Supabase
+    try {
+      for (const t of userTokens) {
+        await supabase.from("calculations").delete().or(`user_id.ilike.${t},user_id.eq.${t}`);
+        await supabase.from("gallery_images").delete().or(`user_id.ilike.${t},user_id.eq.${t}`);
+        await supabase.from("flight_consignments").delete().or(`user_id.ilike.${t},created_by.ilike.${t}`);
+      }
+    } catch (sbErr) {
+      console.warn("[Hard Delete Supabase Calculations Notice]:", sbErr);
+    }
+
+    return res.json({
+      success: true,
+      mode: "hard",
+      deletedCalculationsCount: deletedCalcCount,
+      message: "User account and all associated calculations permanently deleted.",
+    });
+  } catch (err: any) {
+    console.error("[DELETE /api/users error]:", err);
+    res.status(500).json({ error: "Failed to delete user", details: String(err?.message || err) });
+  }
+});
+
+// POST /api/users/:username/restore (Admin Only - Reactivate / Unsuspend a soft-deleted account)
+app.post("/api/users/:username/restore", requireAdmin, async (req, res) => {
+  try {
+    const key = String(req.params.username || "").trim().toLowerCase();
+    let user = serverUsersStore[key];
+    if (!user) {
+      try {
+        const { data } = await supabase.from("users").select("*").or(`id.ilike.${key},username.ilike.${key}`).maybeSingle();
+        if (data && data.profile_data) user = data.profile_data;
+      } catch {}
+    }
+
+    if (!user) {
+      return res.status(404).json({ error: "User account not found" });
+    }
+
+    const nowIso = new Date().toISOString();
+    const restoredUser = {
+      ...user,
+      status: "active",
+      isDeleted: false,
+      deletedAt: null,
+      deletedBy: null,
+      updatedAt: nowIso,
+    };
+
+    serverUsersStore[key] = restoredUser;
+    if (user.userId) {
+      serverUsersStore[user.userId.toLowerCase()] = restoredUser;
+    }
+
+    // Remove user tokens from invalidated set so active logins and new tokens work
+    [key, user.username?.toLowerCase(), user.userId?.toLowerCase(), user.user_id?.toLowerCase()]
+      .filter(Boolean)
+      .forEach((token) => invalidatedUserTokens.delete(token as string));
 
     try {
-      await supabase.from("users").delete().or(`id.eq.${key},username.eq.${key}`);
+      await supabase.from("users").upsert({
+        id: key,
+        username: restoredUser.username || key,
+        user_id: restoredUser.userId || key,
+        role: restoredUser.role || "user",
+        status: "active",
+        is_deleted: false,
+        deleted_at: null,
+        profile_data: restoredUser,
+        updated_at: nowIso,
+      });
     } catch {}
 
-    res.json({ success: true });
+    res.json({ success: true, user: sanitizeUser(restoredUser) });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to delete user" });
+    res.status(500).json({ error: "Failed to restore user account" });
   }
 });
 

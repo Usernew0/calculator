@@ -299,15 +299,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const filteredFlights = useMemo(() => {
     return flights.filter((flight) => {
-      const q = flightSearchQuery.toLowerCase();
+      const q = (flightSearchQuery || '').toLowerCase().trim();
       const matchQuery =
         !q ||
-        flight.flightNumber.toLowerCase().includes(q) ||
-        flight.airline.toLowerCase().includes(q) ||
-        flight.originAirport.toLowerCase().includes(q) ||
-        flight.destinationAirport.toLowerCase().includes(q) ||
-        flight.originCountry.toLowerCase().includes(q) ||
-        flight.destinationCountry.toLowerCase().includes(q) ||
+        (flight.flightNumber || '').toLowerCase().includes(q) ||
+        (flight.airline || '').toLowerCase().includes(q) ||
+        (flight.originAirport || '').toLowerCase().includes(q) ||
+        (flight.destinationAirport || '').toLowerCase().includes(q) ||
+        (flight.originCountry || '').toLowerCase().includes(q) ||
+        (flight.destinationCountry || '').toLowerCase().includes(q) ||
         (flight.masterAwbNumber && flight.masterAwbNumber.toLowerCase().includes(q));
 
       const matchStatus = flightStatusFilter === 'all' || flight.status === flightStatusFilter;
@@ -348,11 +348,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   // Filtered & Sorted list
   const filteredHistory = useMemo(() => {
+    const qSearch = (searchQuery || '').toLowerCase().trim();
     const list = history.filter((item) => {
+      const titleStr = (item.input.title || '').toLowerCase();
+      const skuStr = (item.input.skuSupplier || '').toLowerCase();
+      const catStr = (item.input.category || '').toLowerCase();
       const matchSearch =
-        item.input.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (item.input.skuSupplier && item.input.skuSupplier.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (item.input.category && item.input.category.toLowerCase().includes(searchQuery.toLowerCase()));
+        !qSearch ||
+        titleStr.includes(qSearch) ||
+        skuStr.includes(qSearch) ||
+        catStr.includes(qSearch);
 
       const matchMethod = selectedMethodFilter === 'all' || item.input.freightMethod === selectedMethodFilter;
       const matchCurrency = selectedCurrencyFilter === 'all' || item.input.targetCurrency === selectedCurrencyFilter;

@@ -119,8 +119,9 @@ export function getSessionToken(): string | null {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (parsed && (parsed.username || parsed.userId)) {
-          const fallbackToken = `client_${parsed.username || parsed.userId}_${Date.now()}`;
+        const canonicalId = parsed.userId || parsed.user_id || parsed.username;
+        if (canonicalId) {
+          const fallbackToken = `client_${canonicalId}_${Date.now()}`;
           setSessionToken(fallbackToken, true);
           return fallbackToken;
         }
@@ -180,6 +181,10 @@ export function getStoredUserProfile(): UserProfile | null {
 
     const parsed = JSON.parse(saved);
     if (parsed && typeof parsed === 'object') {
+      const canonicalId = parsed.userId || parsed.user_id || `USR-${(parsed.username || 'USER').toUpperCase()}`;
+      parsed.userId = canonicalId;
+      parsed.user_id = canonicalId;
+
       // Ensure admin role integrity for built-in admin identifiers
       if (
         (parsed.username?.toLowerCase() === 'admin' || parsed.userId === 'USR-ADMIN-001') &&
@@ -208,7 +213,14 @@ export function setStoredUserProfile(profile: UserProfile | null, rememberMe = t
       return;
     }
 
-    const serialized = JSON.stringify(profile);
+    const canonicalId = profile.userId || profile.user_id || `USR-${(profile.username || 'USER').toUpperCase()}`;
+    const normalizedProfile: UserProfile = {
+      ...profile,
+      userId: canonicalId,
+      user_id: canonicalId,
+    };
+
+    const serialized = JSON.stringify(normalizedProfile);
     if (rememberMe) {
       localStorage.setItem(STORAGE_KEYS.USER_PROFILE, serialized);
       sessionStorage.setItem(STORAGE_KEYS.USER_PROFILE, serialized);
@@ -226,16 +238,26 @@ export function setStoredUserProfile(profile: UserProfile | null, rememberMe = t
  */
 export function saveFullSession(token: string | null, profile: UserProfile, rememberMe = true): void {
   try {
+    const canonicalId = profile.userId || profile.user_id || `USR-${(profile.username || 'USER').toUpperCase()}`;
+    const normalizedProfile: UserProfile = {
+      ...profile,
+      userId: canonicalId,
+      user_id: canonicalId,
+    };
+
     // 1. Persist Session Token in dedicated token slot
     setSessionToken(token, rememberMe);
 
     // 2. Persist User Profile in dedicated profile slot
-    setStoredUserProfile(profile, rememberMe);
+    setStoredUserProfile(normalizedProfile, rememberMe);
 
     // 3. Persist Remember Me & Session Active flags
     if (rememberMe) {
       localStorage.setItem(STORAGE_KEYS.REMEMBER_ME, 'true');
-      localStorage.setItem(STORAGE_KEYS.REMEMBER_USERNAME, profile.username.toLowerCase().trim());
+      const rememberKey = (profile.username || profile.userId || '').toLowerCase().trim();
+      if (rememberKey) {
+        localStorage.setItem(STORAGE_KEYS.REMEMBER_USERNAME, rememberKey);
+      }
       sessionStorage.setItem(STORAGE_KEYS.SESSION_ACTIVE, 'true');
     } else {
       localStorage.setItem(STORAGE_KEYS.REMEMBER_ME, 'false');

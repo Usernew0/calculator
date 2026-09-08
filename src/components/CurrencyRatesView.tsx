@@ -64,10 +64,12 @@ export const CurrencyRatesView: React.FC<CurrencyRatesViewProps> = ({
     return () => clearInterval(interval);
   }, [autoRefreshInterval, onRefresh]);
 
+  const qCurrencies = (searchQuery || '').toLowerCase().trim();
   const filteredCurrencies = POPULAR_CURRENCIES.filter(
     (c) =>
-      c.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.name.toLowerCase().includes(searchQuery.toLowerCase())
+      !qCurrencies ||
+      (c.code || '').toLowerCase().includes(qCurrencies) ||
+      (c.name || '').toLowerCase().includes(qCurrencies)
   );
 
   const conversion = convertCurrency(calcAmount, calcFrom, calcTo, rates);

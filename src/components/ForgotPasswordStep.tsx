@@ -3,6 +3,8 @@ import { Language, translations } from '../data/translations';
 import {
   forgotPasswordLookupApi,
   sendForgotPasswordPhoneOtpApi,
+  sendForgotPasswordEmailOtpApi,
+  sendFirebasePasswordResetApi,
   resetPasswordApi,
   ForgotPasswordLookupResponse,
 } from '../lib/api';
@@ -10,6 +12,7 @@ import { verifyTotpCode } from '../lib/totp';
 import {
   Smartphone,
   ShieldCheck,
+  Mail,
   Lock,
   Eye,
   EyeOff,
@@ -35,6 +38,8 @@ interface ForgotPasswordStepProps {
 type ResetStep =
   | 'lookup'
   | 'method_select'
+  | 'email_sent'
+  | 'verify_email_otp'
   | 'verify_phone_otp'
   | 'verify_2fa'
   | 'new_password'
@@ -54,12 +59,14 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
   const [lookupData, setLookupData] = useState<ForgotPasswordLookupResponse | null>(null);
 
   // Method Selection
-  const [selectedMethod, setSelectedMethod] = useState<'phone_otp' | '2fa'>('phone_otp');
+  const [selectedMethod, setSelectedMethod] = useState<'email' | 'phone_otp' | '2fa'>('email');
+
+  // Email OTP Verification State
+  const [emailOtpDigits, setEmailOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
 
   // Phone OTP Verification State
   const [phoneOtpDigits, setPhoneOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
   const [resendCooldown, setResendCooldown] = useState<number>(60);
-  const [devOtpNotice, setDevOtpNotice] = useState<string | null>(null);
   const [verifiedResetToken, setVerifiedResetToken] = useState<string | null>(null);
 
   // 2FA TOTP Verification State
@@ -79,13 +86,14 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
 
   // Segmented input refs
+  const emailOtpRefs = useRef<(HTMLInputElement | null)[]>([]);
   const phoneOtpRefs = useRef<(HTMLInputElement | null)[]>([]);
   const totpRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // Timer countdown for OTP resend
+  // Timer countdown for OTP and email resend
   useEffect(() => {
     let timer: any = null;
-    if (resendCooldown > 0 && currentStep === 'verify_phone_otp') {
+    if (resendCooldown > 0) {
       timer = setInterval(() => {
         setResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
       }, 1000);
@@ -93,7 +101,7 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
     return () => {
       if (timer) clearInterval(timer);
     };
-  }, [resendCooldown, currentStep]);
+  }, [resendCooldown]);
 
   // Focus helper for OTP inputs
   const handleDigitChange = (
@@ -159,15 +167,26 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
 
       setLookupData(res);
 
-      if (!res.hasPhone && !res.has2Fa) {
+      if (!res.hasEmail && !res.hasPhone && !res.has2Fa) {
         setErrorMsg(t.forgotPasswordNoMethods);
         return;
       }
 
-      // If user has both methods, show method selection
-      if (res.hasPhone && res.has2Fa) {
-        setSelectedMethod('phone_otp');
+      const availableCount = (res.hasEmail ? 1 : 0) + (res.hasPhone ? 1 : 0) + (res.has2Fa ? 1 : 0);
+
+      // If user has more than 1 method, show method selection
+      if (availableCount > 1) {
+        if (res.hasEmail) {
+          setSelectedMethod('email');
+        } else if (res.hasPhone) {
+          setSelectedMethod('phone_otp');
+        } else {
+          setSelectedMethod('2fa');
+        }
         setCurrentStep('method_select');
+      } else if (res.hasEmail) {
+        // Automatically dispatch Firebase Auth email reset
+        await triggerSendEmailReset(res.email || trimmed);
       } else if (res.hasPhone) {
         // Automatically send SMS OTP
         await triggerSendPhoneOtp(res.username);
@@ -182,6 +201,48 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
     }
   };
 
+  // Send Firebase Auth Password Reset Email & Dispatch Email OTP
+  const triggerSendEmailReset = async (emailAddr?: string) => {
+    const targetEmail = emailAddr || lookupData?.email || (identifier.includes('@') ? identifier : undefined);
+    if (!targetEmail || !targetEmail.includes('@')) {
+      setErrorMsg(lang === 'ar' ? 'لم يتم العثور على بريد إلكتروني مسجل لهذا الحساب' : 'No registered email found for this account.');
+      return;
+    }
+
+    setIsLoading(true);
+    setErrorMsg(null);
+    setInfoMsg(null);
+
+    try {
+      // 1. Dispatch Firebase Auth email
+      const firebaseRes = await sendFirebasePasswordResetApi(targetEmail);
+
+      // 2. Dispatch Email OTP fallback via backend to allow instant verification code reset
+      const targetUser = lookupData?.username || identifier;
+      const otpRes = await sendForgotPasswordEmailOtpApi(targetUser, targetEmail);
+
+      if (!firebaseRes.success && !otpRes.success) {
+        setErrorMsg(firebaseRes.message || firebaseRes.error || (lang === 'ar' ? 'فشل إرسال بريد الاستعادة' : 'Failed to send password reset email'));
+        return;
+      }
+
+      setResendCooldown(60);
+      setCurrentStep('email_sent');
+      setInfoMsg(t.forgotPasswordEmailSent);
+    } catch (err: any) {
+      setErrorMsg(err?.message || (lang === 'ar' ? 'فشل إرسال بريد الاستعادة' : 'Failed to send password reset email'));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Resend Email handler with clear feedback and cooldown reset
+  const handleResendEmail = async () => {
+    if (resendCooldown > 0 || isLoading) return;
+    await triggerSendEmailReset(lookupData?.email);
+    setInfoMsg(t.forgotPasswordEmailResent);
+  };
+
   // Send Phone SMS OTP
   const triggerSendPhoneOtp = async (targetUsername: string) => {
     setIsLoading(true);
@@ -193,10 +254,6 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
       if (!res.success) {
         setErrorMsg(res.error || t.forgotPasswordOtpFailed);
         return;
-      }
-
-      if (res.devOtp) {
-        setDevOtpNotice(`[DEV MODE TEST CODE: ${res.devOtp}]`);
       }
 
       setResendCooldown(res.expiresInSeconds ? Math.min(res.expiresInSeconds, 60) : 60);
@@ -218,7 +275,9 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
   // STEP 2: Proceed from Method Select
   const handleProceedMethod = async () => {
     if (!lookupData) return;
-    if (selectedMethod === 'phone_otp') {
+    if (selectedMethod === 'email') {
+      await triggerSendEmailReset(lookupData.email);
+    } else if (selectedMethod === 'phone_otp') {
       await triggerSendPhoneOtp(lookupData.username);
     } else {
       setTwoFactorCode(['', '', '', '', '', '']);
@@ -229,7 +288,22 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
     }
   };
 
-  // STEP 3A: Verify Phone SMS OTP
+  // STEP 3A: Verify Email OTP
+  const handleVerifyEmailOtp = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const code = emailOtpDigits.join('').trim();
+    if (code.length !== 6) {
+      setErrorMsg(lang === 'ar' ? 'يرجى إدخال رمز التحقق المكون من 6 أرقام بالكامل' : 'Please enter the complete 6-digit OTP code');
+      return;
+    }
+
+    // Move to New Password step with code as reset verification
+    setErrorMsg(null);
+    setVerifiedResetToken(code);
+    setCurrentStep('new_password');
+  };
+
+  // STEP 3B: Verify Phone SMS OTP
   const handleVerifyPhoneOtp = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const code = phoneOtpDigits.join('').trim();
@@ -244,7 +318,7 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
     setCurrentStep('new_password');
   };
 
-  // STEP 3B: Verify 2FA TOTP or Backup Code
+  // STEP 3C: Verify 2FA TOTP or Backup Code
   const handleVerify2Fa = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setErrorMsg(null);
@@ -254,7 +328,7 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
       : twoFactorCode.join('').trim();
 
     if (!code) {
-      setErrorMsg(lang === 'ar' ? 'يرجى إدخال رمز المصادقة الثنائية' : 'Please enter the 2FA security code');
+      setErrorMsg(lang === 'ar' ? 'يرجى إدخال رمز المصادقة الثأنية' : 'Please enter the 2FA security code');
       return;
     }
 
@@ -295,10 +369,17 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
     setErrorMsg(null);
 
     try {
+      const resetMethodToUse =
+        selectedMethod === 'phone_otp'
+          ? 'phone_otp'
+          : selectedMethod === 'email'
+          ? 'email_otp'
+          : '2fa';
+
       const res = await resetPasswordApi({
         username: lookupData.username,
         newPassword: trimmedNew,
-        resetMethod: selectedMethod === 'phone_otp' ? 'phone_otp' : '2fa',
+        resetMethod: resetMethodToUse,
         resetCode: verifiedResetToken || undefined,
       });
 
@@ -387,7 +468,7 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
         </form>
       )}
 
-      {/* STEP 2: METHOD SELECTION (Phone SMS vs. 2FA) */}
+      {/* STEP 2: METHOD SELECTION (Email vs. Phone SMS vs. 2FA) */}
       {currentStep === 'method_select' && lookupData && (
         <div className="space-y-4">
           <div className="text-xs text-slate-300 leading-relaxed bg-slate-900/60 p-3.5 rounded-xl border border-slate-800">
@@ -395,6 +476,34 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
           </div>
 
           <div className="grid grid-cols-1 gap-3">
+            {lookupData.hasEmail && (
+              <label
+                onClick={() => setSelectedMethod('email')}
+                className={`p-3.5 rounded-xl border cursor-pointer flex items-center gap-3 transition-all ${
+                  selectedMethod === 'email'
+                    ? 'bg-sky-950/40 border-sky-500 text-white ring-1 ring-sky-500'
+                    : 'bg-slate-900/60 border-slate-800 text-slate-300 hover:border-slate-700'
+                }`}
+              >
+                <div className="p-2.5 rounded-xl bg-sky-500/20 text-sky-400 border border-sky-500/30">
+                  <Mail className="w-5 h-5" />
+                </div>
+                <div className="flex-1">
+                  <div className="text-xs font-bold">{t.forgotPasswordMethodEmail}</div>
+                  <div className="text-[11px] text-slate-400 font-mono mt-0.5">
+                    {lookupData.maskedEmail || lookupData.email || 'e••••@••••.com'}
+                  </div>
+                </div>
+                <input
+                  type="radio"
+                  name="reset_method"
+                  checked={selectedMethod === 'email'}
+                  onChange={() => setSelectedMethod('email')}
+                  className="w-4 h-4 text-sky-500 accent-sky-500 cursor-pointer"
+                />
+              </label>
+            )}
+
             {lookupData.hasPhone && (
               <label
                 onClick={() => setSelectedMethod('phone_otp')}
@@ -479,7 +588,177 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
         </div>
       )}
 
-      {/* STEP 3A: VERIFY PHONE SMS OTP */}
+      {/* STEP 3A: EMAIL RESET CONFIRMATION SCREEN (Firebase Auth) */}
+      {currentStep === 'email_sent' && (
+        <div className="space-y-4">
+          <div className="text-center py-3">
+            <div className="w-12 h-12 rounded-2xl bg-sky-500/20 text-sky-400 border border-sky-500/30 flex items-center justify-center mx-auto mb-3 shadow-lg shadow-sky-500/10">
+              <Mail className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-white mb-1.5">{t.forgotPasswordEmailSentTitle}</h3>
+            <p className="text-xs text-slate-300 leading-relaxed max-w-sm mx-auto">
+              {t.forgotPasswordEmailSentMsg}
+            </p>
+            <div className="mt-3 inline-block px-3 py-1.5 rounded-lg bg-slate-900/80 border border-slate-700 text-sky-300 font-mono text-xs">
+              {lookupData?.maskedEmail || lookupData?.email || identifier}
+            </div>
+          </div>
+
+          {/* Notice & Tip */}
+          <div className="p-3 rounded-xl bg-slate-900/70 border border-slate-800 text-slate-300 text-[11px] leading-relaxed flex items-start gap-2">
+            <HelpCircle className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
+            <span>{t.forgotPasswordEmailNotice}</span>
+          </div>
+
+          {/* Enter 6-digit Code Option */}
+          <button
+            type="button"
+            onClick={() => {
+              setEmailOtpDigits(['', '', '', '', '', '']);
+              setCurrentStep('verify_email_otp');
+              setTimeout(() => emailOtpRefs.current[0]?.focus(), 150);
+            }}
+            className="w-full py-2.5 px-3 rounded-xl border border-sky-500/30 bg-sky-950/40 hover:bg-sky-900/50 text-sky-300 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+          >
+            <KeyRound className="w-4 h-4 text-sky-400" />
+            <span>{t.forgotPasswordEnterCodeInstead}</span>
+          </button>
+
+          {/* Resend button & countdown */}
+          <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-800/80">
+            <button
+              type="button"
+              disabled={resendCooldown > 0 || isLoading}
+              onClick={handleResendEmail}
+              className="text-sky-400 hover:text-sky-300 font-bold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5 transition-colors"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+              <span>{t.forgotPasswordResendEmailBtn}</span>
+            </button>
+
+            {resendCooldown > 0 ? (
+              <span className="text-slate-400 font-mono text-[11px]">
+                {lang === 'ar' ? `إعادة الإرسال بعد ${resendCooldown} ثانية` : `Resend in ${resendCooldown}s`}
+              </span>
+            ) : (
+              <span className="text-emerald-400 text-[11px] font-medium">
+                {lang === 'ar' ? 'جاهز لإعادة الإرسال' : 'Ready to resend'}
+              </span>
+            )}
+          </div>
+
+          <div className="pt-2 flex flex-col sm:flex-row gap-2">
+            <button
+              type="button"
+              onClick={() => setCurrentStep('lookup')}
+              className="flex-1 py-3 px-4 rounded-xl border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 rtl:rotate-180" />
+              <span>{lang === 'ar' ? 'طريقة أخرى' : 'Try Another Method'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onBackToLogin}
+              className="flex-1 py-3 px-4 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>{t.forgotPasswordBackToLogin}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 3B: VERIFY EMAIL 6-DIGIT OTP */}
+      {currentStep === 'verify_email_otp' && (
+        <form onSubmit={handleVerifyEmailOtp} className="space-y-4">
+          <div className="text-xs text-slate-300 leading-relaxed bg-slate-900/60 p-3.5 rounded-xl border border-slate-800 flex items-center justify-between">
+            <div>
+              <span className="font-bold text-white block mb-0.5">{t.forgotPasswordVerifyEmailOtpLabel}</span>
+              <span className="text-slate-400 font-mono">
+                {lookupData?.maskedEmail || lookupData?.email || identifier}
+              </span>
+            </div>
+            <div className="p-2 rounded-xl bg-sky-500/20 text-sky-400">
+              <Mail className="w-5 h-5" />
+            </div>
+          </div>
+
+          {/* 6-Digit Segmented OTP Input */}
+          <div className="space-y-2">
+            <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider text-center">
+              {t.forgotPasswordVerifyEmailOtpLabel}
+            </label>
+
+            <div className="flex items-center justify-center gap-2" dir="ltr">
+              {emailOtpDigits.map((digit, idx) => (
+                <input
+                  key={idx}
+                  ref={(el) => (emailOtpRefs.current[idx] = el)}
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={1}
+                  value={digit}
+                  onChange={(e) =>
+                    handleDigitChange(idx, e.target.value, emailOtpDigits, setEmailOtpDigits, emailOtpRefs)
+                  }
+                  onKeyDown={(e) => handleKeyDown(idx, e.key as any, emailOtpDigits, emailOtpRefs)}
+                  className="w-11 h-12 text-center text-lg font-mono font-bold rounded-xl border border-slate-600 bg-slate-900/90 text-sky-400 focus:outline-hidden focus:border-sky-500 focus:ring-2 focus:ring-sky-500/40"
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Resend OTP Button & Countdown */}
+          <div className="flex items-center justify-between text-xs pt-1">
+            <button
+              type="button"
+              disabled={resendCooldown > 0 || isLoading}
+              onClick={handleResendEmail}
+              className="text-sky-400 hover:text-sky-300 font-bold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5 transition-colors"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+              <span>{t.forgotPasswordResendBtn}</span>
+            </button>
+
+            {resendCooldown > 0 ? (
+              <span className="text-slate-400 font-mono text-[11px]">
+                {lang === 'ar' ? `إعادة الإرسال بعد ${resendCooldown} ثانية` : `Resend in ${resendCooldown}s`}
+              </span>
+            ) : (
+              <span className="text-emerald-400 text-[11px] font-medium">
+                {lang === 'ar' ? 'جاهز لإعادة الإرسال' : 'Ready to resend'}
+              </span>
+            )}
+          </div>
+
+          <div className="pt-2 flex flex-col sm:flex-row gap-2">
+            <button
+              type="button"
+              onClick={() => setCurrentStep('email_sent')}
+              className="flex-1 py-3 px-4 rounded-xl border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 rtl:rotate-180" />
+              <span>{lang === 'ar' ? 'رجوع' : 'Back'}</span>
+            </button>
+
+            <button
+              type="submit"
+              disabled={emailOtpDigits.join('').length !== 6 || isLoading}
+              className="flex-2 py-3 px-4 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md disabled:opacity-50"
+            >
+              {isLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <ArrowRight className="w-4 h-4 rtl:rotate-180" />
+              )}
+              <span>{t.forgotPasswordVerifyBtn}</span>
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* STEP 3B: VERIFY PHONE SMS OTP */}
       {currentStep === 'verify_phone_otp' && (
         <form onSubmit={handleVerifyPhoneOtp} className="space-y-4">
           <div className="text-xs text-slate-300 leading-relaxed bg-slate-900/60 p-3.5 rounded-xl border border-slate-800 flex items-center justify-between">
@@ -493,13 +772,6 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
               <Smartphone className="w-5 h-5" />
             </div>
           </div>
-
-          {/* Dev OTP Display Banner */}
-          {devOtpNotice && (
-            <div className="p-2.5 rounded-lg bg-amber-950/60 border border-amber-600/50 text-amber-300 text-xs font-mono font-bold text-center">
-              {devOtpNotice}
-            </div>
-          )}
 
           {/* 6-Digit Segmented OTP Input */}
           <div className="space-y-2">

@@ -217,6 +217,7 @@ export interface CalculationResult {
 
 export interface UserProfile {
   userId: string; // Unique ID or derived from username
+  user_id?: string; // Unified database alias for userId
   username: string; // Username for login
   password?: string; // Password stored in database schema
   role?: 'admin' | 'user'; // User permission level

@@ -60,11 +60,11 @@ export const HsCodeLibraryModal: React.FC<HsCodeLibraryModalProps> = ({
     if (!term) return matchesCategory;
 
     const matchesTerm =
-      item.code.toLowerCase().includes(term) ||
-      item.descriptionEn.toLowerCase().includes(term) ||
-      item.descriptionAr.toLowerCase().includes(term) ||
-      item.categoryEn.toLowerCase().includes(term) ||
-      item.categoryAr.toLowerCase().includes(term);
+      (item.code || '').toLowerCase().includes(term) ||
+      (item.descriptionEn || '').toLowerCase().includes(term) ||
+      (item.descriptionAr || '').toLowerCase().includes(term) ||
+      (item.categoryEn || '').toLowerCase().includes(term) ||
+      (item.categoryAr || '').toLowerCase().includes(term);
 
     return matchesCategory && matchesTerm;
   });

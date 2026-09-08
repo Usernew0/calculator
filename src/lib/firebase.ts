@@ -14,7 +14,7 @@ import {
   writeBatch,
   setLogLevel
 } from "firebase/firestore";
-import { getAuth, signInAnonymously } from "firebase/auth";
+import { getAuth, signInAnonymously, sendPasswordResetEmail, createUserWithEmailAndPassword } from "firebase/auth";
 import { CalculationResult, UserProfile, FlightConsignment } from "../types";
 import firebaseConfig from "../../firebase-applet-config.json";
 import {
@@ -22,6 +22,9 @@ import {
   getUserProfileFromSupabase,
   getAllUsersFromSupabase,
   deleteUserFromSupabase,
+  softDeleteUserInSupabase,
+  restoreUserInSupabase,
+  hardDeleteUserAndCalculationsFromSupabase,
   saveCalculationToSupabase,
   deleteCalculationFromSupabase,
   clearAllCalculationsFromSupabase,
@@ -68,6 +71,65 @@ export async function ensureAuth(): Promise<void> {
     }
   } finally {
     isAuthAttemptInProgress = false;
+  }
+}
+
+/**
+ * Send password reset email directly via Firebase Authentication
+ */
+export async function sendPasswordResetEmailViaFirebase(email: string): Promise<{ success: boolean; message: string; error?: string }> {
+  const cleanEmail = String(email || '').trim();
+  if (!cleanEmail || !cleanEmail.includes('@') || !cleanEmail.includes('.')) {
+    return {
+      success: false,
+      message: 'A valid email address is required to reset password via Firebase Auth.',
+      error: 'INVALID_EMAIL',
+    };
+  }
+
+  // Pre-provision user in Firebase Auth if not already existing
+  // In Firebase Auth with enumeration protection, sendPasswordResetEmail silently succeeds without sending an email if the account does not exist in Auth.
+  try {
+    const tempPassword = `Tr@de_${Math.random().toString(36).slice(2, 10)}!${Date.now()}`;
+    await createUserWithEmailAndPassword(auth, cleanEmail, tempPassword);
+    console.info(`[Firebase Auth] Automatically provisioned identity record for: ${cleanEmail}`);
+  } catch (createErr: any) {
+    if (createErr?.code === 'auth/email-already-in-use') {
+      console.info(`[Firebase Auth] Identity record exists for: ${cleanEmail}`);
+    } else if (createErr?.code === 'auth/operation-not-allowed') {
+      console.warn('[Firebase Auth] Email/Password provider not enabled in Firebase Console.');
+    } else {
+      console.info('[Firebase Auth] Identity pre-check note:', createErr?.code);
+    }
+  }
+
+  try {
+    await sendPasswordResetEmail(auth, cleanEmail);
+    console.info(`[Firebase Auth] Password reset email dispatched to ${cleanEmail}`);
+    return {
+      success: true,
+      message: `Password reset instructions have been sent to ${cleanEmail} via Firebase Authentication.`,
+    };
+  } catch (err: any) {
+    console.error('[Firebase Auth sendPasswordResetEmail error]:', err);
+    const code = err?.code || '';
+    let userFriendlyMsg = err?.message || 'Failed to send password reset email via Firebase Auth.';
+
+    if (code === 'auth/user-not-found') {
+      userFriendlyMsg = 'No account found matching this email in Firebase Authentication. Please check the email or contact your administrator.';
+    } else if (code === 'auth/invalid-email') {
+      userFriendlyMsg = 'The email address is invalid.';
+    } else if (code === 'auth/too-many-requests') {
+      userFriendlyMsg = 'Too many password reset requests sent to this email. Please wait a few minutes before trying again.';
+    } else if (code === 'auth/operation-not-allowed') {
+      userFriendlyMsg = 'Email/Password sign-in is not enabled in Firebase Console. Please enable Email/Password under Firebase Authentication > Sign-in method.';
+    }
+
+    return {
+      success: false,
+      message: userFriendlyMsg,
+      error: code || 'FIREBASE_AUTH_ERROR',
+    };
   }
 }
 
@@ -195,12 +257,12 @@ export async function saveUserProfileToFirestore(
   profile: UserProfile,
   oldUsername?: string
 ): Promise<void> {
-  const newUsernameKey = (profile.username || profile.userId).toLowerCase().trim();
+  const newUsernameKey = String(profile.username || profile.userId || 'user').toLowerCase().trim();
 
   // If oldUsername is supplied and differs from newUsernameKey, clean up the old document/row
-  if (oldUsername && oldUsername.toLowerCase().trim() !== newUsernameKey) {
+  if (oldUsername && String(oldUsername).toLowerCase().trim() !== newUsernameKey) {
     try {
-      await deleteUserFromFirestore(oldUsername.toLowerCase().trim());
+      await deleteUserFromFirestore(String(oldUsername).toLowerCase().trim());
     } catch (err) {
       console.warn("Notice: Cleaning up old user document key failed:", err);
     }
@@ -280,6 +342,7 @@ export async function getUserProfileFromFirestore(username: string): Promise<Use
   try {
     await ensureAuth();
     const docKey = username.toLowerCase().trim();
+    const cleanDigits = username.replace(/\D/g, "");
     const docRef = doc(db, USERS_COLLECTION, docKey);
     const snap = await getDoc(docRef);
     if (snap.exists()) {
@@ -288,11 +351,14 @@ export async function getUserProfileFromFirestore(username: string): Promise<Use
       const qSnap = await getDocs(query(collection(db, USERS_COLLECTION)));
       qSnap.forEach((docSnap) => {
         const data = docSnap.data() as UserProfile;
+        if (!data) return;
+        const dataPhoneDigits = (data.phone || "").replace(/\D/g, "");
         if (
           docSnap.id === docKey ||
           data.username?.toLowerCase() === docKey ||
           data.userId?.toLowerCase() === docKey ||
-          data.email?.toLowerCase() === docKey
+          data.email?.toLowerCase() === docKey ||
+          (cleanDigits.length >= 7 && dataPhoneDigits && (dataPhoneDigits === cleanDigits || dataPhoneDigits.endsWith(cleanDigits) || cleanDigits.endsWith(dataPhoneDigits)))
         ) {
           profile = data;
         }
@@ -348,7 +414,7 @@ export async function getAllUsersFromFirestore(): Promise<UserProfile[]> {
 }
 
 /**
- * Delete a user profile schema from Firestore & Supabase
+ * Delete a user profile schema from Firestore & Supabase (standard user row deletion)
  */
 export async function deleteUserFromFirestore(key: string): Promise<void> {
   // Delete from Supabase
@@ -368,6 +434,150 @@ export async function deleteUserFromFirestore(key: string): Promise<void> {
   } catch (error: any) {
     handleFirestoreError(error, OperationType.DELETE, USERS_COLLECTION);
   }
+}
+
+/**
+ * Soft delete user in Firestore & Supabase:
+ * Sets status to 'suspended', marks isDeleted: true, and PRESERVES ALL CALCULATIONS intact
+ */
+export async function softDeleteUserInFirestore(key: string, adminUsername?: string): Promise<void> {
+  // 1. Dual-write soft delete to Supabase
+  try {
+    await softDeleteUserInSupabase(key, adminUsername);
+  } catch (sbErr) {
+    console.warn("Supabase soft delete notice:", sbErr);
+  }
+
+  // 2. Dual-write soft delete to Firestore
+  try {
+    await ensureAuth();
+    const docKey = key.toLowerCase().trim();
+    const docRef = doc(db, USERS_COLLECTION, docKey);
+    const nowIso = new Date().toISOString();
+    await setDoc(
+      docRef,
+      {
+        status: 'suspended',
+        isDeleted: true,
+        deletedAt: nowIso,
+        deletedBy: adminUsername || 'admin',
+        updatedAt: nowIso,
+      },
+      { merge: true }
+    );
+    console.info("User soft-deleted (suspended) in Firestore. Calculations preserved:", docKey);
+  } catch (error: any) {
+    handleFirestoreError(error, OperationType.WRITE, USERS_COLLECTION);
+  }
+}
+
+/**
+ * Restore / Unsuspend a soft-deleted user in Firestore & Supabase
+ */
+export async function restoreUserInFirestore(key: string): Promise<void> {
+  // 1. Dual-write restore to Supabase
+  try {
+    await restoreUserInSupabase(key);
+  } catch (sbErr) {
+    console.warn("Supabase restore notice:", sbErr);
+  }
+
+  // 2. Dual-write restore to Firestore
+  try {
+    await ensureAuth();
+    const docKey = key.toLowerCase().trim();
+    const docRef = doc(db, USERS_COLLECTION, docKey);
+    const nowIso = new Date().toISOString();
+    await setDoc(
+      docRef,
+      {
+        status: 'active',
+        isDeleted: false,
+        deletedAt: null,
+        deletedBy: null,
+        updatedAt: nowIso,
+      },
+      { merge: true }
+    );
+    console.info("User restored in Firestore:", docKey);
+  } catch (error: any) {
+    handleFirestoreError(error, OperationType.WRITE, USERS_COLLECTION);
+  }
+}
+
+/**
+ * Hard delete a user account AND purge all associated calculations from Firestore & Supabase
+ */
+export async function hardDeleteUserAndCalculationsFromFirestore(
+  key: string,
+  userTokens: string[] = []
+): Promise<{ deletedCalculationsCount: number }> {
+  const cleanTokens = Array.from(
+    new Set([key, ...userTokens].map((t) => t?.toLowerCase().trim()).filter(Boolean))
+  );
+
+  // 1. Purge from Supabase (user, calculations, gallery, flight consignments)
+  try {
+    await hardDeleteUserAndCalculationsFromSupabase(cleanTokens);
+  } catch (sbErr) {
+    console.warn("Supabase hard delete error:", sbErr);
+  }
+
+  // 2. Purge user document(s) from Firestore
+  try {
+    await ensureAuth();
+    for (const t of cleanTokens) {
+      const userRef = doc(db, USERS_COLLECTION, t);
+      await deleteDoc(userRef).catch(() => {});
+    }
+  } catch (err) {
+    console.warn("Firestore delete user doc notice:", err);
+  }
+
+  // 3. Purge ALL calculations belonging to this user from Firestore
+  let deletedCalcCount = 0;
+  try {
+    await ensureAuth();
+    const qSnap = await getDocs(collection(db, CALCULATIONS_COLLECTION));
+    const batch = writeBatch(db);
+    qSnap.forEach((docSnap) => {
+      const data = docSnap.data() as any;
+      const cUserId = (data.userId || data.user_id || '').toLowerCase().trim();
+      const cUsername = (data.username || '').toLowerCase().trim();
+      if (cleanTokens.includes(cUserId) || cleanTokens.includes(cUsername)) {
+        batch.delete(docSnap.ref);
+        deletedCalcCount++;
+      }
+    });
+    if (deletedCalcCount > 0) {
+      await batch.commit();
+      console.info(`Hard deleted ${deletedCalcCount} calculations from Firestore for user tokens:`, cleanTokens);
+    }
+  } catch (err: any) {
+    handleFirestoreError(err, OperationType.DELETE, CALCULATIONS_COLLECTION);
+  }
+
+  // 4. Purge flights / cargo consignments created by this user from Firestore
+  try {
+    const flightsSnap = await getDocs(collection(db, FLIGHTS_COLLECTION));
+    const flightBatch = writeBatch(db);
+    let flightCount = 0;
+    flightsSnap.forEach((docSnap) => {
+      const data = docSnap.data() as any;
+      const fUser = (data.userId || data.user_id || data.createdBy || '').toLowerCase().trim();
+      if (cleanTokens.includes(fUser)) {
+        flightBatch.delete(docSnap.ref);
+        flightCount++;
+      }
+    });
+    if (flightCount > 0) {
+      await flightBatch.commit();
+    }
+  } catch (err) {
+    console.warn("Firestore flights purge notice:", err);
+  }
+
+  return { deletedCalculationsCount: deletedCalcCount };
 }
 
 /**

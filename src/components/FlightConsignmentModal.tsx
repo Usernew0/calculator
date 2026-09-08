@@ -193,13 +193,13 @@ export const FlightConsignmentModal: React.FC<FlightConsignmentModalProps> = ({
   // Filtered existing flights for Link Existing tab
   const filteredExistingFlights = useMemo(() => {
     if (!existingSearchQuery.trim()) return existingFlights;
-    const q = existingSearchQuery.toLowerCase();
+    const q = existingSearchQuery.toLowerCase().trim();
     return existingFlights.filter(
       (f) =>
-        f.flightNumber.toLowerCase().includes(q) ||
-        f.airline.toLowerCase().includes(q) ||
-        f.originAirport.toLowerCase().includes(q) ||
-        f.destinationAirport.toLowerCase().includes(q) ||
+        (f.flightNumber || '').toLowerCase().includes(q) ||
+        (f.airline || '').toLowerCase().includes(q) ||
+        (f.originAirport || '').toLowerCase().includes(q) ||
+        (f.destinationAirport || '').toLowerCase().includes(q) ||
         (f.awbNumber && f.awbNumber.toLowerCase().includes(q))
     );
   }, [existingFlights, existingSearchQuery]);

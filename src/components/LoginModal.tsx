@@ -9,6 +9,7 @@ import {
   regenerateBackupCodesApi,
 } from '../lib/api';
 import { updateActiveUserProfileIfCurrent, setStoredUserProfile, getSessionToken, setSessionToken } from '../lib/session';
+import { saveUserProfileToFirestore } from '../lib/firebase';
 import { generateQrCodeDataUrl, formatTotpSecret } from '../lib/totp';
 import { Language, translations } from '../data/translations';
 import {
@@ -386,6 +387,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       // Persist in User Profile storage slot (Session Token preserved intact)
       updateActiveUserProfileIfCurrent(currentUser, profileToSave, oldUsername);
       setStoredUserProfile(profileToSave);
+
+      // Also persist profile changes (phone, 2FA, contact details) to Firestore
+      try {
+        await saveUserProfileToFirestore(profileToSave, oldUsername);
+      } catch (fsErr) {
+        console.warn('Firestore profile sync notice:', fsErr);
+      }
 
       const successTxt = lang === 'ar'
         ? 'تم حفظ جميع البيانات وتحديث اسم المستخدم بنجاح في قاعدة البيانات!'

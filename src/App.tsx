@@ -168,7 +168,8 @@ export default function App() {
     }
 
     // Load isolated local cache for this specific user (checking both userId and username keys)
-    const userStorageKey = `cargo_profit_fx_history_${userProfile.userId.toLowerCase()}`;
+    const effectiveUserId = String(userProfile.userId || userProfile.user_id || userProfile.username || 'user').toLowerCase();
+    const userStorageKey = `cargo_profit_fx_history_${effectiveUserId}`;
     const usernameStorageKey = userProfile.username ? `cargo_profit_fx_history_${userProfile.username.toLowerCase()}` : '';
     try {
       let saved = localStorage.getItem(userStorageKey);
@@ -192,10 +193,10 @@ export default function App() {
     setCalculatorInitialInput(null);
 
     const isAdmin = userProfile.role === 'admin' || userProfile.username?.toLowerCase() === 'admin';
-    const filterUserId = isAdmin ? null : userProfile.userId;
+    const filterUserId = isAdmin ? null : (userProfile.userId || userProfile.username || null);
     const userAliases = isAdmin
       ? []
-      : [userProfile.userId, userProfile.username, userProfile.email].filter(Boolean) as string[];
+      : [userProfile.userId, userProfile.user_id, userProfile.username, userProfile.email].filter(Boolean) as string[];
 
     const unsubscribe = subscribeToCalculations(
       (firestoreData) => {
@@ -211,9 +212,9 @@ export default function App() {
                 item.input?.userId,
               ]
                 .filter(Boolean)
-                .map((t: string) => String(t).toLowerCase().trim());
+                .map((t: any) => String(t || '').toLowerCase().trim());
 
-              const targetTokens = userAliases.map((t) => t.toLowerCase().trim());
+              const targetTokens = userAliases.map((t) => String(t || '').toLowerCase().trim());
               return itemTokens.some((t) => targetTokens.includes(t));
             });
             setHistory(userOnly);
@@ -234,9 +235,10 @@ export default function App() {
 
   // Save isolated history to localStorage per user
   useEffect(() => {
-    if (!userProfile?.userId) return;
+    if (!userProfile) return;
     try {
-      const userStorageKey = `cargo_profit_fx_history_${userProfile.userId.toLowerCase()}`;
+      const effectiveUserId = String(userProfile.userId || userProfile.user_id || userProfile.username || 'user').toLowerCase();
+      const userStorageKey = `cargo_profit_fx_history_${effectiveUserId}`;
       localStorage.setItem(userStorageKey, JSON.stringify(history));
     } catch (err) {
       console.error('Failed to save history to localStorage', err);
@@ -245,9 +247,13 @@ export default function App() {
 
   // Central Logout Handler - Resets state, inputs and clears user session
   const handleLogout = useCallback(() => {
-    if (userProfile?.userId) {
-      const userStorageKey = `cargo_profit_fx_history_${userProfile.userId.toLowerCase()}`;
+    if (userProfile) {
+      const effectiveUserId = String(userProfile.userId || userProfile.user_id || userProfile.username || 'user').toLowerCase();
+      const userStorageKey = `cargo_profit_fx_history_${effectiveUserId}`;
       localStorage.removeItem(userStorageKey);
+      if (userProfile.username) {
+        localStorage.removeItem(`cargo_profit_fx_history_${userProfile.username.toLowerCase()}`);
+      }
     }
     localStorage.removeItem(LOCAL_STORAGE_KEY);
     clearFullSession();

@@ -40,12 +40,12 @@ function handleSupabaseError(context: string, error: any) {
  */
 export async function saveUserProfileToSupabase(profile: UserProfile, oldUsername?: string): Promise<boolean> {
   try {
-    const docKey = (profile.username || profile.userId).toLowerCase().trim();
+    const docKey = String(profile.username || profile.userId || 'user').toLowerCase().trim();
 
     // If username changed, delete the old user row from Supabase
-    if (oldUsername && oldUsername.toLowerCase().trim() !== docKey) {
+    if (oldUsername && String(oldUsername).toLowerCase().trim() !== docKey) {
       try {
-        await deleteUserFromSupabase(oldUsername.toLowerCase().trim());
+        await deleteUserFromSupabase(String(oldUsername).toLowerCase().trim());
       } catch (delErr) {
         console.warn('Supabase delete old user row notice:', delErr);
       }
@@ -230,7 +230,7 @@ export async function getAllUsersFromSupabase(): Promise<UserProfile[]> {
 }
 
 /**
- * Delete user from Supabase
+ * Delete user from Supabase (standard user row deletion)
  */
 export async function deleteUserFromSupabase(key: string): Promise<boolean> {
   try {
@@ -238,7 +238,7 @@ export async function deleteUserFromSupabase(key: string): Promise<boolean> {
     const { error } = await supabase
       .from(USERS_TABLE)
       .delete()
-      .or(`id.eq.${docKey},username.eq.${docKey},user_id.eq.${docKey}`);
+      .or(`id.ilike.${docKey},username.ilike.${docKey},user_id.ilike.${docKey}`);
 
     if (error) {
       handleSupabaseError('delete user', error);
@@ -247,6 +247,89 @@ export async function deleteUserFromSupabase(key: string): Promise<boolean> {
     return true;
   } catch (err) {
     handleSupabaseError('delete user exception', err);
+    return false;
+  }
+}
+
+/**
+ * Soft delete user in Supabase: suspends user, sets is_deleted flag, preserves calculations
+ */
+export async function softDeleteUserInSupabase(key: string, adminUsername?: string): Promise<boolean> {
+  try {
+    const docKey = key.toLowerCase().trim();
+    const nowIso = new Date().toISOString();
+    const { error } = await supabase
+      .from(USERS_TABLE)
+      .update({
+        status: 'suspended',
+        is_deleted: true,
+        deleted_at: nowIso,
+        updated_at: nowIso,
+      })
+      .or(`id.ilike.${docKey},username.ilike.${docKey},user_id.ilike.${docKey}`);
+
+    if (error) {
+      handleSupabaseError('soft delete user', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    handleSupabaseError('soft delete user exception', err);
+    return false;
+  }
+}
+
+/**
+ * Restore a soft-deleted user in Supabase
+ */
+export async function restoreUserInSupabase(key: string): Promise<boolean> {
+  try {
+    const docKey = key.toLowerCase().trim();
+    const nowIso = new Date().toISOString();
+    const { error } = await supabase
+      .from(USERS_TABLE)
+      .update({
+        status: 'active',
+        is_deleted: false,
+        deleted_at: null,
+        updated_at: nowIso,
+      })
+      .or(`id.ilike.${docKey},username.ilike.${docKey},user_id.ilike.${docKey}`);
+
+    if (error) {
+      handleSupabaseError('restore user', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    handleSupabaseError('restore user exception', err);
+    return false;
+  }
+}
+
+/**
+ * Hard delete user and ALL associated calculations, gallery images, and consignments from Supabase
+ */
+export async function hardDeleteUserAndCalculationsFromSupabase(userTokens: string[]): Promise<boolean> {
+  try {
+    const cleanTokens = Array.from(
+      new Set(userTokens.map((t) => t?.toLowerCase().trim()).filter(Boolean))
+    );
+    if (cleanTokens.length === 0) return true;
+
+    // 1. Delete user row
+    const userExpr = cleanTokens.map((t) => `id.ilike.${t},username.ilike.${t},user_id.ilike.${t}`).join(',');
+    await supabase.from(USERS_TABLE).delete().or(userExpr);
+
+    // 2. Delete all calculations belonging to this user
+    for (const token of cleanTokens) {
+      await supabase.from(CALCULATIONS_TABLE).delete().or(`user_id.ilike.${token},user_id.eq.${token}`);
+      await supabase.from(GALLERY_TABLE).delete().or(`user_id.ilike.${token},user_id.eq.${token}`);
+      await supabase.from('flight_consignments').delete().or(`user_id.ilike.${token},created_by.ilike.${token}`);
+    }
+    return true;
+  } catch (err) {
+    handleSupabaseError('hard delete user and calculations exception', err);
     return false;
   }
 }
@@ -940,7 +1023,7 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthReport> {
 
     if (usersErr) {
       report.usersError = usersErr.message;
-      if (usersErr.code === '42P01' || usersErr.message.toLowerCase().includes('does not exist')) {
+      if (usersErr.code === '42P01' || (usersErr.message || '').toLowerCase().includes('does not exist')) {
         report.usersError = `Table "${USERS_TABLE}" missing in Supabase. Please run SQL setup script.`;
       }
     } else {
@@ -955,7 +1038,7 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthReport> {
 
     if (calcsErr) {
       report.calculationsError = calcsErr.message;
-      if (calcsErr.code === '42P01' || calcsErr.message.toLowerCase().includes('does not exist')) {
+      if (calcsErr.code === '42P01' || (calcsErr.message || '').toLowerCase().includes('does not exist')) {
         report.calculationsError = `Table "${CALCULATIONS_TABLE}" missing in Supabase. Please run SQL setup script.`;
       }
     } else {
@@ -970,7 +1053,7 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthReport> {
 
     if (galleryErr) {
       report.galleryError = galleryErr.message;
-      if (galleryErr.code === '42P01' || galleryErr.message.toLowerCase().includes('does not exist')) {
+      if (galleryErr.code === '42P01' || (galleryErr.message || '').toLowerCase().includes('does not exist')) {
         report.galleryError = `Table "${GALLERY_TABLE}" optional table in Supabase.`;
       }
     } else {
@@ -985,7 +1068,7 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthReport> {
 
     if (flightsErr) {
       report.flightsError = flightsErr.message;
-      if (flightsErr.code === '42P01' || flightsErr.message.toLowerCase().includes('does not exist')) {
+      if (flightsErr.code === '42P01' || (flightsErr.message || '').toLowerCase().includes('does not exist')) {
         report.flightsError = `Table "${FLIGHTS_TABLE}" optional table in Supabase.`;
       }
     } else {

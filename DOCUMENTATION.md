@@ -554,6 +554,96 @@ Before building or deploying to production, verify the following steps:
     - Upgraded `/api/calculations` in `server.ts` to parse `calculation_data` JSONB reliably, ensure `userId` normalization on mapped objects, and apply case-insensitive candidate token matching on database and in-memory stores.
     - Enhanced `App.tsx` local storage cache resolution to check both `userId` and `username` storage keys so session switches never drop cached records.
 
+- **2026-09-07**:
+  - **Self-Service Password Reset & Account Recovery API Endpoints**:
+    - Resolved the "api route not found" error during the "Find Account" step in the password reset flow by implementing full backend route handlers in `server.ts`.
+    - **Account Lookup (`POST /api/auth/forgot-password/lookup`)**:
+      - Resolves user accounts via username, email address, User ID (`USR-*`), or phone number.
+      - Normalizes phone digits (e.g. `+201...`) to match across formatted and raw phone numbers in both in-memory cache and Supabase `users`.
+      - Validates account status; rejected with `403 Forbidden` (`ACCOUNT_SUSPENDED`) if the account is suspended or soft-deleted.
+      - Returns available self-service recovery channels (`hasPhone`, `has2Fa`), username, and privacy-masked phone number (e.g. `+20•••••567`).
+    - **SMS Phone OTP Dispatch (`POST /api/auth/forgot-password/send-phone-otp`)**:
+      - Generates cryptographically random 6-digit numeric OTPs stored in memory with a 10-minute expiration window and attempt rate-limiting (max 5 attempts).
+      - Returns verification dispatch status, cooldown duration (60s), and dev test code (`devOtp`) for testing environments.
+    - **Password Reset Execution (`POST /api/auth/forgot-password/reset`)**:
+      - Verifies identity through either **SMS Phone OTP** (with single-use token consumption) or **Two-Factor Authentication (TOTP / Backup Codes)**.
+      - Validates new password minimum length, hashes password with PBKDF2/salt, and updates both the in-memory cache and Supabase `users` table.
+      - Leverages token password signature (`pv`) verification so old sessions are automatically invalidated upon password change.
+    - **Client-Side API Resilience (`src/lib/api.ts`)**:
+      - Improved error handling in `forgotPasswordLookupApi` to prevent internal routing error cascades and provide clear, user-friendly error messages.
+    - **Automated Test Suite Coverage (`tests/suite.test.ts`)**:
+      - Added 7 comprehensive integration tests covering empty identifier rejection (400), unknown user handling (404), username lookup (200), phone number lookup (200), email lookup (200), OTP generation, invalid OTP rejection, and successful password reset with subsequent login.
+  - **Enhanced Contact Info Actions in Admin Panel (`AdminPanel.tsx`)**:
+    - Converted static user email addresses into interactive `mailto:` links with accessible tooltips, hover underline styling, and icon color transitions.
+    - Converted phone numbers into interactive `tel:` links with cleaned numeric dial strings (`tel:+...`), LTR display formatting (`dir="ltr"`), and mobile/desktop quick-dial action triggers.
+    - Added unique element ID attributes (`user-email-link-*` and `user-tel-link-*`) for testability and automated styling hooks.
+    - Provided localized tooltips in both Arabic and English (`lang === 'ar'`).
+  - **Admin User Management: Dual-Mode Soft Delete vs. Hard Delete Architecture**:
+    - **Soft Delete Mode (`mode: 'soft'`)**:
+      - Suspends the user account (`status: 'suspended'`, `is_deleted: true`, `deleted_at: timestamp`).
+      - Revokes and invalidates active session tokens immediately (`ACCOUNT_SUSPENDED`).
+      - **Guaranteed Calculation Retention**: Retains 100% of all calculations, quotes, flight consignments, and product gallery images created by this user in Firestore and Supabase PostgreSQL.
+      - **Account Restoration**: Supports instant reactivation via `POST /api/users/:username/restore`, clearing suspension and restoring user access with existing calculation history intact.
+    - **Hard Delete Mode (`mode: 'hard'`)**:
+      - Purges the account from both in-memory cache, Firestore `users`, and Supabase `users` tables.
+      - Traverses across all user tokens (username, `userId`, `user_id`, and legacy IDs) to irrevocably purge all associated calculations (`calculations`), invoices, gallery media (`gallery_images`), and consignments (`flight_consignments`).
+      - Requires double confirmation via checkbox in the Admin Panel to prevent accidental data loss.
+    - **Admin Panel UI Enhancements (`AdminPanel.tsx`)**:
+      - Redesigned the user deletion modal with clear selection cards for Soft Delete vs. Hard Delete with color-coded safety badges (Amber for Soft Delete / Rose for Hard Delete).
+      - Added dynamic status pill highlighting "SOFT DELETED" (`معلق - حذف ناعم`) accounts in the user list.
+      - Integrated a one-click "Restore" button (`RotateCcw`) for soft-deleted/suspended accounts.
+    - **Automated Test Coverage (`tests/suite.test.ts`)**: Added end-to-end integration tests verifying soft deletion, token rejection, calculation retention, account restoration, and hard delete calculation purging.
+
+- **2026-09-08**:
+  - **Comprehensive Safe Property Access & `toLowerCase()` Runtime Error Hardening**:
+    - **Root Cause Analysis**: Identified runtime crashes (`TypeError: Cannot read properties of undefined (reading 'toLowerCase')`) triggered when accessing optional user profile properties (`userId`, `username`) or flight fields (`airline`, `originCountry`, `destinationCountry`, `masterAwbNumber`) without null checks.
+    - **App.tsx State & Storage Hardening**:
+      - Replaced direct `userProfile.userId.toLowerCase()` calls with canonical fallback: `String(userProfile.userId || userProfile.user_id || userProfile.username || 'user').toLowerCase()`.
+      - Guarded session history saving and clearing effects against missing `userProfile` or `userId`.
+      - Normalized alias comparison tokens using `String(t || '').toLowerCase().trim()`.
+    - **Component-Level Search & Filter Protection**:
+      - **`DashboardView.tsx`**: Defensively guarded flight search filter fields (`flightNumber`, `airline`, `originAirport`, `destinationAirport`, `originCountry`, `destinationCountry`) and calculation title/SKU/category filters against `undefined`.
+      - **`FlightConsignmentModal.tsx`**: Added nullish coalescing to all flight search attributes in the existing flight linker (`filteredExistingFlights`).
+      - **`GalleryView.tsx`**: Guarded product group filtering (`title`, `sku`, `category`) to ensure missing category metadata does not cause filtering failure.
+      - **`CurrencyRatesView.tsx`**: Guarded search queries and currency definitions against `undefined` search queries or missing currency names.
+      - **`HsCodeLibraryModal.tsx`**: Guarded multilingual HS code descriptions and category fields against `undefined`.
+      - **`AdminPanel.tsx`**: Guarded favicon upload file inspection `(file.name || '').toLowerCase().endsWith('.ico')`.
+    - **Service & Persistence Resilience**:
+      - **`firebase.ts` & `supabase.ts`**: Protected `saveUserProfileToFirestore` and `saveUserProfileToSupabase` user key derivation and old-username cleanup against missing profile attributes.
+      - **`supabase.ts`**: Applied optional chaining to `usersErr.message`, `calcsErr.message`, `galleryErr.message`, and `flightsErr.message` during connection health checks.
+      - **`session.ts`**: Added safe fallback to `profile.username` when setting `REMEMBER_USERNAME`.
+      - **`server.ts`**: Hardened 2FA setup, enable, disable, and backup code regeneration endpoints to handle optional `authUser.username` and `req.body.username` safely.
+  - **Production Real Email Reset Code Delivery Engine (`server.ts`, `api.ts`, `ForgotPasswordStep.tsx`, `nodemailer`)**:
+    - **Elimination of Dev Mode Test Code**: Completely removed on-screen dev OTP banners and test code exposure from API responses and the client UI, transitioning to true production email delivery.
+    - **Dual-Engine Real Email Dispatch**:
+      - **SMTP Engine (`nodemailer`)**: Direct SMTP integration with customized, responsive HTML email templates delivering the 6-digit verification code directly to the recipient's inbox when SMTP environment variables (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`) are configured.
+      - **Supabase Auth Mailer**: Integrated cloud mailer dispatch (`supabase.auth.signInWithOtp`) ensuring automated delivery to recipient email addresses without manual SMTP setup.
+    - **Flexible Dual Verification Handshake**: `POST /api/auth/forgot-password/reset` verifies incoming 6-digit codes against both the server-side OTP cache and Supabase Auth's `verifyOtp` engine, providing seamless verification regardless of the delivery channel.
+  - **Firebase Authentication Email Password Reset & Resend Engine (`firebase.ts`, `api.ts`, `ForgotPasswordStep.tsx`, `server.ts`, `translations.ts`)**:
+    - **Identity Pre-Provisioning Fix**: Resolved silent failure where `sendPasswordResetEmail` succeeded without delivering emails because Firebase Auth enumeration protection drops requests for accounts not pre-registered in Firebase Auth's identity store. `sendPasswordResetEmailViaFirebase` now attempts identity provisioning before triggering email dispatch.
+    - **Global Resend Countdown Engine**: Fixed timer tick logic in `ForgotPasswordStep.tsx` so the 60-second cooldown timer operates globally across all steps (`email_sent`, `verify_email_otp`, and `verify_phone_otp`). When the cooldown reaches 0, the button reactivates with a "Ready to resend" indicator.
+    - **Resend Action with Visual Feedback**: Clicking the "Resend Email" button now triggers both the Firebase Auth reset link and the email OTP simultaneously, displays an animated loading spinner (`Loader2`), resets the cooldown timer to 60s, and emits a clear toast notification.
+    - **Dual-Path Email Account Recovery**:
+      - Path 1: Users can click the link in the Firebase email to reset their password via Firebase's secure web handler.
+      - Path 2: Users can click "Enter 6-digit reset code instead" on the `email_sent` screen to open an in-app segmented OTP verification view (`verify_email_otp`) and complete their password reset directly without leaving the app.
+    - **Email OTP Endpoints & Verification**:
+      - `POST /api/auth/forgot-password/send-email-otp`: Generates a secure 6-digit numeric OTP with 10-minute expiry and triggers real email delivery.
+      - `POST /api/auth/forgot-password/reset`: Accepts `resetMethod: 'email_otp'` to verify the code and update the user's password across in-memory cache, Supabase PostgreSQL, and Firestore.
+    - **Bilingual Translations**: Added Arabic and English translation strings for email OTP labels, code fallback buttons, and resend notifications in `src/data/translations.ts`.
+    - **Integration Test Suite**: Added automated tests in `tests/suite.test.ts` for email OTP generation, verification, and password reset.
+
+- **2026-09-07**:
+  - **Enhanced User Contact Links in Admin Panel (`AdminPanel.tsx`)**:
+    - Integrated native `mailto:` links for email addresses, launching the user's default email client with pre-addressed recipient.
+    - Integrated native `tel:` links for phone numbers with regex sanitization (`replace(/[^\d+]/g, '')`) to ensure tel-protocol compatibility across mobile dialers and desktop VoIP clients while preserving international `+` prefixes.
+    - Added LTR text direction styling (`dir="ltr"`) for phone numbers to guarantee correct display in both Arabic (RTL) and English (LTR) language modes.
+  - **Self-Service Password Reset & Account Recovery Engine (`server.ts`, `api.ts`, `firebase.ts`)**:
+    - Resolved account lookup issue ("This account does not have a registered phone number or 2FA configured") by introducing a dual-stage sync pattern: the client pre-queries Firestore for matching user credentials and passes the verified user object to `/api/auth/forgot-password/lookup` to prime the server's cache before validation.
+    - Enhanced `getUserProfileFromFirestore` in `src/lib/firebase.ts` to support multi-field resolution by username, email, user ID, and international phone number (with digit-only normalization).
+    - Hardened `fetchUserFromStoreOrDb` in `server.ts` to merge in-memory store data with Supabase records, prioritizing in-memory session credentials and preventing invalidation of active administrator tokens.
+  - **Profile Management Realtime Persistence (`LoginModal.tsx`)**:
+    - Connected `saveUserProfileToFirestore` inside `LoginModal.tsx` on profile save, ensuring phone numbers, 2FA status, and company details immediately persist to Google Cloud Firestore alongside local state and server memory.
+
 - **2026-09-03**:
   - **Profile Settings & Username Migration Engine Resolution ("Unauthorized Access" Fix)**:
     - Fixed the `401 Unauthorized access. Valid token required.` issue encountered when modifying profile settings and usernames.

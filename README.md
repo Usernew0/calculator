@@ -145,6 +145,14 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
   - **Quick Header 2FA Status & Action**: Live badge in the admin navigation header displaying the admin account's current 2FA status with 1-click toggle action to configure or disable 2FA.
   - **User & Admin Table 2FA Actions**: Manage, enable (with QR code and manual key setup), disable, or reset 2FA directly per user/admin row in the User Accounts table.
   - **Interactive 2FA Modal**: Features QR Code scanning, manual Base32 key copying, and 6 single-use emergency backup recovery codes with 1-click clipboard actions.
+- **Self-Service Multi-Channel Password Reset & Account Recovery Engine**:
+  - **Real Production Email Delivery Engine**: Verifiable 6-digit reset codes are dispatched directly to the recipient's email inbox using either SMTP transport (`nodemailer`) or cloud mailer integration (`supabase.auth.signInWithOtp`), completely eliminating on-screen dev mode test code banners.
+  - **Firebase Authentication Native Email Reset Link**: Supports sending direct password reset links via Google Cloud Firebase Auth (`sendPasswordResetEmailViaFirebase`) to the user's verified registered email address with automatic identity pre-provisioning, masked recipient previews (`e••••n@domain.com`), and an active 60-second cooldown timer.
+  - **Dual-Path Email Recovery (Link or 6-Digit Code)**: In addition to the Firebase email link, users can select "Enter 6-digit reset code instead" to verify an email OTP directly on-screen and set a new password without leaving the application.
+  - **Real-Time Resend Email Engine**: Dedicated Resend Email button with a live 1-second countdown timer, animated dispatch feedback, and toast confirmations.
+  - **SMS One-Time Passcode (OTP)**: Direct 6-digit phone SMS verification code dispatch with automated countdown timers and rapid segment inputs.
+  - **TOTP Two-Factor Authenticator Code**: Emergency recovery via time-based authenticator apps (Google Authenticator, Authy) or pre-generated single-use emergency backup codes.
+  - **Intelligent Method Discovery**: `/api/auth/forgot-password/lookup` evaluates which recovery channels are configured for the account (Email, SMS Phone, 2FA) and dynamically guides the user through automatic routing or interactive multi-channel selection.
 - **Dual Identifier Authentication (`Username OR Email + Password`)**:
   - Seamless login using either username or email address across Supabase and Firestore repositories.
   - Hardened authentication flow ensuring zero session issuance before successful 6-digit TOTP verification if 2FA is active.
@@ -273,6 +281,27 @@ npm start
 | **Profile Update & Username Conflicts** | Cross-checks multi-identifier sets (`userId`, `username`, `id`, `oldUsername`) | Dual verification in `/api/auth/profile` and client fallback | Eliminates false-positive collision alerts; cleanly purges old aliases on actual rename |
 | **Vercel Production CORS & Preflight (`/api/*`)** | Handles cross-origin requests & preflight OPTIONS | Returns 204 with complete CORS access headers | Eliminates 405/401 CORS blocking on production serverless endpoints |
 | **Multi-Format Client Tokens (`client_USR-*` / `client_username_*`)** | Auto-detected & parsed in `requireAuth` | Resolves via `fetchUserFromStoreOrDb` | Guarantees seamless session continuity even if user ID or username is used as token identifier |
+| **User Deletion: Soft Delete (Suspend) vs. Hard Delete (Purge)** | Admin selects deletion mode in modal | Synced across Express, Firestore, and Supabase | **Soft Delete**: suspends account, invalidates sessions, and preserves 100% of calculations. **Hard Delete**: requires checkbox confirmation and purges account + all linked calculations, media, and consignments |
+| **Interactive Contact Info Links** | Native `mailto:` and `tel:` action links in Admin Panel | Auto-sanitized dial strings & LTR numbers | Direct 1-click email client dispatch and phone dialer activation |
+| **Self-Service Password Reset & Find Account** | Multi-field lookup (`username`, `email`, `phone`, `userId`) | `/api/auth/forgot-password/*` with in-memory & Supabase lookup | Recovers account via SMS Phone OTP or 2FA security codes; handles formatted phone numbers and invalidates old sessions on reset |
+| **Optional Properties & Case Invariance (`toLowerCase()`)** | Defensive nullish coalescing (`String(val \|\| '').toLowerCase()`) | Applied across App.tsx, DashboardView, GalleryView, FlightConsignmentModal, HsCodeLibraryModal, and backend | Eliminates all runtime `TypeError: Cannot read properties of undefined (reading 'toLowerCase')` crashes on missing user IDs, flight fields, or optional profile properties |
+
+---
+
+## 👥 Admin User Management: Soft Delete vs. Hard Delete
+
+In the Admin Panel (`AdminPanel.tsx`), administrators have full control over user and administrator accounts with two distinct deletion modes:
+
+1. **Soft Delete (تعليق الحساب مع الاحتفاظ بالحسابات)**:
+   - Sets user `status: 'suspended'` and `is_deleted: true`.
+   - Terminates all active sessions immediately (`ACCOUNT_SUSPENDED`).
+   - **Guaranteed Calculation Retention**: Retains all calculations, commercial quotes, flight consignments, and product gallery images created by this user.
+   - **One-Click Account Restoration**: Administrators can click the "Restore" button (`RotateCcw`) at any time to unsuspend the user, reactivating their access while keeping their calculation history intact.
+
+2. **Hard Delete (مسح الحساب ومسح كافة العمليات الحسابية)**:
+   - Permanently deletes the account record from Firestore and Supabase PostgreSQL `users` table.
+   - Irrevocably purges all calculation records, quotes, invoice attachments, cargo images, and flight manifests linked to the user's IDs and usernames.
+   - Requires explicit double-confirmation checkbox confirmation before execution to prevent accidental data loss.
 
 ---
 

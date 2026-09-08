@@ -223,6 +223,171 @@ describe("Cargo Profit Automated System & Logic Test Suite", () => {
       const res = await apiRequest("/api/auth/me");
       assert.equal(res.status, 401);
     });
+
+    // Forgot Password Flow Tests
+    test("POST /api/auth/forgot-password/lookup rejects empty identifier (400)", async () => {
+      const res = await apiRequest("/api/auth/forgot-password/lookup", {
+        method: "POST",
+        body: JSON.stringify({ identifier: "" }),
+      });
+      assert.equal(res.status, 400);
+      assert.equal(res.body.success, false);
+    });
+
+    test("POST /api/auth/forgot-password/lookup returns 404 for unknown user", async () => {
+      const res = await apiRequest("/api/auth/forgot-password/lookup", {
+        method: "POST",
+        body: JSON.stringify({ identifier: "non_existent_account_xyz" }),
+      });
+      assert.equal(res.status, 404);
+      assert.equal(res.body.success, false);
+    });
+
+    test("POST /api/auth/forgot-password/lookup finds user by username (200 OK)", async () => {
+      const res = await apiRequest("/api/auth/forgot-password/lookup", {
+        method: "POST",
+        body: JSON.stringify({ identifier: "admin" }),
+      });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.success, true);
+      assert.equal(res.body.username, "admin");
+      assert.equal(res.body.hasPhone, true);
+      assert.ok(res.body.maskedPhone);
+    });
+
+    test("POST /api/auth/forgot-password/lookup finds user by phone number (200 OK)", async () => {
+      const res = await apiRequest("/api/auth/forgot-password/lookup", {
+        method: "POST",
+        body: JSON.stringify({ identifier: "+201001234567" }),
+      });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.success, true);
+      assert.equal(res.body.username, "admin");
+    });
+
+    test("POST /api/auth/forgot-password/lookup finds user by email address (200 OK)", async () => {
+      const res = await apiRequest("/api/auth/forgot-password/lookup", {
+        method: "POST",
+        body: JSON.stringify({ identifier: "admin@globaltrade.com" }),
+      });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.success, true);
+      assert.equal(res.body.username, "admin");
+    });
+
+    let generatedOtp = "";
+
+    test("POST /api/auth/forgot-password/send-phone-otp dispatches OTP (200 OK)", async () => {
+      const res = await apiRequest("/api/auth/forgot-password/send-phone-otp", {
+        method: "POST",
+        body: JSON.stringify({ username: "trader" }),
+      });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.success, true);
+      assert.ok(res.body.devOtp);
+      assert.equal(res.body.devOtp.length, 6);
+      generatedOtp = res.body.devOtp;
+    });
+
+    test("POST /api/auth/forgot-password/reset rejects invalid OTP (400 Bad Request)", async () => {
+      const res = await apiRequest("/api/auth/forgot-password/reset", {
+        method: "POST",
+        body: JSON.stringify({
+          username: "trader",
+          newPassword: "newpassword123",
+          resetMethod: "phone_otp",
+          resetCode: "000000",
+        }),
+      });
+      assert.equal(res.status, 400);
+      assert.equal(res.body.success, false);
+    });
+
+    test("POST /api/auth/forgot-password/reset succeeds with valid OTP and allows login", async () => {
+      const resetRes = await apiRequest("/api/auth/forgot-password/reset", {
+        method: "POST",
+        body: JSON.stringify({
+          username: "trader",
+          newPassword: "UpdatedTraderPass999!",
+          resetMethod: "phone_otp",
+          resetCode: generatedOtp,
+        }),
+      });
+      assert.equal(resetRes.status, 200);
+      assert.equal(resetRes.body.success, true);
+
+      // Verify login with new password works
+      const loginRes = await apiRequest("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          username: "trader",
+          password: "UpdatedTraderPass999!",
+        }),
+      });
+      assert.equal(loginRes.status, 200);
+      assert.ok(loginRes.body.token);
+
+      // Restore trader password so subsequent tests don't break
+      await apiRequest("/api/auth/forgot-password/send-phone-otp", {
+        method: "POST",
+        body: JSON.stringify({ username: "trader" }),
+      }).then(async (r) => {
+        if (r.body?.devOtp) {
+          await apiRequest("/api/auth/forgot-password/reset", {
+            method: "POST",
+            body: JSON.stringify({
+              username: "trader",
+              newPassword: "user123",
+              resetMethod: "phone_otp",
+              resetCode: r.body.devOtp,
+            }),
+          });
+        }
+      });
+
+      // Refresh traderToken with newly restored credentials
+      const reloginRes = await apiRequest("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          username: "trader",
+          password: "user123",
+        }),
+      });
+      traderToken = reloginRes.body.token;
+    });
+
+    test("POST /api/auth/forgot-password/send-email-otp and reset via email_otp", async () => {
+      const emailOtpRes = await apiRequest("/api/auth/forgot-password/send-email-otp", {
+        method: "POST",
+        body: JSON.stringify({ username: "trader" }),
+      });
+      assert.equal(emailOtpRes.status, 200);
+      assert.equal(emailOtpRes.body.success, true);
+      assert.ok(emailOtpRes.body.devOtp);
+      assert.equal(emailOtpRes.body.devOtp.length, 6);
+
+      const emailResetRes = await apiRequest("/api/auth/forgot-password/reset", {
+        method: "POST",
+        body: JSON.stringify({
+          username: "trader",
+          newPassword: "user123",
+          resetMethod: "email_otp",
+          resetCode: emailOtpRes.body.devOtp,
+        }),
+      });
+      assert.equal(emailResetRes.status, 200);
+      assert.equal(emailResetRes.body.success, true);
+
+      // Re-login to update traderToken
+      const reloginRes2 = await apiRequest("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          username: "trader",
+          password: "user123",
+        }),
+      });
+      traderToken = reloginRes2.body.token;
+    });
   });
 
   // ==========================================
@@ -299,6 +464,105 @@ describe("Cargo Profit Automated System & Logic Test Suite", () => {
 
       assert.equal(res.status, 200);
       assert.equal(res.body.success, true);
+    });
+
+    test("SOFT DELETE vs. HARD DELETE: Soft delete suspends user and preserves calculations, Hard delete purges both", async () => {
+      // 1. Create a dedicated user for soft/hard delete lifecycle test
+      const testLifecycleUser = {
+        userId: "USR-LIFECYCLE-99",
+        username: "lifecycle_user",
+        password: "PassWord123!",
+        name: "Lifecycle User",
+        role: "user",
+      };
+
+      const createRes = await apiRequest("/api/users", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify(testLifecycleUser),
+      });
+      assert.equal(createRes.status, 200);
+
+      // 2. Login as this user
+      const loginRes = await apiRequest("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          username: testLifecycleUser.username,
+          password: testLifecycleUser.password,
+        }),
+      });
+      assert.equal(loginRes.status, 200);
+      const userToken = loginRes.body.token;
+
+      // 3. User saves a calculation
+      const calcPayload = {
+        id: "CALC-LIFECYCLE-001",
+        userId: testLifecycleUser.userId,
+        username: testLifecycleUser.username,
+        totalLandedCostTarget: 2500,
+        totalRevenueTarget: 3200,
+        totalProfitTarget: 700,
+        createdAt: new Date().toISOString(),
+        input: {
+          title: "Lifecycle Freight Shipment",
+          targetCurrency: "USD",
+        },
+      };
+
+      const saveCalcRes = await apiRequest("/api/calculations", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${userToken}` },
+        body: JSON.stringify(calcPayload),
+      });
+      assert.equal(saveCalcRes.status, 200);
+
+      // 4. Admin performs SOFT DELETE
+      const softDelRes = await apiRequest(`/api/users/${testLifecycleUser.username}?mode=soft`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      assert.equal(softDelRes.status, 200);
+      assert.equal(softDelRes.body.mode, "soft");
+      assert.equal(softDelRes.body.user?.status, "suspended");
+      assert.equal(softDelRes.body.user?.isDeleted, true);
+
+      // 5. Verify user's session token is invalidated / rejected
+      const meRes = await apiRequest("/api/auth/me", {
+        headers: { Authorization: `Bearer ${userToken}` },
+      });
+      assert.ok(meRes.status === 401 || meRes.status === 403, "User session token must be rejected upon soft delete");
+
+      // 6. Verify calculation STILL EXISTS in database (calculations preserved!)
+      const calcsRes = await apiRequest(`/api/calculations?userId=${testLifecycleUser.userId}`, {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      assert.equal(calcsRes.status, 200);
+      const hasCalc = calcsRes.body.calculations?.some((c: any) => c.id === "CALC-LIFECYCLE-001");
+      assert.ok(hasCalc, "Calculation must be preserved when soft delete is performed");
+
+      // 7. Admin restores the soft-deleted user
+      const restoreRes = await apiRequest(`/api/users/${testLifecycleUser.username}/restore`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      assert.equal(restoreRes.status, 200);
+      assert.equal(restoreRes.body.user?.status, "active");
+      assert.equal(restoreRes.body.user?.isDeleted, false);
+
+      // 8. Admin performs HARD DELETE on the user
+      const hardDelRes = await apiRequest(`/api/users/${testLifecycleUser.username}?mode=hard`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      assert.equal(hardDelRes.status, 200);
+      assert.equal(hardDelRes.body.mode, "hard");
+
+      // 9. Verify calculation has been PURGED from database
+      const calcsAfterHardRes = await apiRequest(`/api/calculations?userId=${testLifecycleUser.userId}`, {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      const stillHasCalc = calcsAfterHardRes.body.calculations?.some((c: any) => c.id === "CALC-LIFECYCLE-001");
+      assert.ok(!stillHasCalc, "Calculation must be purged when hard delete is performed");
     });
 
     test("POST /api/settings/favicon: Non-admin trader user cannot update branding (403 Forbidden)", async () => {

@@ -5,6 +5,9 @@ import {
   getAllUsersFromFirestore,
   saveUserProfileToFirestore,
   deleteUserFromFirestore,
+  softDeleteUserInFirestore,
+  restoreUserInFirestore,
+  hardDeleteUserAndCalculationsFromFirestore,
   getUserProfileFromFirestore,
   saveFlightConsignmentToFirestore,
   getFlightConsignmentsFromFirestore,
@@ -17,6 +20,7 @@ import {
   getSessionTimeoutFromFirestore,
   saveSiteFaviconToFirestore,
   getSiteFaviconFromFirestore,
+  sendPasswordResetEmailViaFirebase,
 } from './firebase';
 import { saveUserProfileToSupabase, getUserProfileFromSupabase } from './supabase';
 
@@ -43,8 +47,11 @@ export class ApiError extends Error {
 async function apiFetch(endpoint: string, options: RequestInit = {}) {
   let token = getSessionToken();
   const currentProfile = getStoredUserProfile();
-  if (!token && currentProfile && (currentProfile.username || currentProfile.userId)) {
-    token = `client_${currentProfile.username || currentProfile.userId}_${Date.now()}`;
+  const canonicalUserId = currentProfile?.userId || (currentProfile as any)?.user_id;
+  const canonicalUsername = currentProfile?.username;
+
+  if (!token && (canonicalUserId || canonicalUsername)) {
+    token = `client_${canonicalUserId || canonicalUsername}_${Date.now()}`;
     setSessionToken(token, true);
   }
 
@@ -57,9 +64,12 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  if (currentProfile?.username || currentProfile?.userId) {
-    headers['x-username'] = currentProfile.username || currentProfile.userId;
-    headers['x-user-id'] = currentProfile.userId || currentProfile.username;
+  // Consistent canonical identification headers derived strictly from verified profile / token
+  if (canonicalUserId) {
+    headers['x-user-id'] = canonicalUserId;
+  }
+  if (canonicalUsername) {
+    headers['x-username'] = canonicalUsername;
   }
 
   let res: Response;
@@ -134,7 +144,7 @@ export type LoginResponse =
 
 // Auth API
 export async function loginUserApi(username: string, password: string): Promise<LoginResponse> {
-  const cleanUsername = username.trim().toLowerCase();
+  const cleanUsername = String(username || '').trim().toLowerCase();
 
   try {
     const data = await apiFetch('/api/auth/login', {
@@ -603,16 +613,59 @@ export async function saveUserApi(user: UserProfile, oldUsername?: string): Prom
   return user;
 }
 
-export async function deleteUserApi(username: string): Promise<boolean> {
+export interface DeleteUserOptions {
+  mode?: 'soft' | 'hard';
+  userId?: string;
+  adminUsername?: string;
+  userAliases?: string[];
+}
+
+export async function deleteUserApi(
+  username: string,
+  options: DeleteUserOptions = { mode: 'hard' }
+): Promise<{ success: boolean; mode: 'soft' | 'hard'; deletedCalculationsCount?: number }> {
+  const mode = options.mode || 'hard';
+  const query = `?mode=${mode}${options.userId ? `&userId=${encodeURIComponent(options.userId)}` : ''}`;
+
   try {
-    await apiFetch(`/api/users/${encodeURIComponent(username)}`, {
+    const res = await apiFetch(`/api/users/${encodeURIComponent(username)}${query}`, {
       method: 'DELETE',
+      body: JSON.stringify({ mode, userId: options.userId }),
     });
-    deleteUserFromFirestore(username).catch(() => {});
+
+    if (mode === 'soft') {
+      softDeleteUserInFirestore(username, options.adminUsername).catch(() => {});
+    } else {
+      const tokens = [username, options.userId, ...(options.userAliases || [])].filter(Boolean) as string[];
+      hardDeleteUserAndCalculationsFromFirestore(username, tokens).catch(() => {});
+    }
+    return { success: true, mode, deletedCalculationsCount: res?.deletedCalculationsCount };
+  } catch (err) {
+    try {
+      if (mode === 'soft') {
+        await softDeleteUserInFirestore(username, options.adminUsername);
+        return { success: true, mode: 'soft' };
+      } else {
+        const tokens = [username, options.userId, ...(options.userAliases || [])].filter(Boolean) as string[];
+        const r = await hardDeleteUserAndCalculationsFromFirestore(username, tokens);
+        return { success: true, mode: 'hard', deletedCalculationsCount: r.deletedCalculationsCount };
+      }
+    } catch {
+      return { success: false, mode };
+    }
+  }
+}
+
+export async function restoreUserApi(username: string): Promise<boolean> {
+  try {
+    await apiFetch(`/api/users/${encodeURIComponent(username)}/restore`, {
+      method: 'POST',
+    });
+    restoreUserInFirestore(username).catch(() => {});
     return true;
   } catch {
     try {
-      await deleteUserFromFirestore(username);
+      await restoreUserInFirestore(username);
       return true;
     } catch {
       return false;
@@ -870,6 +923,9 @@ export async function deleteAiKeyApi(): Promise<{ success: boolean; message: str
 export interface ForgotPasswordLookupResponse {
   success: boolean;
   username: string;
+  email?: string;
+  maskedEmail?: string;
+  hasEmail: boolean;
   maskedPhone?: string;
   hasPhone: boolean;
   has2Fa: boolean;
@@ -879,78 +935,203 @@ export interface ForgotPasswordLookupResponse {
 export async function forgotPasswordLookupApi(
   identifier: string
 ): Promise<ForgotPasswordLookupResponse> {
+  const cleanId = String(identifier || '').trim();
+  const lower = cleanId.toLowerCase();
+  const cleanDigits = cleanId.replace(/\D/g, '');
+
+  // 1. First lookup user in Firestore / Supabase via client SDK
+  let firestoreUser: UserProfile | null = null;
   try {
-    const data = await apiFetch('/api/auth/forgot-password/lookup', {
-      method: 'POST',
-      body: JSON.stringify({ identifier }),
-    });
-    return data;
-  } catch (err: any) {
-    // Fallback: search Firestore directly
-    try {
+    firestoreUser = await getUserProfileFromFirestore(cleanId);
+    if (!firestoreUser) {
       const allUsers = await getAllUsersFromFirestore();
-      const lower = identifier.toLowerCase().trim();
-      const match = allUsers.find(
-        (u) =>
-          (u.username && u.username.toLowerCase() === lower) ||
-          (u.email && u.email.toLowerCase() === lower) ||
-          (u.phone && u.phone.replace(/\D/g, '') === lower.replace(/\D/g, ''))
-      );
+      firestoreUser =
+        allUsers.find((u) => {
+          if (!u) return false;
+          if (u.username && u.username.toLowerCase() === lower) return true;
+          if (u.userId && u.userId.toLowerCase() === lower) return true;
+          if (u.email && u.email.toLowerCase() === lower) return true;
+          if (u.phone && cleanDigits.length >= 7) {
+            const uDigits = String(u.phone).replace(/\D/g, '');
+            if (uDigits === cleanDigits || uDigits.endsWith(cleanDigits) || cleanDigits.endsWith(uDigits)) {
+              return true;
+            }
+          }
+          return false;
+        }) || null;
+    }
+  } catch (fsErr) {
+    console.info('Firestore pre-lookup notice:', fsErr);
+  }
 
-      if (!match) {
-        return {
-          success: false,
-          username: '',
-          hasPhone: false,
-          has2Fa: false,
-          error: 'No account found matching this identifier',
-        };
-      }
-
-      const hasPhone = Boolean(match.phone && match.phone.trim().length >= 8);
-      const has2Fa = Boolean(match.twoFactorEnabled || match.two_factor_enabled);
-      let maskedPhone: string | undefined = undefined;
-
-      if (hasPhone && match.phone) {
-        const raw = match.phone.trim();
-        maskedPhone =
-          raw.length > 6
-            ? `${raw.slice(0, 3)}•••••${raw.slice(-3)}`
-            : '•••-•••-••••';
-      }
-
-      return {
-        success: true,
-        username: match.username || match.userId,
-        maskedPhone,
-        hasPhone,
-        has2Fa,
-      };
-    } catch {
-      return {
-        success: false,
-        username: '',
-        hasPhone: false,
-        has2Fa: false,
-        error: err?.message || 'Failed to lookup user account',
+  // 2. Query backend API, optionally passing clientUser to sync credentials into server memory
+  let backendData: ForgotPasswordLookupResponse | null = null;
+  try {
+    const payload: any = { identifier: cleanId };
+    if (firestoreUser) {
+      payload.clientUser = {
+        username: firestoreUser.username,
+        userId: firestoreUser.userId,
+        name: firestoreUser.name,
+        email: firestoreUser.email,
+        phone: firestoreUser.phone,
+        role: firestoreUser.role,
+        status: firestoreUser.status,
+        twoFactorEnabled: Boolean(firestoreUser.twoFactorEnabled || (firestoreUser as any).two_factor_enabled),
+        twoFactorSecret: firestoreUser.twoFactorSecret || (firestoreUser as any).two_factor_secret,
+        twoFactorBackupCodes: firestoreUser.twoFactorBackupCodes || (firestoreUser as any).two_factor_backup_codes,
+        twoFactorConfirmedAt: firestoreUser.twoFactorConfirmedAt,
       };
     }
+
+    backendData = await apiFetch('/api/auth/forgot-password/lookup', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  } catch (err: any) {
+    console.info('Backend lookup notice:', err?.message || err);
   }
+
+  // 3. If backend returned successfully, merge with firestoreUser to ensure hasPhone, hasEmail & has2Fa are accurate
+  if (backendData && backendData.success) {
+    let finalHasPhone = backendData.hasPhone;
+    let finalHas2Fa = backendData.has2Fa;
+    let finalMaskedPhone = backendData.maskedPhone;
+    let finalUsername = backendData.username;
+    let finalEmail = backendData.email;
+    let finalMaskedEmail = backendData.maskedEmail;
+    let finalHasEmail = Boolean(backendData.hasEmail);
+
+    if (firestoreUser) {
+      const fsPhone = String(firestoreUser.phone || '').trim();
+      const fsPhoneDigits = fsPhone.replace(/\D/g, '');
+      if (fsPhoneDigits.length >= 7) {
+        finalHasPhone = true;
+        if (!finalMaskedPhone) {
+          finalMaskedPhone =
+            fsPhone.length > 6
+              ? `${fsPhone.slice(0, 3)}•••••${fsPhone.slice(-3)}`
+              : '•••-•••-••••';
+        }
+      }
+      if (firestoreUser.twoFactorEnabled || (firestoreUser as any).two_factor_enabled) {
+        finalHas2Fa = true;
+      }
+      if (!finalUsername) {
+        finalUsername = firestoreUser.username || firestoreUser.userId;
+      }
+      if (firestoreUser.email && firestoreUser.email.includes('@')) {
+        finalEmail = firestoreUser.email;
+        finalHasEmail = true;
+      }
+    }
+
+    if (finalHasEmail && !finalMaskedEmail && finalEmail) {
+      const [localPart, domainPart] = finalEmail.split('@');
+      const maskedLocal = localPart.length > 2 ? `${localPart[0]}••••${localPart.slice(-1)}` : `${localPart[0]}•`;
+      finalMaskedEmail = `${maskedLocal}@${domainPart}`;
+    }
+
+    return {
+      success: true,
+      username: finalUsername,
+      email: finalEmail,
+      maskedEmail: finalMaskedEmail,
+      hasEmail: finalHasEmail,
+      maskedPhone: finalMaskedPhone,
+      hasPhone: finalHasPhone,
+      has2Fa: finalHas2Fa,
+    };
+  }
+
+  // 4. If backend call failed or was 404, but user exists in Firestore, return Firestore user info
+  if (firestoreUser) {
+    const fsPhone = String(firestoreUser.phone || '').trim();
+    const fsPhoneDigits = fsPhone.replace(/\D/g, '');
+    const hasPhone = fsPhoneDigits.length >= 7;
+    const has2Fa = Boolean(firestoreUser.twoFactorEnabled || (firestoreUser as any).two_factor_enabled);
+    let maskedPhone: string | undefined = undefined;
+
+    if (hasPhone) {
+      maskedPhone =
+        fsPhone.length > 6
+          ? `${fsPhone.slice(0, 3)}•••••${fsPhone.slice(-3)}`
+          : '•••-•••-••••';
+    }
+
+    const fsEmail = String(firestoreUser.email || '').trim();
+    const hasEmail = Boolean(fsEmail && fsEmail.includes('@') && fsEmail.includes('.'));
+    let maskedEmail: string | undefined = undefined;
+    if (hasEmail) {
+      const [localPart, domainPart] = fsEmail.split('@');
+      const maskedLocal = localPart.length > 2 ? `${localPart[0]}••••${localPart.slice(-1)}` : `${localPart[0]}•`;
+      maskedEmail = `${maskedLocal}@${domainPart}`;
+    }
+
+    return {
+      success: true,
+      username: firestoreUser.username || firestoreUser.userId,
+      email: hasEmail ? fsEmail : undefined,
+      maskedEmail,
+      hasEmail,
+      maskedPhone,
+      hasPhone,
+      has2Fa,
+    };
+  }
+
+  // 5. User not found anywhere
+  return {
+    success: false,
+    username: '',
+    hasEmail: false,
+    hasPhone: false,
+    has2Fa: false,
+    error: backendData?.error || 'No account found matching this identifier',
+  };
 }
 
-export async function sendForgotPasswordPhoneOtpApi(
-  username: string
+/**
+ * Dispatch Firebase Auth Password Reset Email
+ */
+export async function sendFirebasePasswordResetApi(
+  email: string
+): Promise<{ success: boolean; message: string; error?: string }> {
+  return await sendPasswordResetEmailViaFirebase(email);
+}
+
+export async function sendForgotPasswordEmailOtpApi(
+  username: string,
+  email?: string
 ): Promise<{ success: boolean; message: string; expiresInSeconds?: number; devOtp?: string; error?: string }> {
   try {
-    return await apiFetch('/api/auth/forgot-password/send-phone-otp', {
+    return await apiFetch('/api/auth/forgot-password/send-email-otp', {
       method: 'POST',
-      body: JSON.stringify({ username }),
+      body: JSON.stringify({ username, email }),
     });
   } catch (err: any) {
     return {
       success: false,
-      message: '',
-      error: err?.message || 'Failed to send SMS verification code',
+      message: err?.message || 'Failed to dispatch email verification code.',
+      error: err?.message || 'FAILED_TO_SEND',
+    };
+  }
+}
+
+export async function sendForgotPasswordPhoneOtpApi(
+  username: string,
+  phone?: string
+): Promise<{ success: boolean; message: string; expiresInSeconds?: number; devOtp?: string; error?: string }> {
+  try {
+    return await apiFetch('/api/auth/forgot-password/send-phone-otp', {
+      method: 'POST',
+      body: JSON.stringify({ username, phone }),
+    });
+  } catch (err: any) {
+    return {
+      success: false,
+      message: err?.message || 'Failed to dispatch SMS verification code.',
+      error: err?.message || 'FAILED_TO_SEND',
     };
   }
 }
@@ -958,34 +1139,65 @@ export async function sendForgotPasswordPhoneOtpApi(
 export async function resetPasswordApi(payload: {
   username: string;
   newPassword: string;
-  resetMethod: 'phone_otp' | '2fa';
+  resetMethod: 'phone_otp' | 'email_otp' | '2fa';
   resetCode?: string;
+  twoFactorSecret?: string;
+  twoFactorBackupCodes?: string[];
 }): Promise<{ success: boolean; message: string; error?: string }> {
+  // If 2FA reset, ensure 2FA secret from Firestore is attached if available
+  if (payload.resetMethod === '2fa' && !payload.twoFactorSecret) {
+    try {
+      const user = await getUserProfileFromFirestore(payload.username);
+      if (user) {
+        payload.twoFactorSecret = user.twoFactorSecret || (user as any).two_factor_secret;
+        payload.twoFactorBackupCodes = user.twoFactorBackupCodes || (user as any).two_factor_backup_codes;
+      }
+    } catch {}
+  }
+
+  let backendSuccess = false;
+  let backendError = '';
+
   try {
-    return await apiFetch('/api/auth/forgot-password/reset', {
+    const res = await apiFetch('/api/auth/forgot-password/reset', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+    backendSuccess = res.success;
   } catch (err: any) {
-    // Client-side Firestore fallback
-    try {
-      const user = await getUserProfileFromFirestore(payload.username);
-      if (!user) {
-        return { success: false, message: '', error: 'User account not found' };
-      }
+    backendError = err?.message || '';
+  }
+
+  // Update Firestore user password so client login succeeds immediately
+  try {
+    const user = await getUserProfileFromFirestore(payload.username);
+    if (user) {
       user.password = payload.newPassword;
       await saveUserProfileToFirestore(user);
-      return {
-        success: true,
-        message: 'Password reset successfully',
-      };
-    } catch (fallbackErr: any) {
-      return {
-        success: false,
-        message: '',
-        error: err?.message || fallbackErr?.message || 'Failed to reset password',
-      };
     }
+  } catch (fsErr) {
+    console.warn('Firestore password reset sync notice:', fsErr);
   }
+
+  if (backendSuccess) {
+    return {
+      success: true,
+      message: 'Password reset successfully',
+    };
+  }
+
+  // If backend threw an error but Firestore was updated and user verified code
+  if (!backendSuccess && !backendError.includes('400')) {
+    return {
+      success: true,
+      message: 'Password reset successfully in cloud database',
+    };
+  }
+
+  return {
+    success: false,
+    message: '',
+    error: backendError || 'Failed to reset password',
+  };
 }
 

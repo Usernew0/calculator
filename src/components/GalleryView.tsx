@@ -178,11 +178,11 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     return productGroups.filter((group) => {
       // 1. Search term (checks group info AND any record in group)
       if (searchTerm) {
-        const term = searchTerm.toLowerCase();
+        const term = searchTerm.toLowerCase().trim();
         const matchGroup =
-          group.title.toLowerCase().includes(term) ||
-          group.sku.toLowerCase().includes(term) ||
-          group.category.toLowerCase().includes(term);
+          (group.title || '').toLowerCase().includes(term) ||
+          (group.sku || '').toLowerCase().includes(term) ||
+          (group.category || '').toLowerCase().includes(term);
 
         const matchRecord = group.records.some((rec) => {
           const inp = rec.input;
