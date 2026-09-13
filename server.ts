@@ -556,95 +556,7 @@ let serverSiteFavicon: string | null = null;
 let serverInactivityTimeoutMinutes: number = 15;
 let serverGeminiApiKey: string = "";
 let serverBrevoApiKey: string = "";
-let serverBrevoSmsSender: string = "Elegant";
-
-interface ServerBrandingConfig {
-  appName: string;
-  appNameAr: string;
-  emailSenderName: string;
-  smsSenderName: string;
-  faviconUrl: string | null;
-  updatedAt?: string;
-  updatedBy?: string;
-}
-
-let serverBrandingConfig: ServerBrandingConfig = {
-  appName: "Elegant",
-  appNameAr: "أليجانت",
-  emailSenderName: "Elegant Security",
-  smsSenderName: "Elegant",
-  faviconUrl: null,
-};
-
-async function getEffectiveBrandingConfig(): Promise<ServerBrandingConfig> {
-  try {
-    const { data } = await supabase
-      .from("site_settings")
-      .select("*")
-      .eq("id", "branding")
-      .maybeSingle();
-
-    if (data) {
-      const sd = data.settings_data || {};
-      serverBrandingConfig = {
-        appName: data.app_name || sd.appName || serverBrandingConfig.appName || "Elegant",
-        appNameAr: data.app_name_ar || sd.appNameAr || serverBrandingConfig.appNameAr || "أليجانت",
-        emailSenderName: data.email_sender_name || sd.emailSenderName || serverBrandingConfig.emailSenderName || "Elegant Security",
-        smsSenderName: data.sms_sender_name || sd.smsSenderName || serverBrandingConfig.smsSenderName || "Elegant",
-        faviconUrl: data.favicon_url || sd.faviconUrl || serverBrandingConfig.faviconUrl || null,
-        updatedAt: data.updated_at || sd.updatedAt,
-        updatedBy: sd.updatedBy,
-      };
-      if (serverBrandingConfig.smsSenderName) {
-        serverBrevoSmsSender = serverBrandingConfig.smsSenderName;
-      }
-      if (serverBrandingConfig.faviconUrl) {
-        serverSiteFavicon = serverBrandingConfig.faviconUrl;
-      }
-    }
-  } catch (err) {
-    // fallback to in-memory state
-  }
-  return serverBrandingConfig;
-}
-
-interface PasswordResetMethodsConfig {
-  emailResetEnabled: boolean;
-  phoneResetEnabled: boolean;
-  twoFactorResetEnabled: boolean;
-  updatedAt?: string;
-  updatedBy?: string;
-}
-
-let serverPasswordResetMethodsConfig: PasswordResetMethodsConfig = {
-  emailResetEnabled: true,
-  phoneResetEnabled: true,
-  twoFactorResetEnabled: true,
-};
-
-async function getPasswordResetMethodsConfig(): Promise<PasswordResetMethodsConfig> {
-  try {
-    const { data } = await supabase
-      .from("site_settings")
-      .select("*")
-      .eq("id", "password_reset")
-      .maybeSingle();
-
-    if (data && data.settings_data) {
-      const sd = data.settings_data;
-      serverPasswordResetMethodsConfig = {
-        emailResetEnabled: sd.emailResetEnabled !== undefined ? Boolean(sd.emailResetEnabled) : true,
-        phoneResetEnabled: sd.phoneResetEnabled !== undefined ? Boolean(sd.phoneResetEnabled) : true,
-        twoFactorResetEnabled: sd.twoFactorResetEnabled !== undefined ? Boolean(sd.twoFactorResetEnabled) : true,
-        updatedAt: sd.updatedAt,
-        updatedBy: sd.updatedBy,
-      };
-    }
-  } catch (err) {
-    // fallback to in-memory state
-  }
-  return serverPasswordResetMethodsConfig;
-}
+let serverBrevoSmsSender: string = "CargoProfit";
 
 function getEffectiveGeminiKey(): string {
   return serverGeminiApiKey || process.env.GEMINI_API_KEY || "";
@@ -662,13 +574,12 @@ function getEffectiveBrevoApiKey(): string {
 
 function getEffectiveBrevoSender(): string {
   const raw = (
-    serverBrandingConfig.smsSenderName ||
     serverBrevoSmsSender ||
     process.env.BREVO_SMS_SENDER ||
-    "Elegant"
+    "CargoProfit"
   ).trim();
   const clean = raw.replace(/[^a-zA-Z0-9]/g, "").slice(0, 11);
-  return clean || "Elegant";
+  return clean || "CargoProfit";
 }
 
 function formatPhoneForBrevo(rawPhone: string): string {
@@ -1768,20 +1679,14 @@ app.post("/api/auth/forgot-password/lookup", async (req, res) => {
       });
     }
 
-    // Load admin password reset methods visibility configuration
-    const methodsConfig = await getPasswordResetMethodsConfig();
-
-    // Check available recovery channels respecting admin settings
+    // Check available recovery channels
     const rawPhone = String(user.phone || "").trim();
     const phoneDigits = rawPhone.replace(/\D/g, "");
-    const userHasPhone = phoneDigits.length >= 7;
-    const hasPhone = userHasPhone && Boolean(methodsConfig.phoneResetEnabled);
-
-    const userHas2Fa = Boolean(user.twoFactorEnabled);
-    const has2Fa = userHas2Fa && Boolean(methodsConfig.twoFactorResetEnabled);
+    const hasPhone = phoneDigits.length >= 7;
+    const has2Fa = Boolean(user.twoFactorEnabled);
 
     let maskedPhone: string | undefined = undefined;
-    if (userHasPhone && methodsConfig.phoneResetEnabled) {
+    if (hasPhone) {
       maskedPhone =
         rawPhone.length > 6
           ? `${rawPhone.slice(0, 3)}•••••${rawPhone.slice(-3)}`
@@ -1789,10 +1694,9 @@ app.post("/api/auth/forgot-password/lookup", async (req, res) => {
     }
 
     const rawEmail = String(user.email || "").trim();
-    const userHasEmail = Boolean(rawEmail && rawEmail.includes("@") && rawEmail.includes("."));
-    const hasEmail = userHasEmail && Boolean(methodsConfig.emailResetEnabled);
+    const hasEmail = Boolean(rawEmail && rawEmail.includes("@") && rawEmail.includes("."));
     let maskedEmail: string | undefined = undefined;
-    if (userHasEmail && methodsConfig.emailResetEnabled) {
+    if (hasEmail) {
       const [localPart, domainPart] = rawEmail.split("@");
       const maskedLocal = localPart.length > 2 ? `${localPart[0]}••••${localPart.slice(-1)}` : `${localPart[0]}•`;
       maskedEmail = `${maskedLocal}@${domainPart}`;
@@ -1807,7 +1711,6 @@ app.post("/api/auth/forgot-password/lookup", async (req, res) => {
       hasEmail,
       email: hasEmail ? rawEmail : undefined,
       maskedEmail,
-      resetMethodsConfig: methodsConfig,
     });
   } catch (err: any) {
     res.status(500).json({
@@ -1840,22 +1743,18 @@ async function sendVerificationEmail(
         },
       });
 
-      const currentAppName = serverBrandingConfig.appName || "Elegant";
-      const currentEmailSender = serverBrandingConfig.emailSenderName || `${currentAppName} Security`;
-      const fromAddress = process.env.SMTP_FROM || `"${currentEmailSender}" <${process.env.SMTP_USER || "security@elegant.com"}>`;
-
       await transporter.sendMail({
-        from: fromAddress,
+        from: process.env.SMTP_FROM || `"Cargo Profit Security" <${process.env.SMTP_USER}>`,
         to: toEmail,
-        subject: `Your ${currentAppName} Password Reset Code: ${otp}`,
+        subject: `Your Cargo Profit Password Reset Code: ${otp}`,
         html: `
           <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; color: #f8fafc; padding: 40px 20px; text-align: center;">
             <div style="max-width: 480px; margin: 0 auto; background-color: #1e293b; border-radius: 16px; padding: 32px 24px; border: 1px solid #334155; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
-              <h1 style="color: #38bdf8; font-size: 22px; font-weight: 700; margin: 0 0 12px 0;">${currentAppName}</h1>
+              <h1 style="color: #38bdf8; font-size: 22px; font-weight: 700; margin: 0 0 12px 0;">Cargo Profit</h1>
               <h2 style="color: #ffffff; font-size: 18px; font-weight: 600; margin: 0 0 16px 0;">Password Reset Code</h2>
               <p style="color: #94a3b8; font-size: 14px; line-height: 1.5; margin: 0 0 24px 0;">
                 Hello <strong>${username}</strong>,<br/>
-                We received a request to reset the password for your ${currentAppName} account. Enter the 6-digit code below to set a new password:
+                We received a request to reset the password for your Cargo Profit account. Enter the 6-digit code below to set a new password:
               </p>
               <div style="background-color: #0f172a; border: 1px solid #38bdf8; border-radius: 12px; padding: 18px 12px; margin: 0 auto 24px auto; max-width: 280px;">
                 <div style="font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #38bdf8; font-family: monospace;">
@@ -1866,7 +1765,7 @@ async function sendVerificationEmail(
                 This code will expire in 10 minutes. If you did not request a password reset, you can safely ignore this message.
               </p>
               <div style="border-top: 1px solid #334155; padding-top: 16px; font-size: 11px; color: #475569;">
-                ${currentAppName} • Automated Security Dispatch
+                Cargo Profit Freight & Customs Management System • Automated Security Dispatch
               </div>
             </div>
           </div>
@@ -1911,16 +1810,6 @@ async function sendVerificationEmail(
 // POST /api/auth/forgot-password/send-phone-otp (Dispatch SMS verification code to user phone)
 app.post("/api/auth/forgot-password/send-phone-otp", async (req, res) => {
   try {
-    const methodsConfig = await getPasswordResetMethodsConfig();
-    if (!methodsConfig.phoneResetEnabled) {
-      return res.status(403).json({
-        success: false,
-        error: "SMS phone verification has been disabled by the system administrator.",
-        errorAr: "تم تعطيل استعادة كلمة المرور عبر الرسائل النصية القصيرة SMS من قِبل إدارة النظام.",
-        code: "PHONE_RESET_DISABLED",
-      });
-    }
-
     const { username, phone } = req.body || {};
     const cleanUsername = String(username || "").trim();
 
@@ -1981,8 +1870,7 @@ app.post("/api/auth/forgot-password/send-phone-otp", async (req, res) => {
     const effectiveSender = getEffectiveBrevoSender();
 
     if (effectiveKey) {
-      const currentAppName = serverBrandingConfig.appName || "Elegant";
-      const smsMessage = `Your ${currentAppName} verification code is: ${otp}. Valid for 10 minutes.`;
+      const smsMessage = `Your Cargo Profit verification code is: ${otp}. Valid for 10 minutes.`;
       const brevoResult = await sendBrevoSms(rawPhone, smsMessage, effectiveKey, effectiveSender);
 
       if (brevoResult.success) {
@@ -1998,7 +1886,7 @@ app.post("/api/auth/forgot-password/send-phone-otp", async (req, res) => {
         }
         return res.json(resPayload);
       } else {
-        console.info(`[Brevo SMS Dispatch Notice] Recipient: ${rawPhone}, Code: ${brevoResult.code}, Notice: ${brevoResult.error}`);
+        console.warn(`[Brevo SMS Dispatch Notice] Recipient: ${rawPhone}, Code: ${brevoResult.code}, Error: ${brevoResult.error}`);
 
         // AUTOMATIC EMAIL FALLBACK: If user has a registered email, dispatch OTP to email so password reset is never blocked!
         const userEmail = String(user.email || (cleanUsername.includes("@") ? cleanUsername : "")).trim();
@@ -2091,16 +1979,6 @@ app.post("/api/auth/forgot-password/send-phone-otp", async (req, res) => {
 // POST /api/auth/forgot-password/send-email-otp (Dispatch Email verification code)
 app.post("/api/auth/forgot-password/send-email-otp", async (req, res) => {
   try {
-    const methodsConfig = await getPasswordResetMethodsConfig();
-    if (!methodsConfig.emailResetEnabled) {
-      return res.status(403).json({
-        success: false,
-        error: "Email verification has been disabled by the system administrator.",
-        errorAr: "تم تعطيل استعادة كلمة المرور عبر البريد الإلكتروني من قِبل إدارة النظام.",
-        code: "EMAIL_RESET_DISABLED",
-      });
-    }
-
     const { username, email } = req.body || {};
     const cleanUsername = String(username || "").trim();
 
@@ -2212,29 +2090,6 @@ app.post("/api/auth/forgot-password/reset", async (req, res) => {
       return res.status(400).json({
         success: false,
         error: "Invalid reset method. Must be 'phone_otp', 'email_otp', or '2fa'.",
-      });
-    }
-
-    const methodsConfig = await getPasswordResetMethodsConfig();
-    if (resetMethod === "phone_otp" && !methodsConfig.phoneResetEnabled) {
-      return res.status(403).json({
-        success: false,
-        error: "SMS phone reset has been disabled by the system administrator.",
-        errorAr: "تم تعطيل استعادة كلمة المرور عبر الرسائل النصية القصيرة من قِبل إدارة النظام.",
-      });
-    }
-    if (resetMethod === "email_otp" && !methodsConfig.emailResetEnabled) {
-      return res.status(403).json({
-        success: false,
-        error: "Email reset has been disabled by the system administrator.",
-        errorAr: "تم تعطيل استعادة كلمة المرور عبر البريد الإلكتروني من قِبل إدارة النظام.",
-      });
-    }
-    if (resetMethod === "2fa" && !methodsConfig.twoFactorResetEnabled) {
-      return res.status(403).json({
-        success: false,
-        error: "2FA authenticator reset has been disabled by the system administrator.",
-        errorAr: "تم تعطيل استعادة كلمة المرور عبر تطبيق المصادقة الثنائية من قِبل إدارة النظام.",
       });
     }
 
@@ -3273,89 +3128,6 @@ app.delete("/api/gallery/:id", requireAuth, async (req, res) => {
 
 // --- API ROUTES: SITE SETTINGS & FAVICON ---
 
-// GET /api/settings/branding
-app.get("/api/settings/branding", async (_req, res) => {
-  try {
-    const branding = await getEffectiveBrandingConfig();
-    res.json({ success: true, branding });
-  } catch (err: any) {
-    res.json({ success: true, branding: serverBrandingConfig });
-  }
-});
-
-// POST /api/settings/branding (Admin Only: Save app name, email & SMS sender identities, favicon)
-app.post("/api/settings/branding", requireAdmin, async (req, res) => {
-  try {
-    const { appName, appNameAr, emailSenderName, smsSenderName, faviconUrl } = req.body || {};
-
-    const cleanAppName = String(appName || serverBrandingConfig.appName || "Elegant").trim();
-    const cleanAppNameAr = String(appNameAr || serverBrandingConfig.appNameAr || "أليجانت").trim();
-    const cleanEmailSender = String(emailSenderName || serverBrandingConfig.emailSenderName || "Elegant Security").trim();
-    const rawSmsSender = String(smsSenderName || serverBrandingConfig.smsSenderName || "Elegant").trim();
-    const cleanSmsSender = rawSmsSender.replace(/[^a-zA-Z0-9]/g, "").slice(0, 11) || "Elegant";
-    const cleanFavicon = faviconUrl !== undefined ? faviconUrl : serverBrandingConfig.faviconUrl;
-
-    serverBrandingConfig = {
-      appName: cleanAppName,
-      appNameAr: cleanAppNameAr,
-      emailSenderName: cleanEmailSender,
-      smsSenderName: cleanSmsSender,
-      faviconUrl: cleanFavicon,
-      updatedAt: new Date().toISOString(),
-      updatedBy: (req as any).user?.username || "admin",
-    };
-
-    serverBrevoSmsSender = cleanSmsSender;
-    if (cleanFavicon) {
-      serverSiteFavicon = cleanFavicon;
-    }
-
-    // Dual-write to Supabase site_settings
-    try {
-      await supabase.from("site_settings").upsert({
-        id: "branding",
-        app_name: cleanAppName,
-        app_name_ar: cleanAppNameAr,
-        email_sender_name: cleanEmailSender,
-        sms_sender_name: cleanSmsSender,
-        favicon_url: cleanFavicon,
-        settings_data: {
-          appName: cleanAppName,
-          appNameAr: cleanAppNameAr,
-          emailSenderName: cleanEmailSender,
-          smsSenderName: cleanSmsSender,
-          faviconUrl: cleanFavicon,
-          updatedAt: new Date().toISOString(),
-          updatedBy: (req as any).user?.username || "admin",
-        },
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "id" });
-    } catch (dbErr) {
-      console.info("[DB Notice] site_settings upsert error for branding:", dbErr);
-    }
-
-    // Also sync SMS sender in sms_config if exists
-    try {
-      const { data: smsRow } = await supabase.from("site_settings").select("*").eq("id", "sms_config").maybeSingle();
-      if (smsRow && smsRow.settings_data) {
-        await supabase.from("site_settings").upsert({
-          id: "sms_config",
-          settings_data: {
-            ...smsRow.settings_data,
-            sender: cleanSmsSender,
-            updatedAt: new Date().toISOString(),
-          },
-          updated_at: new Date().toISOString(),
-        }, { onConflict: "id" });
-      }
-    } catch {}
-
-    res.json({ success: true, branding: serverBrandingConfig });
-  } catch (err: any) {
-    res.status(500).json({ error: "Failed to save branding settings" });
-  }
-});
-
 // GET /api/settings/favicon
 app.get("/api/settings/favicon", async (_req, res) => {
   try {
@@ -3445,80 +3217,6 @@ app.post("/api/settings/session-timeout", requireAdmin, async (req, res) => {
     res.json({ success: true, timeoutMinutes: cleanMinutes });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to save session timeout setting" });
-  }
-});
-
-// GET /api/settings/password-reset-methods (Get current password reset channels visibility configuration)
-app.get("/api/settings/password-reset-methods", async (_req, res) => {
-  try {
-    const config = await getPasswordResetMethodsConfig();
-    res.json({ success: true, config });
-  } catch (err: any) {
-    res.status(500).json({
-      success: false,
-      error: err?.message || "Failed to load password reset methods configuration",
-    });
-  }
-});
-
-// POST /api/settings/password-reset-methods (Admin Only: Save password reset methods visibility)
-app.post("/api/settings/password-reset-methods", requireAdmin, async (req, res) => {
-  try {
-    const { emailResetEnabled, phoneResetEnabled, twoFactorResetEnabled } = req.body || {};
-
-    const newConfig: PasswordResetMethodsConfig = {
-      emailResetEnabled:
-        emailResetEnabled !== undefined
-          ? Boolean(emailResetEnabled)
-          : serverPasswordResetMethodsConfig.emailResetEnabled,
-      phoneResetEnabled:
-        phoneResetEnabled !== undefined
-          ? Boolean(phoneResetEnabled)
-          : serverPasswordResetMethodsConfig.phoneResetEnabled,
-      twoFactorResetEnabled:
-        twoFactorResetEnabled !== undefined
-          ? Boolean(twoFactorResetEnabled)
-          : serverPasswordResetMethodsConfig.twoFactorResetEnabled,
-      updatedAt: new Date().toISOString(),
-      updatedBy: (req as any).user?.username || "admin",
-    };
-
-    // Validation: At least one recovery method must remain active to prevent permanently locking out users
-    if (!newConfig.emailResetEnabled && !newConfig.phoneResetEnabled && !newConfig.twoFactorResetEnabled) {
-      return res.status(400).json({
-        success: false,
-        error: "At least one password reset method must remain enabled (Email, Phone SMS, or 2FA).",
-        errorAr: "يجب إبقاء وسيلة واحدة على الأقل مفعلة لاستعادة كلمة المرور (البريد الإلكتروني، رسائل SMS، أو المصادقة الثنائية).",
-      });
-    }
-
-    serverPasswordResetMethodsConfig = newConfig;
-
-    // Dual-write to Supabase site_settings
-    try {
-      await supabase.from("site_settings").upsert(
-        {
-          id: "password_reset",
-          settings_data: newConfig,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "id" }
-      );
-    } catch (dbErr) {
-      console.info("[DB Notice] site_settings upsert error for password_reset:", dbErr);
-    }
-
-    res.json({
-      success: true,
-      message: "Password reset methods configuration updated successfully.",
-      messageAr: "تم تحديث إعدادات وسائل استعادة كلمة المرور بنجاح.",
-      config: newConfig,
-    });
-  } catch (err: any) {
-    res.status(500).json({
-      success: false,
-      error: err?.message || "Failed to save password reset methods configuration",
-    });
   }
 });
 
@@ -3927,7 +3625,7 @@ app.post("/api/admin/brevo-sms", requireAdmin, async (req, res) => {
   try {
     const { apiKey, sender } = req.body || {};
     const cleanKey = String(apiKey || "").trim();
-    const cleanSender = String(sender || serverBrandingConfig.smsSenderName || "Elegant").replace(/[^a-zA-Z0-9]/g, "").slice(0, 11) || "Elegant";
+    const cleanSender = String(sender || "CargoProfit").replace(/[^a-zA-Z0-9]/g, "").slice(0, 11) || "CargoProfit";
 
     if (!cleanKey) {
       return res.status(400).json({ error: "Brevo API Key cannot be empty." });
@@ -4016,8 +3714,7 @@ app.post("/api/admin/test-brevo-sms", requireAdmin, async (req, res) => {
       });
     }
 
-    const appTitle = serverBrandingConfig.appName || "Elegant";
-    const testMsg = `${appTitle}: Brevo SMS integration test successful! Sender: ${senderToUse}. Time: ${new Date().toLocaleTimeString()}`;
+    const testMsg = `Cargo Profit: Brevo SMS integration test successful! Sender: ${senderToUse}. Time: ${new Date().toLocaleTimeString()}`;
     const result = await sendBrevoSms(String(testPhone).trim(), testMsg, keyToUse, senderToUse);
 
     if (result.success) {

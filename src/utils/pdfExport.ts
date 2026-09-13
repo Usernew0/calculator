@@ -13,21 +13,8 @@ import {
   getCalculationProfit,
 } from './calculator';
 
-export function getExportBrandName(lang: Language = 'en'): string {
-  try {
-    const cached = localStorage.getItem('elegant_branding_config');
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      if (lang === 'ar' && parsed.appNameAr) return parsed.appNameAr;
-      if (parsed.appName) return parsed.appName;
-    }
-  } catch {}
-  return lang === 'ar' ? 'أليجانت' : 'Elegant';
-}
-
 export async function exportSingleCalculationPDF(result: CalculationResult, lang: Language = 'en'): Promise<void> {
   const isArabic = lang === 'ar';
-  const brandName = getExportBrandName(lang);
   const input = result.input;
   const targetCurr = input.targetCurrency;
 
@@ -59,7 +46,7 @@ export async function exportSingleCalculationPDF(result: CalculationResult, lang
       <div style="background: #0f172a; color: #ffffff; padding: 24px 28px; display: flex; justify-content: space-between; align-items: center;">
         <div>
           <div style="display: flex; align-items: center; gap: 8px; color: #10b981; font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;">
-            <span>❖</span> ${brandName} • OFFICIAL REPORT
+            <span>❖</span> Elegant FX • OFFICIAL REPORT
           </div>
           <h1 style="margin: 0; font-size: 20px; font-weight: 800; letter-spacing: -0.5px;">${titleText}</h1>
           <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">${isArabic ? 'تقرير رسمي حسابي موثق للتبادل التجاري' : 'Automated Official Multi-Currency Landed Cost Verification'}</div>
@@ -199,7 +186,7 @@ export async function exportSingleCalculationPDF(result: CalculationResult, lang
         </table>
 
         <div style="border-t: 1px border #e2e8f0; padding-top: 12px; margin-top: 12px; display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: #94a3b8;">
-          <div>${brandName} • Global Freight & Landed Cost Intelligence</div>
+          <div>Elegant FX • Global Freight & Landed Cost Intelligence</div>
           <div>Page 1 of 1</div>
         </div>
       </div>
@@ -234,7 +221,7 @@ export async function exportSingleCalculationPDF(result: CalculationResult, lang
     pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
 
     const filenameTitle = (input.title || 'Report').replace(/[^a-zA-Z0-9\u0600-\u06FF]/g, '_');
-    pdf.save(`${brandName.replace(/\s+/g, '_')}_${filenameTitle}_${new Date().toISOString().slice(0, 10)}.pdf`);
+    pdf.save(`Elegant_${filenameTitle}_${new Date().toISOString().slice(0, 10)}.pdf`);
   } catch (error) {
     console.error('Error generating PDF report:', error);
   } finally {
@@ -244,7 +231,6 @@ export async function exportSingleCalculationPDF(result: CalculationResult, lang
 
 export async function exportHistoricalSummaryPDF(results: CalculationResult[], lang: Language = 'en', defaultCurrency = 'EGP'): Promise<void> {
   const isArabic = lang === 'ar';
-  const brandName = getExportBrandName(lang);
 
   // Create temporary container
   const container = document.createElement('div');
@@ -299,7 +285,7 @@ export async function exportHistoricalSummaryPDF(results: CalculationResult[], l
       <div style="background: #0f172a; color: #ffffff; padding: 24px 28px; display: flex; justify-content: space-between; align-items: center;">
         <div>
           <div style="display: flex; align-items: center; gap: 8px; color: #10b981; font-weight: 800; font-size: 11px; text-transform: uppercase;">
-            <span>❖</span> ${brandName} • HISTORICAL SUMMARY
+            <span>❖</span> Elegant FX • HISTORICAL SUMMARY
           </div>
           <h1 style="margin: 0; font-size: 20px; font-weight: 800;">${titleText}</h1>
           <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">${isArabic ? 'تقرير تحليلي تراكمي لكافة الشحنات المجهزة' : 'Cumulative Multi-Shipment Analytical Performance Summary'}</div>

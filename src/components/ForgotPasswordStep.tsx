@@ -232,20 +232,8 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
       }
 
       setResendCooldown(60);
-      if (!firebaseRes.success && otpRes.success) {
-        // Firebase link disabled or failed, transition directly to 6-digit Email OTP entry
-        setEmailOtpDigits(['', '', '', '', '', '']);
-        setCurrentStep('verify_email_otp');
-        setInfoMsg(
-          lang === 'ar'
-            ? 'تم إرسال رمز التحقق (OTP) المكون من 6 أرقام إلى بريدك الإلكتروني بنجاح. يرجى إدخال الرمز أدناه.'
-            : 'A 6-digit verification code (OTP) was sent to your email. Please enter the code below.'
-        );
-        setTimeout(() => emailOtpRefs.current[0]?.focus(), 150);
-      } else {
-        setCurrentStep('email_sent');
-        setInfoMsg(t.forgotPasswordEmailSent);
-      }
+      setCurrentStep('email_sent');
+      setInfoMsg(t.forgotPasswordEmailSent);
     } catch (err: any) {
       setErrorMsg(err?.message || (lang === 'ar' ? 'فشل إرسال بريد الاستعادة' : 'Failed to send password reset email'));
     } finally {

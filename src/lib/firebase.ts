@@ -15,7 +15,7 @@ import {
   setLogLevel
 } from "firebase/firestore";
 import { getAuth, signInAnonymously, sendPasswordResetEmail, createUserWithEmailAndPassword } from "firebase/auth";
-import { CalculationResult, UserProfile, FlightConsignment, BrandingConfig, DEFAULT_BRANDING } from "../types";
+import { CalculationResult, UserProfile, FlightConsignment } from "../types";
 import firebaseConfig from "../../firebase-applet-config.json";
 import {
   saveUserProfileToSupabase,
@@ -89,7 +89,6 @@ export async function sendPasswordResetEmailViaFirebase(email: string): Promise<
 
   // Pre-provision user in Firebase Auth if not already existing
   // In Firebase Auth with enumeration protection, sendPasswordResetEmail silently succeeds without sending an email if the account does not exist in Auth.
-  let isEmailPasswordDisabledInFirebase = false;
   try {
     const tempPassword = `Tr@de_${Math.random().toString(36).slice(2, 10)}!${Date.now()}`;
     await createUserWithEmailAndPassword(auth, cleanEmail, tempPassword);
@@ -98,22 +97,10 @@ export async function sendPasswordResetEmailViaFirebase(email: string): Promise<
     if (createErr?.code === 'auth/email-already-in-use') {
       console.info(`[Firebase Auth] Identity record exists for: ${cleanEmail}`);
     } else if (createErr?.code === 'auth/operation-not-allowed') {
-      isEmailPasswordDisabledInFirebase = true;
-      console.warn(
-        '[Firebase Auth] Email/Password provider not enabled in Firebase Console. You can enable it at: https://console.firebase.google.com/project/ai-studio-applet-webapp-cc0f1/authentication/providers'
-      );
+      console.warn('[Firebase Auth] Email/Password provider not enabled in Firebase Console.');
     } else {
       console.info('[Firebase Auth] Identity pre-check note:', createErr?.code);
     }
-  }
-
-  // If Email/Password is not enabled in Firebase Console, return immediately so the app can fallback to internal Email OTP
-  if (isEmailPasswordDisabledInFirebase) {
-    return {
-      success: false,
-      message: 'Email/Password sign-in provider is not enabled in Firebase Console. The system will use 6-digit Email OTP verification.',
-      error: 'auth/operation-not-allowed',
-    };
   }
 
   try {
@@ -1089,90 +1076,6 @@ export async function saveSiteFaviconToFirestore(faviconUrl: string): Promise<vo
 }
 
 /**
- * Save complete Branding & Sender settings to Firestore site_settings/branding
- */
-export async function saveBrandingToFirestore(branding: Partial<BrandingConfig>): Promise<void> {
-  try {
-    await ensureAuth();
-    const docRef = doc(db, SETTINGS_COLLECTION, "branding");
-    await setDoc(
-      docRef,
-      {
-        appName: branding.appName || "Elegant",
-        appNameAr: branding.appNameAr || "أليجانت",
-        emailSenderName: branding.emailSenderName || "Elegant Security",
-        smsSenderName: branding.smsSenderName || "Elegant",
-        ...(branding.faviconUrl !== undefined ? { faviconUrl: branding.faviconUrl } : {}),
-        updatedAt: new Date().toISOString(),
-        updatedBy: branding.updatedBy || "admin",
-      },
-      { merge: true }
-    );
-    console.info("Branding & Sender configuration saved to Firestore site_settings/branding.");
-  } catch (error: any) {
-    handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/branding`);
-  }
-}
-
-/**
- * Fetch saved Branding & Sender settings from Firestore site_settings/branding
- */
-export async function getBrandingFromFirestore(): Promise<BrandingConfig | null> {
-  try {
-    await ensureAuth();
-    const docRef = doc(db, SETTINGS_COLLECTION, "branding");
-    const snap = await getDoc(docRef);
-    if (snap.exists()) {
-      const data = snap.data();
-      return {
-        appName: data?.appName || DEFAULT_BRANDING.appName,
-        appNameAr: data?.appNameAr || DEFAULT_BRANDING.appNameAr,
-        emailSenderName: data?.emailSenderName || DEFAULT_BRANDING.emailSenderName,
-        smsSenderName: data?.smsSenderName || DEFAULT_BRANDING.smsSenderName,
-        faviconUrl: data?.faviconUrl || null,
-        updatedAt: data?.updatedAt,
-        updatedBy: data?.updatedBy,
-      };
-    }
-  } catch (error: any) {
-    console.info("Firestore site branding fetch notice:", error?.message || error);
-  }
-  return null;
-}
-
-/**
- * Real-time subscription to Branding & Sender changes in Firestore
- */
-export function subscribeToBranding(callback: (branding: BrandingConfig) => void): () => void {
-  try {
-    const docRef = doc(db, SETTINGS_COLLECTION, "branding");
-    return onSnapshot(
-      docRef,
-      (snapshot) => {
-        if (snapshot.exists()) {
-          const data = snapshot.data();
-          callback({
-            appName: data?.appName || DEFAULT_BRANDING.appName,
-            appNameAr: data?.appNameAr || DEFAULT_BRANDING.appNameAr,
-            emailSenderName: data?.emailSenderName || DEFAULT_BRANDING.emailSenderName,
-            smsSenderName: data?.smsSenderName || DEFAULT_BRANDING.smsSenderName,
-            faviconUrl: data?.faviconUrl || null,
-            updatedAt: data?.updatedAt,
-            updatedBy: data?.updatedBy,
-          });
-        }
-      },
-      (error) => {
-        console.info("Notice: Site branding subscription status:", error?.message || error);
-      }
-    );
-  } catch (err) {
-    console.info("Realtime site branding setup notice:", err);
-    return () => {};
-  }
-}
-
-/**
  * Fetch saved site favicon from Firestore
  */
 export async function getSiteFaviconFromFirestore(): Promise<string | null> {
@@ -1285,7 +1188,7 @@ export async function saveBrevoSmsConfigToFirestore(apiKey: string, sender?: str
       docRef,
       {
         apiKey: apiKey.trim(),
-        sender: (sender || "Elegant").trim(),
+        sender: (sender || "CargoProfit").trim(),
         provider: "brevo",
         configured: Boolean(apiKey.trim()),
         updatedAt: new Date().toISOString(),
@@ -1336,99 +1239,6 @@ export function subscribeToBrevoSmsConfig(
     );
   } catch (err) {
     console.info("Realtime Brevo SMS config setup notice:", err);
-    return () => {};
-  }
-}
-
-export interface PasswordResetMethodsConfig {
-  emailResetEnabled: boolean;
-  phoneResetEnabled: boolean;
-  twoFactorResetEnabled: boolean;
-  updatedAt?: string;
-  updatedBy?: string;
-}
-
-export const DEFAULT_PASSWORD_RESET_METHODS: PasswordResetMethodsConfig = {
-  emailResetEnabled: true,
-  phoneResetEnabled: true,
-  twoFactorResetEnabled: true,
-};
-
-/**
- * Save password reset methods visibility configuration to Firestore
- */
-export async function savePasswordResetMethodsToFirestore(
-  config: PasswordResetMethodsConfig
-): Promise<void> {
-  try {
-    await ensureAuth();
-    const docRef = doc(db, SETTINGS_COLLECTION, "password_reset");
-    await setDoc(
-      docRef,
-      {
-        ...config,
-        updatedAt: new Date().toISOString(),
-      },
-      { merge: true }
-    );
-  } catch (err) {
-    console.info("Firestore save password reset methods notice:", err);
-  }
-}
-
-/**
- * Get password reset methods visibility configuration from Firestore
- */
-export async function getPasswordResetMethodsFromFirestore(): Promise<PasswordResetMethodsConfig | null> {
-  try {
-    await ensureAuth();
-    const docRef = doc(db, SETTINGS_COLLECTION, "password_reset");
-    const snap = await getDoc(docRef);
-    if (snap.exists()) {
-      const d = snap.data();
-      return {
-        emailResetEnabled: d.emailResetEnabled !== undefined ? Boolean(d.emailResetEnabled) : true,
-        phoneResetEnabled: d.phoneResetEnabled !== undefined ? Boolean(d.phoneResetEnabled) : true,
-        twoFactorResetEnabled: d.twoFactorResetEnabled !== undefined ? Boolean(d.twoFactorResetEnabled) : true,
-        updatedAt: d.updatedAt,
-        updatedBy: d.updatedBy,
-      };
-    }
-    return null;
-  } catch (err) {
-    console.info("Firestore get password reset methods notice:", err);
-    return null;
-  }
-}
-
-/**
- * Real-time subscription to password reset methods visibility changes
- */
-export function subscribeToPasswordResetMethods(
-  callback: (config: PasswordResetMethodsConfig) => void
-): () => void {
-  try {
-    const docRef = doc(db, SETTINGS_COLLECTION, "password_reset");
-    return onSnapshot(
-      docRef,
-      (snapshot) => {
-        if (snapshot.exists()) {
-          const d = snapshot.data();
-          callback({
-            emailResetEnabled: d.emailResetEnabled !== undefined ? Boolean(d.emailResetEnabled) : true,
-            phoneResetEnabled: d.phoneResetEnabled !== undefined ? Boolean(d.phoneResetEnabled) : true,
-            twoFactorResetEnabled: d.twoFactorResetEnabled !== undefined ? Boolean(d.twoFactorResetEnabled) : true,
-            updatedAt: d.updatedAt,
-            updatedBy: d.updatedBy,
-          });
-        }
-      },
-      (error) => {
-        console.info("Notice: Password reset methods subscription status:", error?.message || error);
-      }
-    );
-  } catch (err) {
-    console.info("Realtime password reset methods setup notice:", err);
     return () => {};
   }
 }

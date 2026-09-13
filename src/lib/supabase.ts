@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { CalculationResult, UserProfile, FlightConsignment, BrandingConfig, DEFAULT_BRANDING } from '../types';
+import { CalculationResult, UserProfile, FlightConsignment } from '../types';
 
 const env = (import.meta as unknown as { env?: Record<string, string> }).env || {};
 
@@ -793,78 +793,6 @@ export function subscribeToFlightConsignmentsSupabase(
   };
 }
 
-/**
- * Save Branding & Sender settings to Supabase site_settings
- */
-export async function saveBrandingToSupabase(branding: BrandingConfig): Promise<boolean> {
-  try {
-    const { error } = await supabase.from(SETTINGS_TABLE).upsert(
-      {
-        id: 'branding',
-        app_name: branding.appName || 'Elegant',
-        app_name_ar: branding.appNameAr || 'أليجانت',
-        email_sender_name: branding.emailSenderName || 'Elegant Security',
-        sms_sender_name: branding.smsSenderName || 'Elegant',
-        favicon_url: branding.faviconUrl || null,
-        settings_data: {
-          appName: branding.appName || 'Elegant',
-          appNameAr: branding.appNameAr || 'أليجانت',
-          emailSenderName: branding.emailSenderName || 'Elegant Security',
-          smsSenderName: branding.smsSenderName || 'Elegant',
-          faviconUrl: branding.faviconUrl || null,
-          updatedAt: new Date().toISOString(),
-          updatedBy: branding.updatedBy || 'admin',
-        },
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'id' }
-    );
-    if (error) {
-      handleSupabaseError('save branding', error);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    handleSupabaseError('save branding exception', err);
-    return false;
-  }
-}
-
-/**
- * Fetch Branding & Sender settings from Supabase site_settings
- */
-export async function getBrandingFromSupabase(): Promise<BrandingConfig | null> {
-  try {
-    const { data, error } = await supabase
-      .from(SETTINGS_TABLE)
-      .select('*')
-      .eq('id', 'branding')
-      .maybeSingle();
-
-    if (error) {
-      handleSupabaseError('fetch branding', error);
-      return null;
-    }
-
-    if (data) {
-      const sd = (data.settings_data as Partial<BrandingConfig>) || {};
-      return {
-        appName: data.app_name || sd.appName || DEFAULT_BRANDING.appName,
-        appNameAr: data.app_name_ar || sd.appNameAr || DEFAULT_BRANDING.appNameAr,
-        emailSenderName: data.email_sender_name || sd.emailSenderName || DEFAULT_BRANDING.emailSenderName,
-        smsSenderName: data.sms_sender_name || sd.smsSenderName || DEFAULT_BRANDING.smsSenderName,
-        faviconUrl: data.favicon_url || sd.faviconUrl || null,
-        updatedAt: data.updated_at || sd.updatedAt,
-        updatedBy: sd.updatedBy,
-      };
-    }
-    return null;
-  } catch (err) {
-    handleSupabaseError('fetch branding exception', err);
-    return null;
-  }
-}
-
 export interface SupabaseHealthReport {
   isConnected: boolean;
   usersTableOk: boolean;
@@ -946,23 +874,13 @@ CREATE TABLE IF NOT EXISTS public.gallery_images (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 4. Create site_settings table (Stores global branding, app name, email & SMS sender identities, favicon, and site config)
+-- 4. Create site_settings table (Stores global branding, favicon, and site config)
 CREATE TABLE IF NOT EXISTS public.site_settings (
   id TEXT PRIMARY KEY,
-  app_name TEXT DEFAULT 'Elegant',
-  app_name_ar TEXT DEFAULT 'أليجانت',
-  email_sender_name TEXT DEFAULT 'Elegant Security',
-  sms_sender_name TEXT DEFAULT 'Elegant',
   favicon_url TEXT,
   settings_data JSONB,
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
--- Backwards-compatible migrations for existing databases
-ALTER TABLE public.site_settings ADD COLUMN IF NOT EXISTS app_name TEXT DEFAULT 'Elegant';
-ALTER TABLE public.site_settings ADD COLUMN IF NOT EXISTS app_name_ar TEXT DEFAULT 'أليجانت';
-ALTER TABLE public.site_settings ADD COLUMN IF NOT EXISTS email_sender_name TEXT DEFAULT 'Elegant Security';
-ALTER TABLE public.site_settings ADD COLUMN IF NOT EXISTS sms_sender_name TEXT DEFAULT 'Elegant';
 
 -- 5. Create flight_consignments table (Stores grouped flight batches, air waybills, routes, and cargo manifests)
 CREATE TABLE IF NOT EXISTS public.flight_consignments (

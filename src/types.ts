@@ -257,21 +257,3 @@ export interface RatesResponse {
   lastUpdated: string;
   source: string;
 }
-
-export interface BrandingConfig {
-  appName: string; // e.g. "Elegant"
-  appNameAr: string; // e.g. "أليجانت"
-  emailSenderName: string; // e.g. "Elegant Security"
-  smsSenderName: string; // e.g. "Elegant" (alphanumeric up to 11 characters)
-  faviconUrl?: string | null;
-  updatedAt?: string;
-  updatedBy?: string;
-}
-
-export const DEFAULT_BRANDING: BrandingConfig = {
-  appName: 'Elegant',
-  appNameAr: 'أليجانت',
-  emailSenderName: 'Elegant Security',
-  smsSenderName: 'Elegant',
-  faviconUrl: null,
-};
