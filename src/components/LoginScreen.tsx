@@ -77,16 +77,62 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   // Password Reset State
   const [isForgotPasswordMode, setIsForgotPasswordMode] = useState(false);
 
-  const handleResetSuccess = (user: UserProfile, token?: string) => {
-    const profileSchema: UserProfile = {
-      ...user,
-      lastLoginAt: new Date().toISOString(),
-    };
-    saveFullSession(token || null, profileSchema, rememberMe);
-    setSuccessMsg(t.loginSuccessMsg);
-    setTimeout(() => {
-      onLoginSuccess(profileSchema);
-    }, 600);
+  const handleResetSuccess = async (newPassword?: string, resetUsername?: string) => {
+    const effectiveUsername = (resetUsername || username || '').trim();
+    const effectivePassword = (newPassword || password || '').trim();
+
+    if (effectiveUsername) {
+      setUsername(effectiveUsername);
+    }
+    if (effectivePassword) {
+      setPassword(effectivePassword);
+    }
+
+    // Attempt clean, server-authenticated login with the newly updated credentials
+    if (effectiveUsername && effectivePassword) {
+      setIsSubmitting(true);
+      setErrorMsg(null);
+      try {
+        const loginRes = await loginUserApi(effectiveUsername, effectivePassword);
+        if ('requires2FA' in loginRes && loginRes.requires2FA) {
+          setIsForgotPasswordMode(false);
+          setPending2FaData(loginRes);
+          setIs2FAPending(true);
+          setIsSubmitting(false);
+          return;
+        }
+
+        if ('user' in loginRes && loginRes.user && loginRes.user.username) {
+          const validProfile: UserProfile = {
+            ...loginRes.user,
+            lastLoginAt: new Date().toISOString(),
+          };
+          saveFullSession(loginRes.token || null, validProfile, rememberMe);
+          setIsForgotPasswordMode(false);
+          setSuccessMsg(
+            lang === 'ar'
+              ? 'تم تحديث كلمة المرور وتسجيل الدخول بنجاح!'
+              : 'Password updated and logged in successfully!'
+          );
+          setTimeout(() => {
+            onLoginSuccess(validProfile);
+          }, 500);
+          return;
+        }
+      } catch (loginErr) {
+        console.warn('Auto-login after reset notice:', loginErr);
+      } finally {
+        setIsSubmitting(false);
+      }
+    }
+
+    // Fallback: Transition back to login screen with prefilled credentials and clear success banner
+    setIsForgotPasswordMode(false);
+    setSuccessMsg(
+      lang === 'ar'
+        ? 'تم تحديث كلمة المرور بنجاح! يرجى تسجيل الدخول بكلمة المرور الجديدة.'
+        : 'Password reset successfully! Please log in with your new credentials.'
+    );
   };
 
   const handleSubmit = async (e: React.FormEvent) => {

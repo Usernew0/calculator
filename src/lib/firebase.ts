@@ -15,7 +15,7 @@ import {
   setLogLevel
 } from "firebase/firestore";
 import { getAuth, signInAnonymously, sendPasswordResetEmail, createUserWithEmailAndPassword } from "firebase/auth";
-import { CalculationResult, UserProfile, FlightConsignment } from "../types";
+import { CalculationResult, UserProfile, FlightConsignment, BrandingConfig, DEFAULT_BRANDING } from "../types";
 import firebaseConfig from "../../firebase-applet-config.json";
 import {
   saveUserProfileToSupabase,
@@ -89,6 +89,7 @@ export async function sendPasswordResetEmailViaFirebase(email: string): Promise<
 
   // Pre-provision user in Firebase Auth if not already existing
   // In Firebase Auth with enumeration protection, sendPasswordResetEmail silently succeeds without sending an email if the account does not exist in Auth.
+  let isEmailPasswordDisabledInFirebase = false;
   try {
     const tempPassword = `Tr@de_${Math.random().toString(36).slice(2, 10)}!${Date.now()}`;
     await createUserWithEmailAndPassword(auth, cleanEmail, tempPassword);
@@ -97,10 +98,22 @@ export async function sendPasswordResetEmailViaFirebase(email: string): Promise<
     if (createErr?.code === 'auth/email-already-in-use') {
       console.info(`[Firebase Auth] Identity record exists for: ${cleanEmail}`);
     } else if (createErr?.code === 'auth/operation-not-allowed') {
-      console.warn('[Firebase Auth] Email/Password provider not enabled in Firebase Console.');
+      isEmailPasswordDisabledInFirebase = true;
+      console.warn(
+        '[Firebase Auth] Email/Password provider not enabled in Firebase Console. You can enable it at: https://console.firebase.google.com/project/ai-studio-applet-webapp-cc0f1/authentication/providers'
+      );
     } else {
       console.info('[Firebase Auth] Identity pre-check note:', createErr?.code);
     }
+  }
+
+  // If Email/Password is not enabled in Firebase Console, return immediately so the app can fallback to internal Email OTP
+  if (isEmailPasswordDisabledInFirebase) {
+    return {
+      success: false,
+      message: 'Email/Password sign-in provider is not enabled in Firebase Console. The system will use 6-digit Email OTP verification.',
+      error: 'auth/operation-not-allowed',
+    };
   }
 
   try {
@@ -584,7 +597,7 @@ export async function hardDeleteUserAndCalculationsFromFirestore(
  * Subscribe to real-time account status & credential changes for the active session user
  */
 export function subscribeToUserSessionStatus(
-  username: string,
+  username: string | undefined | null,
   currentPassword: string | undefined,
   onStatusChange: (change: {
     status: 'ok' | 'suspended' | 'deleted' | 'credentials_changed';
@@ -594,11 +607,15 @@ export function subscribeToUserSessionStatus(
   let unsubFirestore: (() => void) | null = null;
   let isCancelled = false;
 
+  const cleanKey = String(username || '').toLowerCase().trim();
+  if (!cleanKey) {
+    return () => {};
+  }
+
   const init = async () => {
     try {
       await ensureAuth();
       if (isCancelled) return;
-      const cleanKey = username.toLowerCase().trim();
       const docRef = doc(db, USERS_COLLECTION, cleanKey);
 
       unsubFirestore = onSnapshot(
@@ -645,13 +662,15 @@ export function subscribeToUserSessionStatus(
 
 /**
  * Helper to test whether a calculation document matches a user identifier or list of aliases
+ * STRICT DATA PRIVACY: Non-admin users are strictly isolated to their own records.
  */
 export function matchCalculationToUser(
   item: any,
   filterUserId?: string | null,
-  userAliases?: string[]
+  userAliases?: string[],
+  isAdmin: boolean = false
 ): boolean {
-  if (!filterUserId && (!userAliases || userAliases.length === 0)) return true;
+  if (isAdmin) return true;
 
   const targetTokens = [
     filterUserId,
@@ -660,7 +679,8 @@ export function matchCalculationToUser(
     .filter(Boolean)
     .map((t) => String(t).toLowerCase().trim());
 
-  if (targetTokens.length === 0) return true;
+  // STRICT DATA ISOLATION: If not admin and no target tokens exist, NEVER match any record!
+  if (targetTokens.length === 0) return false;
 
   const itemTokens = [
     item.userId,
@@ -688,7 +708,8 @@ export function subscribeToCalculations(
   onUpdate: (data: CalculationResult[]) => void,
   filterUserId?: string | null,
   onError?: (error: unknown) => void,
-  userAliases?: string[]
+  userAliases?: string[],
+  isAdmin: boolean = false
 ) {
   let unsubFirestore: (() => void) | null = null;
   let unsubSupabase: (() => void) | null = null;
@@ -697,10 +718,10 @@ export function subscribeToCalculations(
   // Subscribe to Supabase real-time
   try {
     unsubSupabase = subscribeToCalculationsSupabase((supabaseData) => {
-      if (supabaseData && supabaseData.length > 0) {
+      if (Array.isArray(supabaseData)) {
         onUpdate(supabaseData);
       }
-    }, filterUserId, userAliases);
+    }, filterUserId, userAliases, isAdmin);
   } catch (err) {
     console.warn("Supabase calculations subscription notice:", err);
   }
@@ -721,7 +742,7 @@ export function subscribeToCalculations(
             const results: CalculationResult[] = [];
             snapshot.forEach((docSnap) => {
               const data = docSnap.data() as any;
-              if (matchCalculationToUser(data, filterUserId, userAliases)) {
+              if (matchCalculationToUser(data, filterUserId, userAliases, isAdmin)) {
                 // Normalize userId field
                 const normalizedItem: CalculationResult = {
                   ...data,
@@ -735,9 +756,8 @@ export function subscribeToCalculations(
               (a, b) =>
                 new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
             );
-            if (results.length > 0) {
-              onUpdate(results);
-            }
+            // Always dispatch results (even if empty) to ensure client state stays accurately synced
+            onUpdate(results);
           },
           (error) => {
             console.info(
@@ -820,14 +840,18 @@ export async function deleteCalculationFromFirestore(id: string): Promise<void> 
 /**
  * Fetch calculation records from Firestore (with Supabase fallback)
  */
-export async function getCalculationsFromFirestore(filterUserId?: string, userAliases?: string[]): Promise<CalculationResult[]> {
+export async function getCalculationsFromFirestore(
+  filterUserId?: string,
+  userAliases?: string[],
+  isAdmin: boolean = false
+): Promise<CalculationResult[]> {
   const list: CalculationResult[] = [];
   try {
     await ensureAuth();
     const qSnap = await getDocs(query(collection(db, CALCULATIONS_COLLECTION)));
     qSnap.forEach((docSnap) => {
       const data = docSnap.data() as any;
-      if (matchCalculationToUser(data, filterUserId, userAliases)) {
+      if (matchCalculationToUser(data, filterUserId, userAliases, isAdmin)) {
         const normalizedItem: CalculationResult = {
           ...data,
           userId: data.userId || data.user_id || filterUserId || '',
@@ -842,7 +866,7 @@ export async function getCalculationsFromFirestore(filterUserId?: string, userAl
 
   if (list.length === 0) {
     try {
-      const supaList = await getCalculationsFromSupabase(filterUserId, userAliases);
+      const supaList = await getCalculationsFromSupabase(filterUserId, userAliases, isAdmin);
       if (supaList && supaList.length > 0) return supaList;
     } catch {}
   }
@@ -1065,6 +1089,90 @@ export async function saveSiteFaviconToFirestore(faviconUrl: string): Promise<vo
 }
 
 /**
+ * Save complete Branding & Sender settings to Firestore site_settings/branding
+ */
+export async function saveBrandingToFirestore(branding: Partial<BrandingConfig>): Promise<void> {
+  try {
+    await ensureAuth();
+    const docRef = doc(db, SETTINGS_COLLECTION, "branding");
+    await setDoc(
+      docRef,
+      {
+        appName: branding.appName || "Elegant",
+        appNameAr: branding.appNameAr || "أليجانت",
+        emailSenderName: branding.emailSenderName || "Elegant Security",
+        smsSenderName: branding.smsSenderName || "Elegant",
+        ...(branding.faviconUrl !== undefined ? { faviconUrl: branding.faviconUrl } : {}),
+        updatedAt: new Date().toISOString(),
+        updatedBy: branding.updatedBy || "admin",
+      },
+      { merge: true }
+    );
+    console.info("Branding & Sender configuration saved to Firestore site_settings/branding.");
+  } catch (error: any) {
+    handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/branding`);
+  }
+}
+
+/**
+ * Fetch saved Branding & Sender settings from Firestore site_settings/branding
+ */
+export async function getBrandingFromFirestore(): Promise<BrandingConfig | null> {
+  try {
+    await ensureAuth();
+    const docRef = doc(db, SETTINGS_COLLECTION, "branding");
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const data = snap.data();
+      return {
+        appName: data?.appName || DEFAULT_BRANDING.appName,
+        appNameAr: data?.appNameAr || DEFAULT_BRANDING.appNameAr,
+        emailSenderName: data?.emailSenderName || DEFAULT_BRANDING.emailSenderName,
+        smsSenderName: data?.smsSenderName || DEFAULT_BRANDING.smsSenderName,
+        faviconUrl: data?.faviconUrl || null,
+        updatedAt: data?.updatedAt,
+        updatedBy: data?.updatedBy,
+      };
+    }
+  } catch (error: any) {
+    console.info("Firestore site branding fetch notice:", error?.message || error);
+  }
+  return null;
+}
+
+/**
+ * Real-time subscription to Branding & Sender changes in Firestore
+ */
+export function subscribeToBranding(callback: (branding: BrandingConfig) => void): () => void {
+  try {
+    const docRef = doc(db, SETTINGS_COLLECTION, "branding");
+    return onSnapshot(
+      docRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data();
+          callback({
+            appName: data?.appName || DEFAULT_BRANDING.appName,
+            appNameAr: data?.appNameAr || DEFAULT_BRANDING.appNameAr,
+            emailSenderName: data?.emailSenderName || DEFAULT_BRANDING.emailSenderName,
+            smsSenderName: data?.smsSenderName || DEFAULT_BRANDING.smsSenderName,
+            faviconUrl: data?.faviconUrl || null,
+            updatedAt: data?.updatedAt,
+            updatedBy: data?.updatedBy,
+          });
+        }
+      },
+      (error) => {
+        console.info("Notice: Site branding subscription status:", error?.message || error);
+      }
+    );
+  } catch (err) {
+    console.info("Realtime site branding setup notice:", err);
+    return () => {};
+  }
+}
+
+/**
  * Fetch saved site favicon from Firestore
  */
 export async function getSiteFaviconFromFirestore(): Promise<string | null> {
@@ -1167,6 +1275,165 @@ export function subscribeToAiKey(callback: (apiKey: string) => void): () => void
 }
 
 /**
+ * Save Brevo SMS configuration to Firestore site_settings/sms_config
+ */
+export async function saveBrevoSmsConfigToFirestore(apiKey: string, sender?: string): Promise<void> {
+  try {
+    await ensureAuth();
+    const docRef = doc(db, SETTINGS_COLLECTION, "sms_config");
+    await setDoc(
+      docRef,
+      {
+        apiKey: apiKey.trim(),
+        sender: (sender || "Elegant").trim(),
+        provider: "brevo",
+        configured: Boolean(apiKey.trim()),
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+    console.info("Brevo SMS configuration saved to Firestore site_settings/sms_config.");
+  } catch (error: any) {
+    handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/sms_config`);
+  }
+}
+
+/**
+ * Fetch saved Brevo SMS configuration from Firestore site_settings/sms_config
+ */
+export async function getBrevoSmsConfigFromFirestore(): Promise<{ apiKey?: string; sender?: string; provider?: string } | null> {
+  try {
+    await ensureAuth();
+    const docRef = doc(db, SETTINGS_COLLECTION, "sms_config");
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      return snap.data() as { apiKey?: string; sender?: string; provider?: string };
+    }
+  } catch (error: any) {
+    console.info("Firestore Brevo SMS config fetch notice:", error?.message || error);
+  }
+  return null;
+}
+
+/**
+ * Real-time subscription to Brevo SMS configuration changes
+ */
+export function subscribeToBrevoSmsConfig(
+  callback: (config: { apiKey?: string; sender?: string; configured?: boolean }) => void
+): () => void {
+  try {
+    const docRef = doc(db, SETTINGS_COLLECTION, "sms_config");
+    return onSnapshot(
+      docRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          callback(snapshot.data() as any);
+        }
+      },
+      (error) => {
+        console.info("Notice: Brevo SMS config subscription status:", error?.message || error);
+      }
+    );
+  } catch (err) {
+    console.info("Realtime Brevo SMS config setup notice:", err);
+    return () => {};
+  }
+}
+
+export interface PasswordResetMethodsConfig {
+  emailResetEnabled: boolean;
+  phoneResetEnabled: boolean;
+  twoFactorResetEnabled: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export const DEFAULT_PASSWORD_RESET_METHODS: PasswordResetMethodsConfig = {
+  emailResetEnabled: true,
+  phoneResetEnabled: true,
+  twoFactorResetEnabled: true,
+};
+
+/**
+ * Save password reset methods visibility configuration to Firestore
+ */
+export async function savePasswordResetMethodsToFirestore(
+  config: PasswordResetMethodsConfig
+): Promise<void> {
+  try {
+    await ensureAuth();
+    const docRef = doc(db, SETTINGS_COLLECTION, "password_reset");
+    await setDoc(
+      docRef,
+      {
+        ...config,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.info("Firestore save password reset methods notice:", err);
+  }
+}
+
+/**
+ * Get password reset methods visibility configuration from Firestore
+ */
+export async function getPasswordResetMethodsFromFirestore(): Promise<PasswordResetMethodsConfig | null> {
+  try {
+    await ensureAuth();
+    const docRef = doc(db, SETTINGS_COLLECTION, "password_reset");
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const d = snap.data();
+      return {
+        emailResetEnabled: d.emailResetEnabled !== undefined ? Boolean(d.emailResetEnabled) : true,
+        phoneResetEnabled: d.phoneResetEnabled !== undefined ? Boolean(d.phoneResetEnabled) : true,
+        twoFactorResetEnabled: d.twoFactorResetEnabled !== undefined ? Boolean(d.twoFactorResetEnabled) : true,
+        updatedAt: d.updatedAt,
+        updatedBy: d.updatedBy,
+      };
+    }
+    return null;
+  } catch (err) {
+    console.info("Firestore get password reset methods notice:", err);
+    return null;
+  }
+}
+
+/**
+ * Real-time subscription to password reset methods visibility changes
+ */
+export function subscribeToPasswordResetMethods(
+  callback: (config: PasswordResetMethodsConfig) => void
+): () => void {
+  try {
+    const docRef = doc(db, SETTINGS_COLLECTION, "password_reset");
+    return onSnapshot(
+      docRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const d = snapshot.data();
+          callback({
+            emailResetEnabled: d.emailResetEnabled !== undefined ? Boolean(d.emailResetEnabled) : true,
+            phoneResetEnabled: d.phoneResetEnabled !== undefined ? Boolean(d.phoneResetEnabled) : true,
+            twoFactorResetEnabled: d.twoFactorResetEnabled !== undefined ? Boolean(d.twoFactorResetEnabled) : true,
+            updatedAt: d.updatedAt,
+            updatedBy: d.updatedBy,
+          });
+        }
+      },
+      (error) => {
+        console.info("Notice: Password reset methods subscription status:", error?.message || error);
+      }
+    );
+  } catch (err) {
+    console.info("Realtime password reset methods setup notice:", err);
+    return () => {};
+  }
+}
+
+/**
  * Clear calculation records from Supabase and Firestore for a specific user (or all if omitted)
  */
 export async function clearAllCalculationsFromFirestore(filterUserId?: string | null): Promise<void> {
@@ -1225,12 +1492,21 @@ export async function saveFlightConsignmentToFirestore(flight: FlightConsignment
 
 /**
  * Fetch all Flight Consignments from Supabase with Firestore fallback
+ * STRICT DATA PRIVACY: Non-admin users only fetch their own flight records.
  */
-export async function getFlightConsignmentsFromFirestore(filterUserId?: string | null): Promise<FlightConsignment[]> {
+export async function getFlightConsignmentsFromFirestore(
+  filterUserId?: string | null,
+  isAdmin: boolean = false
+): Promise<FlightConsignment[]> {
+  const cleanFilter = String(filterUserId || '').toLowerCase().trim();
+  if (!isAdmin && !cleanFilter) {
+    return [];
+  }
+
   // 1. Try Supabase first
   try {
-    const supabaseFlights = await getFlightConsignmentsFromSupabase(filterUserId || undefined);
-    if (supabaseFlights && supabaseFlights.length > 0) {
+    const supabaseFlights = await getFlightConsignmentsFromSupabase(cleanFilter || undefined, isAdmin);
+    if (Array.isArray(supabaseFlights)) {
       return supabaseFlights;
     }
   } catch (err) {
@@ -1245,11 +1521,10 @@ export async function getFlightConsignmentsFromFirestore(filterUserId?: string |
     const flights: FlightConsignment[] = [];
     querySnapshot.forEach((docSnap) => {
       const data = docSnap.data() as FlightConsignment;
+      const dataUserId = String(data.userId || (data as any).user_id || (data as any).username || '').toLowerCase().trim();
       if (
-        !filterUserId ||
-        filterUserId === 'admin' ||
-        data.userId === filterUserId ||
-        data.userId?.toLowerCase() === filterUserId.toLowerCase()
+        isAdmin ||
+        (cleanFilter && dataUserId === cleanFilter)
       ) {
         flights.push({ ...data, id: docSnap.id });
       }
@@ -1289,19 +1564,22 @@ export async function deleteFlightConsignmentFromFirestore(id: string): Promise<
  */
 export function subscribeToFlightConsignments(
   callback: (flights: FlightConsignment[]) => void,
-  filterUserId?: string | null
+  filterUserId?: string | null,
+  isAdmin: boolean = false
 ): () => void {
   let unsubFirestore: (() => void) | null = null;
   let unsubSupabase: (() => void) | null = null;
   let isCancelled = false;
 
+  const cleanFilter = String(filterUserId || '').toLowerCase().trim();
+
   // 1. Subscribe to Supabase real-time channel
   try {
     unsubSupabase = subscribeToFlightConsignmentsSupabase((supabaseFlights) => {
-      if (supabaseFlights && supabaseFlights.length > 0) {
+      if (Array.isArray(supabaseFlights)) {
         callback(supabaseFlights);
       }
-    }, filterUserId);
+    }, cleanFilter, isAdmin);
   } catch (err) {
     console.warn("Supabase flights subscription notice:", err);
   }
@@ -1319,18 +1597,15 @@ export function subscribeToFlightConsignments(
           const flights: FlightConsignment[] = [];
           snapshot.forEach((docSnap) => {
             const data = docSnap.data() as FlightConsignment;
+            const dataUserId = String(data.userId || (data as any).user_id || (data as any).username || '').toLowerCase().trim();
             if (
-              !filterUserId ||
-              filterUserId === 'admin' ||
-              data.userId === filterUserId ||
-              data.userId?.toLowerCase() === filterUserId.toLowerCase()
+              isAdmin ||
+              (cleanFilter && dataUserId === cleanFilter)
             ) {
               flights.push({ ...data, id: docSnap.id });
             }
           });
-          if (flights.length > 0) {
-            callback(flights);
-          }
+          callback(flights);
         },
         (error) => {
           console.info("Notice: Flight real-time subscription status:", error?.message || error);

@@ -181,6 +181,13 @@ export function getStoredUserProfile(): UserProfile | null {
 
     const parsed = JSON.parse(saved);
     if (parsed && typeof parsed === 'object') {
+      // Reject corrupted objects that do not contain a username or email
+      if (!parsed.username && !parsed.email) {
+        localStorage.removeItem(STORAGE_KEYS.USER_PROFILE);
+        sessionStorage.removeItem(STORAGE_KEYS.USER_PROFILE);
+        return null;
+      }
+
       const canonicalId = parsed.userId || parsed.user_id || `USR-${(parsed.username || 'USER').toUpperCase()}`;
       parsed.userId = canonicalId;
       parsed.user_id = canonicalId;
@@ -238,6 +245,11 @@ export function setStoredUserProfile(profile: UserProfile | null, rememberMe = t
  */
 export function saveFullSession(token: string | null, profile: UserProfile, rememberMe = true): void {
   try {
+    if (!profile || typeof profile !== 'object' || (!profile.username && !profile.email)) {
+      console.warn('saveFullSession aborted: Invalid user profile provided');
+      return;
+    }
+
     const canonicalId = profile.userId || profile.user_id || `USR-${(profile.username || 'USER').toUpperCase()}`;
     const normalizedProfile: UserProfile = {
       ...profile,

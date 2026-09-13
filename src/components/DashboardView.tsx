@@ -228,10 +228,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   // Load and Subscribe to Flights
   useEffect(() => {
     let isMounted = true;
+    const isUserAdmin = currentUser?.role === 'admin' || currentUser?.username?.toLowerCase() === 'admin';
+    const effectiveUserId = currentUser?.userId || currentUser?.username || '';
+
     const fetchFlights = async () => {
       setIsLoadingFlights(true);
       try {
-        const list = await getFlightsApi(currentUser?.userId || currentUser?.username);
+        const list = await getFlightsApi(effectiveUserId, isUserAdmin);
         if (isMounted && list) {
           setFlights(list);
         }
@@ -248,7 +251,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       if (isMounted) {
         setFlights(updatedFlights);
       }
-    }, currentUser?.userId || currentUser?.username);
+    }, effectiveUserId, isUserAdmin);
 
     return () => {
       isMounted = false;

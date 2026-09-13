@@ -230,6 +230,30 @@ Before building or deploying to production, verify the following steps:
 
 ## 📝 Modification & Update Log (Auto-Updated)
 
+- **2026-09-13**:
+  - **Firebase Auth Email/Password Provider Handling & Console Integration**:
+    - **Resolution for `[Firebase Auth] Email/Password provider not enabled in Firebase Console`**:
+      - Detected and handled the Firebase Authentication default configuration where `Email/Password` provider is initially inactive in new Firebase projects.
+      - **Clean Diagnostics in `src/lib/firebase.ts`**: Intercepts `auth/operation-not-allowed` immediately without throwing secondary unhandled errors, outputting clear guidance with direct project URL (`https://console.firebase.google.com/project/ai-studio-applet-webapp-cc0f1/authentication/providers`).
+      - **Seamless Automatic Fallback in `ForgotPasswordStep.tsx`**: When Firebase direct email link is unavailable due to disabled provider, the application automatically transitions the user directly to the 6-digit Email OTP verification step without showing broken link instructions, ensuring zero user lockout.
+      - **Admin Panel Configuration Guide**: Added an informative guidance card and a 1-click external link button in the Email Recovery card (`AdminPanel.tsx`) detailing how to enable the provider in Firebase Console under Authentication > Sign-in method.
+  - **Admin Panel Control for Password Reset Methods & Visibility (Email, Phone SMS, 2FA)**:
+    - **Granular Channel Toggles**: Implemented interactive switches in the Admin Panel (`AdminPanel.tsx`) allowing system administrators to show or hide individual password recovery channels:
+      - **Email Recovery**: Firebase Auth password reset links & 6-digit email OTP.
+      - **Phone SMS Verification**: Brevo SMS gateway 6-digit mobile OTP.
+      - **Two-Factor Authenticator (2FA)**: Authenticator TOTP & emergency single-use backup recovery codes.
+    - **Brevo NO_SMS_ADDONS Error Mitigation**: Provided instant control to disable and hide SMS recovery if the Brevo organization has no prepaid SMS credits add-on (`NO_SMS_ADDONS`), preventing dispatch errors and directing users seamlessly to Email or 2FA.
+    - **Quick SMS Toggle in Brevo Settings**: Added a direct toggle switch inside the Brevo SMS Gateway panel for rapid activation/deactivation of SMS recovery.
+    - **Anti-Lockout Safety Enforcement**: Backend (`server.ts`) and Admin UI strictly prevent disabling all three methods simultaneously, guaranteeing accounts can always recover access.
+    - **Dual Persistence & Real-Time Sync**:
+      - Server backend stores configuration in `site_settings` table (Supabase PostgreSQL) via `GET/POST /api/settings/password-reset-methods`.
+      - Realtime listener & dual-write to Firestore `site_settings/password_reset`.
+      - Instant live synchronization across clients without page reload.
+    - **Dynamic Forgot Password Flow Adaptation**:
+      - `forgotPasswordLookupApi` queries active method configurations and merges them with user account profiles.
+      - `ForgotPasswordStep.tsx` dynamically hides disabled channels from the method selection screen.
+      - If only one method is active, automatically initiates that method without prompting unnecessary selection steps.
+
 - **2026-09-05**:
   - **Production API Authentication, CORS Preflight & Multi-Field Identity Resolution Engine**:
     - **Vercel & Production CORS & OPTIONS Handling**: Added dedicated Express CORS middleware that guarantees `Access-Control-Allow-Origin: *`, `Access-Control-Allow-Headers` (`Authorization`, `Content-Type`, `X-Username`, `X-User-Id`, `Accept`, `Origin`, etc.), and immediately resolves `OPTIONS` preflight requests with `204 No Content` before reaching route handlers or rate limiters.
@@ -594,6 +618,19 @@ Before building or deploying to production, verify the following steps:
       - Integrated a one-click "Restore" button (`RotateCcw`) for soft-deleted/suspended accounts.
     - **Automated Test Coverage (`tests/suite.test.ts`)**: Added end-to-end integration tests verifying soft deletion, token rejection, calculation retention, account restoration, and hard delete calculation purging.
 
+- **2026-09-12**:
+  - **User Session Subscription Crash Resolution & Null-Safety Hardening (`firebase.ts` & `App.tsx`)**:
+    - Resolved runtime `TypeError: Cannot read properties of undefined (reading 'toLowerCase')` in `subscribeToUserSessionStatus`.
+    - Added comprehensive defensive guards across `firebase.ts` (`subscribeToUserSessionStatus`, `matchCalculationToUser`) ensuring null/undefined `username` arguments never crash the listener and cleanly return a safe no-op teardown function.
+    - Hardened session persistence in `session.ts` (`getStoredUserProfile` & `saveFullSession`) to validate and sanitize user profile objects, rejecting corrupted or empty objects.
+  - **Strict Multi-Tenant Data Isolation & Privacy Hardening (`server.ts`, `firebase.ts`, `supabase.ts`, `App.tsx`, `DashboardView.tsx`)**:
+    - Enforced strict user-level data isolation across all calculation queries, air cargo flight consignments, and image gallery records.
+    - Updated `getCalculationsFromFirestore`, `subscribeToCalculations`, `getFlightConsignmentsFromFirestore`, and `subscribeToFlightConsignments` to accept an explicit `isAdmin: boolean` parameter. Non-admin users are strictly isolated to their own records.
+    - In `server.ts` (`GET /api/calculations`, `GET /api/flights`, `GET /api/gallery`), patched non-admin queries where missing or empty user tokens previously resulted in unfiltered full-table queries; endpoints now immediately return empty arrays for non-admin callers without identity tokens.
+    - In `App.tsx` calculation subscription and `DashboardView.tsx` flight subscription, explicitly routed non-admin callers through strict user-token filters and guarded against showing other users' records.
+    - Hardened the password reset flow in `ForgotPasswordStep.tsx` and `LoginScreen.tsx` to automatically re-authenticate with new credentials or return safely to login without polluting user profile session state.
+    - Added automated test cases in `tests/suite.test.ts` verifying that non-admin users cannot receive or query calculations, flights, or data belonging to admin or other users.
+
 - **2026-09-08**:
   - **Comprehensive Safe Property Access & `toLowerCase()` Runtime Error Hardening**:
     - **Root Cause Analysis**: Identified runtime crashes (`TypeError: Cannot read properties of undefined (reading 'toLowerCase')`) triggered when accessing optional user profile properties (`userId`, `username`) or flight fields (`airline`, `originCountry`, `destinationCountry`, `masterAwbNumber`) without null checks.
@@ -671,6 +708,20 @@ Before building or deploying to production, verify the following steps:
   - **Automated Full-System Test Suite in Admin Panel (`AdminPanel.tsx`)**: Created a real-time, interactive diagnostic test runner covering 12 automated test modules across Math & Import Formulas, Target Pricing Strategy (Margin % vs Markup %), Multi-Currency Conversion Matrix & FX Rates, Backdated Transaction Dates, Firestore User Accounts Realtime Sync, Supabase PostgreSQL Relational Schema DDL Audit, LocalStorage Fallback State, Navigation Tab View Router, Interactive Action Modals (Edit, Quote Generator, HS Code Library), Calculation Record Deletion & Batch Clear All Filters, Inactivity Timeout Event Listener, and Website Favicon & Custom Branding Persistence Engine.
   - **Individual & Batch Record Deletion Fixes**: Added individual delete buttons with modal confirmations across `GalleryView.tsx`, `DashboardView.tsx`, and `AdminPanel.tsx`. Fixed translation keys for "Clear All" (`clearAll`) and resolved action button clipping on narrow viewports with `min-w-[280px]` wrappers.
   - **Synchronized SQL Schemas**: Updated `/schema.sql` at project root and `SUPABASE_REQUIRED_DDL_SQL` in `src/lib/supabase.ts` to maintain 100% synchronization across database definitions.
+
+- **2026-09-12**:
+  - **Brevo Transactional SMS Integration & Resilient Fallback Engine**:
+    - Resolved password reset SMS dispatch issue where the system was previously only logging OTP codes in server memory without external gateway transmission.
+    - Built comprehensive `sendBrevoSms` engine in `server.ts` utilizing Brevo's official v3 transactional SMS endpoint (`https://api.brevo.com/v3/transactionalSMS/sms`).
+    - Added intelligent international phone number auto-formatting (`formatPhoneForBrevo`) supporting Egyptian (`01x` $\to$ `+201x`), Saudi (`05x` $\to$ `+9665x`), UAE (`05x` $\to$ `+9715x`), and global E.164 formats.
+    - **Brevo SMS "No SMS Addons" Error Handling & Automatic Email Fallback**:
+      - Addressed provider error `No sms related addons are found for the given organization` (code 400 `not_enough_credits` / `NO_SMS_ADDONS`) when a Brevo organization lacks prepaid SMS packages.
+      - Implemented automatic, non-blocking failover in `/api/auth/forgot-password/send-phone-otp`: when Brevo SMS fails due to missing SMS credits/addons or provider limitations, the backend automatically falls back to delivering the 6-digit OTP verification code to the user's registered email address.
+      - Added client-side visual notification in `ForgotPasswordStep.tsx` informing the user that the code was seamlessly delivered to their masked email address (`fallbackUsed: 'email'`), allowing smooth password recovery without disruption.
+      - Enhanced Admin Panel Brevo SMS card in `AdminPanel.tsx` with dedicated `hasSmsAddon` detection, zero-credit warning alerts, bilingual Arabic/English troubleshooting guidance, and localized test error messages.
+    - Added Admin Panel Brevo SMS Gateway settings card in `AdminPanel.tsx` with live API key verification (`/api/admin/brevo-sms`), custom alphanumeric SMS sender ID configuration, test SMS dispatcher (`/api/admin/test-brevo-sms`), remaining SMS credits balance display, and dual-write storage to Supabase `site_settings/sms_config` and Firestore.
+    - Updated environment variable schema in `.env.example` to declare `BREVO_API_KEY` and `BREVO_SMS_SENDER`.
+    - Enhanced `/api/auth/forgot-password/send-phone-otp` route to return detailed provider messages, clean error handling, and 10-minute OTP expiration tracking.
 
 - **2026-08-05**:
   - Implemented multi-select checkboxes in `DashboardView.tsx` (both desktop table header/rows and mobile card views) with select-all/deselect-all controls.

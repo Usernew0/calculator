@@ -201,7 +201,10 @@ export default function App() {
     const unsubscribe = subscribeToCalculations(
       (firestoreData) => {
         if (Array.isArray(firestoreData)) {
-          if (filterUserId) {
+          if (isAdmin) {
+            setHistory(firestoreData);
+          } else if (filterUserId || userAliases.length > 0) {
+            const targetTokens = userAliases.map((t) => String(t || '').toLowerCase().trim());
             const userOnly = firestoreData.filter((item: any) => {
               const itemTokens = [
                 item.userId,
@@ -214,18 +217,19 @@ export default function App() {
                 .filter(Boolean)
                 .map((t: any) => String(t || '').toLowerCase().trim());
 
-              const targetTokens = userAliases.map((t) => String(t || '').toLowerCase().trim());
               return itemTokens.some((t) => targetTokens.includes(t));
             });
             setHistory(userOnly);
           } else {
-            setHistory(firestoreData);
+            // STRICT PRIVACY: Non-admin with no identifier tokens must NEVER see other users' data!
+            setHistory([]);
           }
         }
       },
       filterUserId,
       undefined,
-      userAliases
+      userAliases,
+      isAdmin
     );
 
     return () => {

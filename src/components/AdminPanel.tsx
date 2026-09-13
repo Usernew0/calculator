@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { UserProfile } from '../types';
+import { UserProfile, BrandingConfig, DEFAULT_BRANDING } from '../types';
 import {
   getAllUsersFromFirestore,
   saveUserProfileToFirestore,
@@ -10,12 +10,22 @@ import {
   deduplicateUsers,
   saveSiteFaviconToFirestore,
   getSiteFaviconFromFirestore,
+  saveBrandingToFirestore,
+  getBrandingFromFirestore,
+  subscribeToBranding,
   saveSessionTimeoutToFirestore,
   getSessionTimeoutFromFirestore,
   subscribeToSessionTimeout,
   saveAiKeyToFirestore,
   getAiKeyFromFirestore,
   subscribeToAiKey,
+  saveBrevoSmsConfigToFirestore,
+  getBrevoSmsConfigFromFirestore,
+  subscribeToBrevoSmsConfig,
+  PasswordResetMethodsConfig,
+  DEFAULT_PASSWORD_RESET_METHODS,
+  getPasswordResetMethodsFromFirestore,
+  subscribeToPasswordResetMethods,
 } from '../lib/firebase';
 import {
   getAllUsersApi,
@@ -24,6 +34,8 @@ import {
   restoreUserApi,
   saveSiteFaviconApi,
   getSiteFaviconApi,
+  getBrandingApi,
+  saveBrandingApi,
   saveSessionTimeoutApi,
   getSessionTimeoutApi,
   checkSupabaseHealthApi,
@@ -31,12 +43,19 @@ import {
   saveAiKeyApi,
   testAiKeyApi,
   deleteAiKeyApi,
+  getBrevoSmsStatusApi,
+  saveBrevoSmsConfigApi,
+  testBrevoSmsApi,
+  deleteBrevoSmsConfigApi,
+  getPasswordResetMethodsApi,
+  savePasswordResetMethodsApi,
   setup2FaApi,
   enable2FaApi,
   disable2FaApi,
   adminResetUser2FaApi,
   regenerateBackupCodesApi,
   AiKeyStatusResponse,
+  BrevoSmsStatusResponse,
 } from '../lib/api';
 import { generateTotpSecret, generateTotpCode, verifyTotpCode, generateQrCodeDataUrl, generateBackupCodes } from '../lib/totp';
 import {
@@ -50,6 +69,8 @@ import {
   checkSupabaseHealth,
   SupabaseHealthReport,
   SUPABASE_REQUIRED_DDL_SQL,
+  saveBrandingToSupabase,
+  getBrandingFromSupabase,
 } from '../lib/supabase';
 import { calculateTradeAndFreight } from '../utils/calculator';
 import { convertCurrency } from '../data/currencies';
@@ -81,6 +102,8 @@ import {
   CheckCircle2,
   AlertCircle,
   KeyRound,
+  ToggleLeft,
+  ToggleRight,
   Eye,
   EyeOff,
   ShieldAlert,
@@ -125,6 +148,8 @@ import {
   Key,
   Phone,
   Smartphone,
+  MessageSquare,
+  Send,
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -529,6 +554,233 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       showNotification('error', 'Failed to clear key');
     } finally {
       setIsSavingAiKey(false);
+    }
+  };
+
+  // Brevo Transactional SMS State & Management
+  const [brevoApiKeyInput, setBrevoApiKeyInput] = useState<string>('');
+  const [brevoSenderInput, setBrevoSenderInput] = useState<string>('CargoProfit');
+  const [showBrevoKey, setShowBrevoKey] = useState<boolean>(false);
+  const [brevoStatus, setBrevoStatus] = useState<BrevoSmsStatusResponse | null>(null);
+  const [isSavingBrevo, setIsSavingBrevo] = useState<boolean>(false);
+  const [isTestingBrevo, setIsTestingBrevo] = useState<boolean>(false);
+  const [brevoTestPhone, setBrevoTestPhone] = useState<string>('');
+  const [brevoTestResult, setBrevoTestResult] = useState<{
+    success: boolean;
+    message: string;
+    messageId?: string | number;
+    remainingCredits?: number;
+    formattedPhone?: string;
+  } | null>(null);
+
+  const refreshBrevoStatus = async () => {
+    try {
+      const status = await getBrevoSmsStatusApi();
+      setBrevoStatus(status);
+      if (status.sender) {
+        setBrevoSenderInput(status.sender);
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    refreshBrevoStatus();
+
+    getBrevoSmsConfigFromFirestore().then((cfg) => {
+      if (cfg) {
+        if (cfg.apiKey) setBrevoApiKeyInput(cfg.apiKey);
+        if (cfg.sender) setBrevoSenderInput(cfg.sender);
+      }
+    });
+
+    const unsubBrevo = subscribeToBrevoSmsConfig((cfg) => {
+      if (cfg) {
+        if (cfg.apiKey) setBrevoApiKeyInput(cfg.apiKey);
+        if (cfg.sender) setBrevoSenderInput(cfg.sender);
+        refreshBrevoStatus();
+      }
+    });
+
+    return () => {
+      unsubBrevo();
+    };
+  }, []);
+
+  const handleSaveBrevoConfig = async () => {
+    const trimmedKey = brevoApiKeyInput.trim();
+    if (!trimmedKey) {
+      showNotification(
+        'error',
+        lang === 'ar' ? 'يرجى إدخال مفتاح Brevo API صالح (يبدأ بـ xkeysib-)' : 'Please enter a valid Brevo API Key (starts with xkeysib-)'
+      );
+      return;
+    }
+
+    setIsSavingBrevo(true);
+    try {
+      const res = await saveBrevoSmsConfigApi(trimmedKey, brevoSenderInput.trim());
+      if (!res.success) {
+        throw new Error(res.error || 'Failed to save Brevo SMS settings');
+      }
+
+      await saveBrevoSmsConfigToFirestore(trimmedKey, brevoSenderInput.trim());
+      await refreshBrevoStatus();
+
+      showNotification(
+        'success',
+        lang === 'ar'
+          ? 'تم حفظ وتفعيل بوابة Brevo SMS بنجاح على الخادم وقاعدة البيانات! 📱'
+          : 'Brevo Transactional SMS Gateway verified and saved successfully! 📱'
+      );
+    } catch (err: any) {
+      showNotification(
+        'error',
+        err?.message || (lang === 'ar' ? 'تعذر حفظ إعدادات Brevo' : 'Failed to save Brevo settings')
+      );
+    } finally {
+      setIsSavingBrevo(false);
+    }
+  };
+
+  const handleTestBrevoSms = async () => {
+    if (!brevoTestPhone || brevoTestPhone.trim().length < 7) {
+      showNotification(
+        'error',
+        lang === 'ar' ? 'يرجى إدخال رقم هاتف محمول صالح مع كود الدولة (مثال: +201012345678)' : 'Please enter a valid mobile number with country code (e.g., +201012345678)'
+      );
+      return;
+    }
+
+    setIsTestingBrevo(true);
+    setBrevoTestResult(null);
+    try {
+      const res = await testBrevoSmsApi(
+        brevoTestPhone.trim(),
+        brevoApiKeyInput.trim() || undefined,
+        brevoSenderInput.trim() || undefined
+      );
+      setBrevoTestResult(res);
+
+      if (res.success) {
+        showNotification(
+          'success',
+          lang === 'ar'
+            ? `✓ تم إرسال رسالة SMS تجريبية بنجاح إلى ${res.formattedPhone || brevoTestPhone}!`
+            : `✓ Test SMS dispatched successfully to ${res.formattedPhone || brevoTestPhone}!`
+        );
+        refreshBrevoStatus();
+      } else {
+        const errorText = lang === 'ar'
+          ? (res.errorAr || res.error || 'فشل إرسال رسالة SMS عبر Brevo')
+          : (res.error || 'Brevo SMS test failed');
+        showNotification('error', errorText);
+      }
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to dispatch test SMS';
+      setBrevoTestResult({ success: false, message: msg, error: msg });
+      showNotification('error', msg);
+    } finally {
+      setIsTestingBrevo(false);
+    }
+  };
+
+  const handleClearBrevoConfig = async () => {
+    setIsSavingBrevo(true);
+    try {
+      await deleteBrevoSmsConfigApi();
+      await saveBrevoSmsConfigToFirestore('');
+      setBrevoApiKeyInput('');
+      setBrevoTestResult(null);
+      await refreshBrevoStatus();
+      showNotification(
+        'success',
+        lang === 'ar' ? 'تمت إزالة مفتاح Brevo SMS بنجاح' : 'Brevo SMS configuration removed successfully'
+      );
+    } catch (err: any) {
+      showNotification('error', err?.message || 'Failed to remove Brevo key');
+    } finally {
+      setIsSavingBrevo(false);
+    }
+  };
+
+  // Password Reset Methods & Channels Configuration (Email, Phone SMS, 2FA)
+  const [resetMethodsConfig, setResetMethodsConfig] = useState<PasswordResetMethodsConfig>(DEFAULT_PASSWORD_RESET_METHODS);
+  const [isSavingResetMethods, setIsSavingResetMethods] = useState<boolean>(false);
+  const [resetMethodsSaveSuccess, setResetMethodsSaveSuccess] = useState<boolean>(false);
+
+  const refreshResetMethods = async () => {
+    try {
+      const cfg = await getPasswordResetMethodsApi();
+      if (cfg) {
+        setResetMethodsConfig(cfg);
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    refreshResetMethods();
+
+    getPasswordResetMethodsFromFirestore().then((cfg) => {
+      if (cfg) {
+        setResetMethodsConfig(cfg);
+      }
+    });
+
+    const unsubReset = subscribeToPasswordResetMethods((cfg) => {
+      if (cfg) {
+        setResetMethodsConfig(cfg);
+      }
+    });
+
+    return () => {
+      unsubReset();
+    };
+  }, []);
+
+  const handleToggleResetMethod = async (key: 'emailResetEnabled' | 'phoneResetEnabled' | 'twoFactorResetEnabled') => {
+    const updated: PasswordResetMethodsConfig = {
+      ...resetMethodsConfig,
+      [key]: !resetMethodsConfig[key],
+    };
+
+    // Prevent disabling all 3 methods
+    if (!updated.emailResetEnabled && !updated.phoneResetEnabled && !updated.twoFactorResetEnabled) {
+      showNotification(
+        'error',
+        lang === 'ar'
+          ? 'يجب إبقاء وسيلة واحدة على الأقل مفعلة لاستعادة كلمة المرور لضمان عدم إغلاق حسابات المستخدمين.'
+          : 'At least one password recovery channel must remain active to prevent locking out accounts.'
+      );
+      return;
+    }
+
+    setResetMethodsConfig(updated);
+    setIsSavingResetMethods(true);
+    setResetMethodsSaveSuccess(false);
+
+    try {
+      const res = await savePasswordResetMethodsApi(updated);
+      if (!res.success) {
+        throw new Error(res.error || 'Failed to update password reset methods');
+      }
+
+      setResetMethodsSaveSuccess(true);
+      setTimeout(() => setResetMethodsSaveSuccess(false), 3000);
+
+      showNotification(
+        'success',
+        lang === 'ar'
+          ? `تم تحديث قنوات استعادة كلمة المرور بنجاح! (${key === 'phoneResetEnabled' ? 'رسائل SMS' : key === 'emailResetEnabled' ? 'البريد الإلكتروني' : 'المصادقة الثنائية 2FA'}: ${updated[key] ? 'مفعل' : 'معطل'})`
+          : `Password reset channel updated successfully! (${key === 'phoneResetEnabled' ? 'Phone SMS' : key === 'emailResetEnabled' ? 'Email' : '2FA'}: ${updated[key] ? 'Enabled' : 'Disabled'})`
+      );
+    } catch (err: any) {
+      setResetMethodsConfig(resetMethodsConfig);
+      showNotification(
+        'error',
+        err?.message || (lang === 'ar' ? 'تعذر حفظ إعدادات استعادة كلمة المرور' : 'Failed to save password reset methods')
+      );
+    } finally {
+      setIsSavingResetMethods(false);
     }
   };
 
@@ -2566,6 +2818,792 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     : 'Smart suggestions for customs duty categories, profit margins, and landed cost optimization.'}
                 </p>
               </div>
+            </div>
+          </div>
+        </div>
+
+        {/* BREVO TRANSACTIONAL SMS GATEWAY SETTINGS */}
+        <div id="admin-brevo-sms-section" className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-5 shadow-xl space-y-5">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-700/80">
+            <div className="flex items-center gap-3.5">
+              <div className="p-3 bg-gradient-to-tr from-sky-500/20 to-blue-500/20 text-sky-400 rounded-xl border border-sky-500/30 shadow-md">
+                <MessageSquare className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="font-black text-base text-white tracking-tight">
+                    {lang === 'ar'
+                      ? 'بوابة الرسائل القصيرة Brevo (Transactional SMS Gateway)'
+                      : 'Brevo Transactional SMS Gateway'}
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-md bg-sky-500/20 text-sky-300 border border-sky-500/30 font-mono text-[10px] font-bold flex items-center gap-1">
+                    <Smartphone className="w-3 h-3 text-sky-300" />
+                    <span>Brevo v3 SMS API</span>
+                  </span>
+                  {brevoStatus?.configured ? (
+                    <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono text-[10px] font-bold flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                      <span>{lang === 'ar' ? 'مفعل ومتصل' : 'Active & Connected'}</span>
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono text-[10px] font-bold flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3 text-amber-400" />
+                      <span>{lang === 'ar' ? 'غير مهيأ' : 'Not Configured'}</span>
+                    </span>
+                  )}
+                  {brevoStatus?.configured && (
+                    brevoStatus?.hasSmsAddon ? (
+                      <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-mono text-[10px] font-bold flex items-center gap-1">
+                        <span>{lang === 'ar' ? `رصيد SMS: ${brevoStatus.smsCredits}` : `SMS Credits: ${brevoStatus.smsCredits}`}</span>
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono text-[10px] font-bold flex items-center gap-1" title={lang === 'ar' ? 'يلزم شحن باقة رسائل SMS من حساب Brevo' : 'Requires SMS add-on pack in Brevo'}>
+                        <AlertCircle className="w-3 h-3 text-amber-400" />
+                        <span>{lang === 'ar' ? 'رصيد SMS: 0 (يلزم شراء باقة)' : 'SMS Credits: 0 (Addon needed)'}</span>
+                      </span>
+                    )
+                  )}
+                </div>
+                <p className="text-xs text-slate-400 mt-1">
+                  {lang === 'ar'
+                    ? 'إرسال رموز التحقق OTP إلى هواتف المستخدمين عبر الرسائل النصية القصيرة SMS لاستعادة وتعيين كلمة المرور.'
+                    : 'Dispatch instant OTP verification codes to user mobile phones via SMS for password reset and account recovery.'}
+                </p>
+
+                {/* Brevo No SMS Addon Alert Notice */}
+                {brevoStatus?.configured && (!brevoStatus?.hasSmsAddon || brevoStatus?.smsCredits === 0) && (
+                  <div className="mt-2.5 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5 text-[11px] leading-relaxed">
+                      <p className="font-bold text-amber-300">
+                        {lang === 'ar'
+                          ? 'تنبيه: حساب Brevo لا يحتوي على باقة رسائل SMS مدفوعة (No SMS related addons)'
+                          : 'Notice: Brevo organization has no active SMS credits add-on'}
+                      </p>
+                      <p className="text-amber-200/90">
+                        {lang === 'ar'
+                          ? 'مفتاح API متصل بنجاح، ولكن تشترط Brevo شراء رصيد رسائل SMS مسبق الدفع من (لوحة Brevo > Add-ons > SMS credits). استعادة الحساب بالبريد الإلكتروني تعمل مجاناً وتعمل كبديل تلقائي عند عدم توفر رصيد SMS.'
+                          : 'API key is connected, but Brevo requires purchasing prepaid SMS credits (Brevo > Add-ons > SMS) before SMS can be dispatched. Email OTP recovery works 100% free without addons and serves as an automatic fallback.'}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap">
+              {(brevoStatus?.configured || brevoApiKeyInput) && (
+                <button
+                  type="button"
+                  onClick={handleClearBrevoConfig}
+                  disabled={isSavingBrevo || isTestingBrevo}
+                  className="px-3 py-1.5 rounded-xl bg-slate-700/80 hover:bg-rose-500/20 hover:text-rose-300 hover:border-rose-500/40 text-slate-300 border border-slate-600 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  title={lang === 'ar' ? 'إلغاء ضبط المفتاح المخصص' : 'Clear custom key'}
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                  <span>{lang === 'ar' ? 'مسح' : 'Clear'}</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={handleSaveBrevoConfig}
+                disabled={isSavingBrevo || !brevoApiKeyInput.trim()}
+                className="px-4 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-lg shadow-sky-600/30 disabled:opacity-50 active:scale-95"
+              >
+                {isSavingBrevo ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                )}
+                <span>
+                  {isSavingBrevo
+                    ? lang === 'ar'
+                      ? 'جارٍ التحقق والحفظ...'
+                      : 'Verifying...'
+                    : lang === 'ar'
+                    ? 'حفظ وتفعيل'
+                    : 'Save & Activate'}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* Configuration Form */}
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              {/* API Key Input */}
+              <div className="lg:col-span-2 space-y-1.5">
+                <div className="flex items-center justify-between text-xs font-semibold text-slate-300">
+                  <label className="flex items-center gap-1.5">
+                    <Key className="w-3.5 h-3.5 text-sky-400" />
+                    <span>{lang === 'ar' ? 'مفتاح Brevo API (v3 Key)' : 'Brevo API Key (v3 Key)'}</span>
+                  </label>
+                  <a
+                    href="https://app.brevo.com/settings/keys/api"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sky-400 hover:text-sky-300 hover:underline flex items-center gap-1 text-[11px]"
+                  >
+                    <span>{lang === 'ar' ? 'احصل على المفتاح من Brevo' : 'Get key from Brevo'}</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+                <div className="relative">
+                  <input
+                    type={showBrevoKey ? 'text' : 'password'}
+                    value={brevoApiKeyInput}
+                    onChange={(e) => setBrevoApiKeyInput(e.target.value)}
+                    placeholder={
+                      brevoStatus?.maskedKey
+                        ? `${brevoStatus.maskedKey} (${lang === 'ar' ? 'المفتاح النشط حالياً' : 'Currently Active'})`
+                        : 'xkeysib-... (Paste your Brevo v3 API Key here)'
+                    }
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl ltr:pl-3.5 ltr:pr-20 rtl:pr-3.5 rtl:pl-20 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-400 font-mono tracking-wider"
+                  />
+                  <div className="absolute ltr:right-2.5 rtl:left-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setShowBrevoKey(!showBrevoKey)}
+                      className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors"
+                      title={showBrevoKey ? 'Hide key' : 'Show key'}
+                    >
+                      {showBrevoKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Sender Name */}
+              <div className="space-y-1.5">
+                <div className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                  <Smartphone className="w-3.5 h-3.5 text-sky-400" />
+                  <span>{lang === 'ar' ? 'اسم المرسل (SMS Sender)' : 'Sender Name (Alphanumeric)'}</span>
+                </div>
+                <input
+                  type="text"
+                  maxLength={11}
+                  value={brevoSenderInput}
+                  onChange={(e) => setBrevoSenderInput(e.target.value.replace(/[^a-zA-Z0-9]/g, ''))}
+                  placeholder="CargoProfit"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-400 font-mono tracking-wider uppercase"
+                />
+                <p className="text-[10px] text-slate-500">
+                  {lang === 'ar' ? 'أقصى حد 11 حرفاً أبجدياً أو رقمياً (مثل CargoProfit)' : 'Max 11 alphanumeric characters (e.g., CargoProfit)'}
+                </p>
+              </div>
+            </div>
+
+            {/* Test SMS Dispatcher */}
+            <div className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-700/60 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Send className="w-4 h-4 text-sky-400" />
+                  <span className="text-xs font-bold text-slate-200">
+                    {lang === 'ar' ? 'اختبار إرسال رسالة SMS حية' : 'Live Test SMS Dispatch'}
+                  </span>
+                </div>
+                <span className="text-[11px] text-slate-400">
+                  {lang === 'ar'
+                    ? 'أدخل رقم هاتفك مع مفتاح الدولة لاختبار الوصول الفوري'
+                    : 'Enter phone with country code to verify delivery'}
+                </span>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-center gap-2">
+                <div className="relative w-full sm:flex-1">
+                  <Phone className="w-4 h-4 text-slate-500 absolute ltr:left-3 rtl:right-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="tel"
+                    value={brevoTestPhone}
+                    onChange={(e) => setBrevoTestPhone(e.target.value)}
+                    placeholder="+201012345678 or 01012345678"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl ltr:pl-9 ltr:pr-3 rtl:pr-9 rtl:pl-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-400 font-mono"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleTestBrevoSms}
+                  disabled={isTestingBrevo || (!brevoApiKeyInput.trim() && !brevoStatus?.configured)}
+                  className="w-full sm:w-auto px-4 py-2 rounded-xl bg-slate-700/80 hover:bg-sky-600 hover:text-white text-sky-300 border border-sky-500/30 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 active:scale-95"
+                >
+                  {isTestingBrevo ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Send className="w-3.5 h-3.5" />
+                  )}
+                  <span>{isTestingBrevo ? (lang === 'ar' ? 'جارٍ الإرسال...' : 'Sending...') : (lang === 'ar' ? 'إرسال رسالة تجريبية' : 'Send Test SMS')}</span>
+                </button>
+              </div>
+
+              {brevoTestResult && (
+                <div
+                  className={`p-3 rounded-xl text-xs flex items-start gap-2.5 ${
+                    brevoTestResult.success
+                      ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300'
+                      : 'bg-rose-500/10 border border-rose-500/30 text-rose-300'
+                  }`}
+                >
+                  {brevoTestResult.success ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  )}
+                  <div className="flex-1 space-y-0.5">
+                    <p className="font-bold">
+                      {brevoTestResult.success
+                        ? lang === 'ar'
+                          ? `✓ تم إرسال رسالة الاختبار بنجاح عبر Brevo!`
+                          : `✓ Test SMS Delivered Successfully via Brevo!`
+                        : lang === 'ar'
+                        ? '✕ فشل إرسال رسالة الاختبار'
+                        : '✕ SMS Dispatch Failed'}
+                    </p>
+                    <p className="text-[11px] opacity-90">
+                      {brevoTestResult.success
+                        ? brevoTestResult.message
+                        : (lang === 'ar'
+                            ? (brevoTestResult.errorAr || brevoTestResult.error || brevoTestResult.message)
+                            : (brevoTestResult.error || brevoTestResult.message))}
+                    </p>
+                    {brevoTestResult.isNoAddon && (
+                      <p className="text-[11px] text-amber-300 font-semibold mt-1">
+                        {lang === 'ar'
+                          ? '💡 نصيحة: باقة Brevo المجانية تشمل البريد الإلكتروني فقط. لإرسال رسائل SMS، يجب شحن رصيد مسبق الدفع من (Brevo > Add-ons > SMS credits).'
+                          : '💡 Tip: Brevo free tier includes transactional emails only. Sending SMS requires purchasing prepaid SMS credits in Brevo (Add-ons > SMS credits).'}
+                      </p>
+                    )}
+                    {brevoTestResult.messageId && (
+                      <p className="text-[10px] font-mono opacity-80">Ref ID: {brevoTestResult.messageId}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Brevo Status Details & Guidance */}
+            <div className="flex items-center justify-between text-xs text-slate-400 pt-1 flex-wrap gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-semibold text-slate-300">
+                  {lang === 'ar' ? 'المصدر النشط:' : 'Active Source:'}
+                </span>
+                <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-mono text-[10px]">
+                  {brevoStatus?.source === 'admin_configured'
+                    ? lang === 'ar'
+                      ? 'لوحة التحكم (مخصص)'
+                      : 'Admin Panel (Custom)'
+                    : brevoStatus?.source === 'env'
+                    ? lang === 'ar'
+                      ? 'متغير البيئة (BREVO_API_KEY)'
+                      : 'Environment Variable (BREVO_API_KEY)'
+                    : lang === 'ar'
+                    ? 'غير محدد'
+                    : 'Not Configured'}
+                </span>
+                {brevoStatus?.accountEmail && (
+                  <span className="text-[11px] text-slate-400">
+                    ({brevoStatus.accountEmail})
+                  </span>
+                )}
+              </div>
+
+              <div className="text-[11px] text-slate-400">
+                {lang === 'ar'
+                  ? 'يتم تخزين المفتاح مشفراً على الخادم ومزامنته تلقائياً مع خيارات استعادة الحساب.'
+                  : 'Encrypted server-side storage synchronized with user account recovery flow.'}
+              </div>
+            </div>
+
+            {/* Quick Phone SMS Reset Channel Visibility Toggle */}
+            <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-700/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-inner">
+              <div className="flex items-start sm:items-center gap-3">
+                <div className={`p-2 rounded-xl shrink-0 ${resetMethodsConfig.phoneResetEnabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'}`}>
+                  <Smartphone className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-bold text-white">
+                      {lang === 'ar' ? 'حالة ظهور وسيلة SMS في شاشة استعادة كلمة المرور:' : 'SMS Channel in Forgot Password Screen:'}
+                    </span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      resetMethodsConfig.phoneResetEnabled
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                    }`}>
+                      {resetMethodsConfig.phoneResetEnabled
+                        ? (lang === 'ar' ? 'ظاهر ونشط للمستخدمين' : 'Active & Visible')
+                        : (lang === 'ar' ? 'مخفي ومعطل (يمنع أخطاء الرصيد)' : 'Hidden & Disabled')}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                    {lang === 'ar'
+                      ? 'يمكنك إخفاء خيار رسائل SMS فوراً لتجنب ظهور أي أخطاء للمستخدمين عند عدم توفر رصيد SMS في Brevo (NO_SMS_ADDONS).'
+                      : 'You can hide the SMS recovery option to avoid errors when Brevo lacks SMS credits (NO_SMS_ADDONS).'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                id="btn-quick-toggle-sms-reset"
+                disabled={isSavingResetMethods}
+                onClick={() => handleToggleResetMethod('phoneResetEnabled')}
+                className={`w-full sm:w-auto shrink-0 py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm ${
+                  resetMethodsConfig.phoneResetEnabled
+                    ? 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40'
+                    : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40'
+                }`}
+              >
+                {resetMethodsConfig.phoneResetEnabled ? (
+                  <>
+                    <ToggleRight className="w-4 h-4 text-rose-400" />
+                    <span>{lang === 'ar' ? 'تعطيل وإخفاء خيار SMS' : 'Disable & Hide SMS'}</span>
+                  </>
+                ) : (
+                  <>
+                    <ToggleLeft className="w-4 h-4 text-emerald-400" />
+                    <span>{lang === 'ar' ? 'تفعيل وإظهار خيار SMS' : 'Enable & Show SMS'}</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Feature Chips */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+              <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-700/60 space-y-1">
+                <div className="flex items-center gap-2 text-sky-300 font-bold text-xs">
+                  <Key className="w-3.5 h-3.5 text-sky-400" />
+                  <span>{lang === 'ar' ? 'استعادة كلمة المرور الفورية' : 'Instant Password Recovery'}</span>
+                </div>
+                <p className="text-[10px] text-slate-400 leading-relaxed">
+                  {lang === 'ar'
+                    ? 'إرسال رمز تحقق OTP مكون من 6 أرقام برسالة نصية صالحة لمدة 10 دقائق لإعادة تعيين كلمة المرور.'
+                    : 'Generates secure 6-digit OTP sent to user phones, valid for 10 minutes to verify password reset.'}
+                </p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-700/60 space-y-1">
+                <div className="flex items-center gap-2 text-sky-300 font-bold text-xs">
+                  <Smartphone className="w-3.5 h-3.5 text-sky-400" />
+                  <span>{lang === 'ar' ? 'تنسيق الأرقام الدولية تلقائياً' : 'Automatic Phone Formatting'}</span>
+                </div>
+                <p className="text-[10px] text-slate-400 leading-relaxed">
+                  {lang === 'ar'
+                    ? 'التعامل التلقائي مع أرقام مصر (01x) والسعودية (05x) والإمارات والصيغ الدولية المكتوبة بأي شكل.'
+                    : 'Auto-formats Egypt (+20), Saudi (+966), UAE (+971), and all E.164 international numbers.'}
+                </p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-700/60 space-y-1">
+                <div className="flex items-center gap-2 text-sky-300 font-bold text-xs">
+                  <MessageSquare className="w-3.5 h-3.5 text-sky-400" />
+                  <span>{lang === 'ar' ? 'متابعة الرصيد والتقارير' : 'Real-Time Balance & Logs'}</span>
+                </div>
+                <p className="text-[10px] text-slate-400 leading-relaxed">
+                  {lang === 'ar'
+                    ? 'مزامنة رصيد رسائل SMS المتبقية في حسابك وتوثيق رقم المرجع لكل رسالة مرسلة بنجاح.'
+                    : 'Real-time sync of remaining Brevo SMS credits and message delivery reference IDs.'}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* PASSWORD RESET METHODS & CHANNELS VISIBILITY MANAGEMENT CARD (EMAIL, PHONE SMS, 2FA) */}
+        <div id="password-reset-methods-card" className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-5 shadow-xl space-y-5">
+          {/* Header */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-700/80">
+            <div className="flex items-center gap-3.5">
+              <div className="p-3 bg-gradient-to-tr from-teal-500/20 to-emerald-500/20 text-emerald-400 rounded-xl border border-emerald-500/30 shadow-md">
+                <KeyRound className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="font-black text-base text-white tracking-tight">
+                    {lang === 'ar'
+                      ? 'إدارة وسائل وقنوات استعادة كلمة المرور'
+                      : 'Password Reset Methods & Visibility Controls'}
+                  </h3>
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    {lang === 'ar'
+                      ? `${(resetMethodsConfig.emailResetEnabled ? 1 : 0) + (resetMethodsConfig.phoneResetEnabled ? 1 : 0) + (resetMethodsConfig.twoFactorResetEnabled ? 1 : 0)} من 3 قنوات نشطة`
+                      : `${(resetMethodsConfig.emailResetEnabled ? 1 : 0) + (resetMethodsConfig.phoneResetEnabled ? 1 : 0) + (resetMethodsConfig.twoFactorResetEnabled ? 1 : 0)} / 3 Active Channels`}
+                  </span>
+                  {resetMethodsSaveSuccess && (
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-teal-500/20 text-teal-300 border border-teal-500/30 animate-pulse flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>{lang === 'ar' ? 'تم الحفظ والمزامنة!' : 'Saved & Synced!'}</span>
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                  {lang === 'ar'
+                    ? 'التحكم المباشر من لوحة الإدارة في إظهار أو إخفاء وسائل استعادة وتعيين كلمة المرور للمستخدمين (البريد، الهاتف SMS، المصادقة الثنائية 2FA). يتم تطبيق التغييرات فوراً في شاشة نسيت كلمة المرور.'
+                    : 'Admin control to show or hide available password recovery channels (Email, Phone SMS, 2FA). Changes apply in real-time on the Forgot Password screen.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-end md:self-auto">
+              <button
+                type="button"
+                id="btn-refresh-reset-methods"
+                onClick={refreshResetMethods}
+                className="p-2 rounded-xl bg-slate-900/80 border border-slate-700/80 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                title={lang === 'ar' ? 'تحديث الإعدادات' : 'Refresh configuration'}
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span className="hidden sm:inline">{lang === 'ar' ? 'تحديث' : 'Refresh'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* 3 Main Recovery Channel Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* 1. EMAIL RESET CHANNEL */}
+            <div
+              id="card-reset-method-email"
+              className={`p-4 rounded-xl border transition-all space-y-3.5 flex flex-col justify-between ${
+                resetMethodsConfig.emailResetEnabled
+                  ? 'bg-slate-900/80 border-sky-500/40 ring-1 ring-sky-500/20'
+                  : 'bg-slate-900/40 border-slate-800 opacity-75'
+              }`}
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`p-2.5 rounded-xl border ${
+                      resetMethodsConfig.emailResetEnabled
+                        ? 'bg-sky-500/20 text-sky-400 border-sky-500/30'
+                        : 'bg-slate-800 text-slate-500 border-slate-700'
+                    }`}>
+                      <Mail className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-white">
+                        {lang === 'ar' ? 'البريد الإلكتروني' : 'Email Recovery'}
+                      </h4>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        Firebase Auth + OTP
+                      </span>
+                    </div>
+                  </div>
+
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    resetMethodsConfig.emailResetEnabled
+                      ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                      : 'bg-slate-800 text-slate-400 border border-slate-700'
+                  }`}>
+                    {resetMethodsConfig.emailResetEnabled
+                      ? (lang === 'ar' ? 'ظاهر ونشط' : 'Active')
+                      : (lang === 'ar' ? 'مخفي ومعطل' : 'Hidden')}
+                  </span>
+                </div>
+
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {lang === 'ar'
+                    ? 'إرسال رابط آمن لإعادة تعيين كلمة المرور مباشرة إلى البريد الإلكتروني المسجل للحساب، مع دعم إدخال رمز التحقق المكون من 6 أرقام.'
+                    : 'Sends a secure password reset link via Firebase Auth or a 6-digit email verification code.'}
+                </p>
+
+                <div className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px] text-slate-400 space-y-1">
+                  <div className="flex items-center justify-between text-slate-300">
+                    <span>{lang === 'ar' ? 'تكلفة الخدمة:' : 'Channel Cost:'}</span>
+                    <span className="text-emerald-400 font-semibold">{lang === 'ar' ? 'مجاني بالكامل (0 رسوم)' : 'Free (Firebase Auth)'}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-300">
+                    <span>{lang === 'ar' ? 'التوافق:' : 'Compatibility:'}</span>
+                    <span>{lang === 'ar' ? 'كافة المستخدمين ذوي البريد المسجل' : 'All accounts with email'}</span>
+                  </div>
+                </div>
+
+                {/* Firebase Auth Console Provider Guidance Notice */}
+                <div className="p-2.5 rounded-lg bg-sky-950/30 border border-sky-500/20 text-[11px] space-y-1.5">
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="font-bold text-sky-300 flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                      {lang === 'ar' ? 'تهيئة مزود البريد في Firebase Console:' : 'Firebase Console Email Provider:'}
+                    </span>
+                    <a
+                      href="https://console.firebase.google.com/project/ai-studio-applet-webapp-cc0f1/authentication/providers"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sky-400 hover:text-sky-300 font-bold inline-flex items-center gap-1 text-[10px] bg-sky-900/40 hover:bg-sky-900/70 px-2 py-0.5 rounded border border-sky-500/30 transition-colors"
+                      title={lang === 'ar' ? 'فتح لوحة تحكم Firebase' : 'Open Firebase Console'}
+                    >
+                      <span>{lang === 'ar' ? 'فتح الكونسول' : 'Open Console'}</span>
+                      <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-relaxed">
+                    {lang === 'ar'
+                      ? 'افتراضياً لا يكون مزود Email/Password مفعلاً في كونسول Firebase الجديد. قم بتفعيله من (Authentication > Sign-in method > Email/Password) لإرسال الروابط المباشرة، أو اترك النظام يستخدم رمز التحقق 6-digit OTP تلقائياً.'
+                      : 'By default, Email/Password is disabled in new Firebase projects. Enable it under (Authentication > Sign-in method > Email/Password) for direct reset links, or let the app fallback to 6-digit OTP codes.'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Toggle Button */}
+              <button
+                type="button"
+                id="btn-toggle-email-reset"
+                disabled={isSavingResetMethods}
+                onClick={() => handleToggleResetMethod('emailResetEnabled')}
+                className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm ${
+                  resetMethodsConfig.emailResetEnabled
+                    ? 'bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 border border-sky-500/40'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                }`}
+              >
+                {resetMethodsConfig.emailResetEnabled ? (
+                  <>
+                    <ToggleRight className="w-4 h-4 text-sky-400" />
+                    <span>{lang === 'ar' ? 'إخفاء وتعطيل وسيلة البريد' : 'Disable & Hide Email'}</span>
+                  </>
+                ) : (
+                  <>
+                    <ToggleLeft className="w-4 h-4 text-slate-400" />
+                    <span>{lang === 'ar' ? 'إظهار وتفعيل وسيلة البريد' : 'Enable & Show Email'}</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* 2. PHONE SMS RESET CHANNEL */}
+            <div
+              id="card-reset-method-phone"
+              className={`p-4 rounded-xl border transition-all space-y-3.5 flex flex-col justify-between ${
+                resetMethodsConfig.phoneResetEnabled
+                  ? 'bg-slate-900/80 border-emerald-500/40 ring-1 ring-emerald-500/20'
+                  : 'bg-slate-900/40 border-slate-800 opacity-75'
+              }`}
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`p-2.5 rounded-xl border ${
+                      resetMethodsConfig.phoneResetEnabled
+                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                        : 'bg-slate-800 text-slate-500 border border-slate-700'
+                    }`}>
+                      <Smartphone className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-white">
+                        {lang === 'ar' ? 'رسائل SMS للهاتف' : 'Phone SMS OTP'}
+                      </h4>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        Brevo SMS Gateway
+                      </span>
+                    </div>
+                  </div>
+
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    resetMethodsConfig.phoneResetEnabled
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                  }`}>
+                    {resetMethodsConfig.phoneResetEnabled
+                      ? (lang === 'ar' ? 'ظاهر ونشط' : 'Active')
+                      : (lang === 'ar' ? 'مخفي ومعطل' : 'Hidden')}
+                  </span>
+                </div>
+
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {lang === 'ar'
+                    ? 'إرسال رمز تحقق OTP مكون من 6 أرقام عبر رسالة قصيرة SMS إلى رقم الهاتف المحمول المسجل للحساب.'
+                    : 'Dispatches a 6-digit SMS OTP verification code directly to the registered phone number.'}
+                </p>
+
+                {/* Brevo Notice Box */}
+                <div className={`p-2.5 rounded-lg border text-[11px] leading-relaxed space-y-1.5 ${
+                  brevoStatus?.isConfigured && !resetMethodsConfig.phoneResetEnabled
+                    ? 'bg-slate-950/60 border-slate-800 text-slate-400'
+                    : !resetMethodsConfig.phoneResetEnabled
+                    ? 'bg-amber-950/40 border-amber-500/30 text-amber-300'
+                    : 'bg-slate-950/60 border-slate-800 text-slate-300'
+                }`}>
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>{lang === 'ar' ? 'ملاحظة باقة ورصيد الرسائل:' : 'Brevo SMS Credits Notice:'}</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400">
+                    {lang === 'ar'
+                      ? 'إذا لم تكن باقة SMS مدفوعة مسبقاً في Brevo، احتفظ بهذا الخيار معطلاً لتوجيه المستخدمين للبريد و 2FA بدون إظهار أخطاء NO_SMS_ADDONS.'
+                      : 'Keep disabled if your Brevo account lacks prepaid SMS add-on credits to avoid NO_SMS_ADDONS notices.'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Toggle Button */}
+              <button
+                type="button"
+                id="btn-toggle-phone-reset"
+                disabled={isSavingResetMethods}
+                onClick={() => handleToggleResetMethod('phoneResetEnabled')}
+                className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm ${
+                  resetMethodsConfig.phoneResetEnabled
+                    ? 'bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                }`}
+              >
+                {resetMethodsConfig.phoneResetEnabled ? (
+                  <>
+                    <ToggleRight className="w-4 h-4 text-emerald-400" />
+                    <span>{lang === 'ar' ? 'إخفاء وتعطيل وسيلة SMS' : 'Disable & Hide SMS'}</span>
+                  </>
+                ) : (
+                  <>
+                    <ToggleLeft className="w-4 h-4 text-slate-400" />
+                    <span>{lang === 'ar' ? 'إظهار وتفعيل وسيلة SMS' : 'Enable & Show SMS'}</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* 3. 2FA AUTHENTICATOR RESET CHANNEL */}
+            <div
+              id="card-reset-method-2fa"
+              className={`p-4 rounded-xl border transition-all space-y-3.5 flex flex-col justify-between ${
+                resetMethodsConfig.twoFactorResetEnabled
+                  ? 'bg-slate-900/80 border-indigo-500/40 ring-1 ring-indigo-500/20'
+                  : 'bg-slate-900/40 border-slate-800 opacity-75'
+              }`}
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`p-2.5 rounded-xl border ${
+                      resetMethodsConfig.twoFactorResetEnabled
+                        ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
+                        : 'bg-slate-800 text-slate-500 border border-slate-700'
+                    }`}>
+                      <ShieldCheck className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-white">
+                        {lang === 'ar' ? 'المصادقة الثنائية 2FA' : '2FA Authenticator'}
+                      </h4>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        Google / Authy / Backup
+                      </span>
+                    </div>
+                  </div>
+
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    resetMethodsConfig.twoFactorResetEnabled
+                      ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                      : 'bg-slate-800 text-slate-400 border border-slate-700'
+                  }`}>
+                    {resetMethodsConfig.twoFactorResetEnabled
+                      ? (lang === 'ar' ? 'ظاهر ونشط' : 'Active')
+                      : (lang === 'ar' ? 'مخفي ومعطل' : 'Hidden')}
+                  </span>
+                </div>
+
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {lang === 'ar'
+                    ? 'التحقق عبر الرمز المباشر المكون من 6 أرقام من تطبيقات المصادقة (Google Authenticator أو Authy) أو رموز الاسترداد الاحتياطية للطوارئ.'
+                    : 'Validates real-time 6-digit TOTP codes or emergency single-use backup recovery codes.'}
+                </p>
+
+                <div className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px] text-slate-400 space-y-1">
+                  <div className="flex items-center justify-between text-slate-300">
+                    <span>{lang === 'ar' ? 'مستوى الأمان:' : 'Security Level:'}</span>
+                    <span className="text-indigo-400 font-semibold">{lang === 'ar' ? 'عالي جداً (تشفير TOTP)' : 'Highest (TOTP)'}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-300">
+                    <span>{lang === 'ar' ? 'التوافق:' : 'Compatibility:'}</span>
+                    <span>{lang === 'ar' ? 'الحسابات المفعل لها 2FA' : 'Accounts with 2FA setup'}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Toggle Button */}
+              <button
+                type="button"
+                id="btn-toggle-2fa-reset"
+                disabled={isSavingResetMethods}
+                onClick={() => handleToggleResetMethod('twoFactorResetEnabled')}
+                className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm ${
+                  resetMethodsConfig.twoFactorResetEnabled
+                    ? 'bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                }`}
+              >
+                {resetMethodsConfig.twoFactorResetEnabled ? (
+                  <>
+                    <ToggleRight className="w-4 h-4 text-indigo-400" />
+                    <span>{lang === 'ar' ? 'إخفاء وتعطيل وسيلة 2FA' : 'Disable & Hide 2FA'}</span>
+                  </>
+                ) : (
+                  <>
+                    <ToggleLeft className="w-4 h-4 text-slate-400" />
+                    <span>{lang === 'ar' ? 'إظهار وتفعيل وسيلة 2FA' : 'Enable & Show 2FA'}</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Live Preview & User Impact Banner */}
+          <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-700/80 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-bold text-white">
+                <Eye className="w-4 h-4 text-teal-400" />
+                <span>{lang === 'ar' ? 'معاينة تجربة المستخدم في شاشة "نسيت كلمة المرور" الآن:' : 'Live Preview: What users will see on "Forgot Password" screen now:'}</span>
+              </div>
+              <span className="text-[10px] text-slate-400 font-mono">
+                {lang === 'ar' ? 'تحديث حي' : 'Live Sync'}
+              </span>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 flex flex-wrap gap-2.5 items-center">
+              {resetMethodsConfig.emailResetEnabled && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-sky-500/10 border border-sky-500/30 text-sky-300 text-xs font-bold">
+                  <Mail className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? '1. رابط الاستعادة عبر البريد الإلكتروني (مفعل)' : '1. Email Reset Link (Visible)'}</span>
+                </div>
+              )}
+
+              {resetMethodsConfig.phoneResetEnabled && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-bold">
+                  <Smartphone className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? '2. رمز تحقق SMS عبر الهاتف (مفعل)' : '2. Phone SMS OTP (Visible)'}</span>
+                </div>
+              )}
+
+              {resetMethodsConfig.twoFactorResetEnabled && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 text-xs font-bold">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? '3. رمز المصادقة الثنائية 2FA (مفعل)' : '3. 2FA Authenticator (Visible)'}</span>
+                </div>
+              )}
+
+              {!resetMethodsConfig.phoneResetEnabled && (
+                <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs">
+                  <ShieldAlert className="w-3.5 h-3.5" />
+                  <span>
+                    {lang === 'ar'
+                      ? 'رسائل SMS مخفية تماماً ولن يتم استدعاء بوابة Brevo أو إظهار أخطاء NO_SMS_ADDONS'
+                      : 'SMS is fully hidden; Brevo will not be called, preventing NO_SMS_ADDONS errors'}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
+              <span>
+                {lang === 'ar'
+                  ? '🔒 حماية النظام: يتم منع إيقاف جميع الوسائل الثلاث معاً لضمان عدم قفل حسابات المستخدمين.'
+                  : '🔒 Safety Guard: The system prevents disabling all three methods simultaneously to ensure users can always recover access.'}
+              </span>
+              {resetMethodsConfig.updatedAt && (
+                <span className="text-[10px] text-slate-500 font-mono">
+                  {lang === 'ar' ? 'آخر تحديث: ' : 'Updated: '}
+                  {new Date(resetMethodsConfig.updatedAt).toLocaleTimeString()}
+                </span>
+              )}
             </div>
           </div>
         </div>

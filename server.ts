@@ -555,15 +555,277 @@ let serverFlightsStore: Record<string, any> = {};
 let serverSiteFavicon: string | null = null;
 let serverInactivityTimeoutMinutes: number = 15;
 let serverGeminiApiKey: string = "";
+let serverBrevoApiKey: string = "";
+let serverBrevoSmsSender: string = "Elegant";
+
+interface ServerBrandingConfig {
+  appName: string;
+  appNameAr: string;
+  emailSenderName: string;
+  smsSenderName: string;
+  faviconUrl: string | null;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+let serverBrandingConfig: ServerBrandingConfig = {
+  appName: "Elegant",
+  appNameAr: "أليجانت",
+  emailSenderName: "Elegant Security",
+  smsSenderName: "Elegant",
+  faviconUrl: null,
+};
+
+async function getEffectiveBrandingConfig(): Promise<ServerBrandingConfig> {
+  try {
+    const { data } = await supabase
+      .from("site_settings")
+      .select("*")
+      .eq("id", "branding")
+      .maybeSingle();
+
+    if (data) {
+      const sd = data.settings_data || {};
+      serverBrandingConfig = {
+        appName: data.app_name || sd.appName || serverBrandingConfig.appName || "Elegant",
+        appNameAr: data.app_name_ar || sd.appNameAr || serverBrandingConfig.appNameAr || "أليجانت",
+        emailSenderName: data.email_sender_name || sd.emailSenderName || serverBrandingConfig.emailSenderName || "Elegant Security",
+        smsSenderName: data.sms_sender_name || sd.smsSenderName || serverBrandingConfig.smsSenderName || "Elegant",
+        faviconUrl: data.favicon_url || sd.faviconUrl || serverBrandingConfig.faviconUrl || null,
+        updatedAt: data.updated_at || sd.updatedAt,
+        updatedBy: sd.updatedBy,
+      };
+      if (serverBrandingConfig.smsSenderName) {
+        serverBrevoSmsSender = serverBrandingConfig.smsSenderName;
+      }
+      if (serverBrandingConfig.faviconUrl) {
+        serverSiteFavicon = serverBrandingConfig.faviconUrl;
+      }
+    }
+  } catch (err) {
+    // fallback to in-memory state
+  }
+  return serverBrandingConfig;
+}
+
+interface PasswordResetMethodsConfig {
+  emailResetEnabled: boolean;
+  phoneResetEnabled: boolean;
+  twoFactorResetEnabled: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+let serverPasswordResetMethodsConfig: PasswordResetMethodsConfig = {
+  emailResetEnabled: true,
+  phoneResetEnabled: true,
+  twoFactorResetEnabled: true,
+};
+
+async function getPasswordResetMethodsConfig(): Promise<PasswordResetMethodsConfig> {
+  try {
+    const { data } = await supabase
+      .from("site_settings")
+      .select("*")
+      .eq("id", "password_reset")
+      .maybeSingle();
+
+    if (data && data.settings_data) {
+      const sd = data.settings_data;
+      serverPasswordResetMethodsConfig = {
+        emailResetEnabled: sd.emailResetEnabled !== undefined ? Boolean(sd.emailResetEnabled) : true,
+        phoneResetEnabled: sd.phoneResetEnabled !== undefined ? Boolean(sd.phoneResetEnabled) : true,
+        twoFactorResetEnabled: sd.twoFactorResetEnabled !== undefined ? Boolean(sd.twoFactorResetEnabled) : true,
+        updatedAt: sd.updatedAt,
+        updatedBy: sd.updatedBy,
+      };
+    }
+  } catch (err) {
+    // fallback to in-memory state
+  }
+  return serverPasswordResetMethodsConfig;
+}
 
 function getEffectiveGeminiKey(): string {
   return serverGeminiApiKey || process.env.GEMINI_API_KEY || "";
+}
+
+function getEffectiveBrevoApiKey(): string {
+  return (
+    serverBrevoApiKey ||
+    process.env.BREVO_API_KEY ||
+    process.env.BREVO_SMS_KEY ||
+    process.env.SENDINBLUE_API_KEY ||
+    ""
+  ).trim();
+}
+
+function getEffectiveBrevoSender(): string {
+  const raw = (
+    serverBrandingConfig.smsSenderName ||
+    serverBrevoSmsSender ||
+    process.env.BREVO_SMS_SENDER ||
+    "Elegant"
+  ).trim();
+  const clean = raw.replace(/[^a-zA-Z0-9]/g, "").slice(0, 11);
+  return clean || "Elegant";
+}
+
+function formatPhoneForBrevo(rawPhone: string): string {
+  if (!rawPhone) return "";
+  let clean = String(rawPhone).trim().replace(/[\s\-\(\)\.]/g, "");
+  if (clean.startsWith("00")) {
+    clean = "+" + clean.slice(2);
+  }
+  if (clean.startsWith("+")) {
+    return "+" + clean.slice(1).replace(/\D/g, "");
+  }
+  // Egyptian local numbers (010, 011, 012, 015 - 11 digits)
+  if (clean.startsWith("01") && clean.length === 11) {
+    return "+20" + clean.slice(1);
+  }
+  // Saudi local numbers (05x - 10 digits)
+  if (clean.startsWith("05") && clean.length === 10) {
+    return "+966" + clean.slice(1);
+  }
+  // UAE local numbers (05x - 9 digits)
+  if (clean.startsWith("05") && clean.length === 9) {
+    return "+971" + clean.slice(1);
+  }
+  // Pure numeric international format missing + (e.g. 2010... 12 digits, 9665... 12 digits, 9715... 12 digits)
+  if (clean.startsWith("201") && clean.length === 12) {
+    return "+" + clean;
+  }
+  if (clean.startsWith("9665") && clean.length === 12) {
+    return "+" + clean;
+  }
+  if (clean.startsWith("9715") && clean.length === 12) {
+    return "+" + clean;
+  }
+  return "+" + clean.replace(/\D/g, "");
+}
+
+async function sendBrevoSms(
+  toPhone: string,
+  content: string,
+  overrideApiKey?: string,
+  overrideSender?: string
+): Promise<{
+  success: boolean;
+  messageId?: string | number;
+  remainingCredits?: number;
+  error?: string;
+  errorAr?: string;
+  rawError?: string;
+  code?: string;
+  formattedPhone?: string;
+  isNoAddon?: boolean;
+}> {
+  const apiKey = (overrideApiKey || getEffectiveBrevoApiKey()).trim();
+  if (!apiKey) {
+    return {
+      success: false,
+      error: "Brevo API key is not configured. Please set BREVO_API_KEY in environment variables or Admin Settings.",
+      errorAr: "مفتاح Brevo API غير مهيأ. يرجى إدخال المفتاح في إعدادات لوحة التحكم.",
+      code: "BREVO_NOT_CONFIGURED",
+      isNoAddon: false,
+    };
+  }
+
+  const sender = (overrideSender || getEffectiveBrevoSender()).trim();
+  const formattedPhone = formatPhoneForBrevo(toPhone);
+
+  const digitsOnly = formattedPhone.replace(/\D/g, "");
+  if (digitsOnly.length < 8) {
+    return {
+      success: false,
+      error: `Invalid phone number format: "${toPhone}". Expected international format like +201012345678.`,
+      errorAr: `صيغة رقم الهاتف غير صالحة: "${toPhone}". يرجى إدخال الرقم بالصيغة الدولية مثل +201012345678.`,
+      code: "INVALID_PHONE_NUMBER",
+      formattedPhone,
+      isNoAddon: false,
+    };
+  }
+
+  try {
+    console.info(`[Brevo SMS Dispatching] Sending to ${formattedPhone} via sender "${sender}"`);
+    const response = await fetch("https://api.brevo.com/v3/transactionalSMS/sms", {
+      method: "POST",
+      headers: {
+        "accept": "application/json",
+        "content-type": "application/json",
+        "api-key": apiKey,
+      },
+      body: JSON.stringify({
+        sender: sender,
+        recipient: formattedPhone,
+        content: content,
+        type: "transactional",
+      }),
+    });
+
+    const data: any = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const rawMsg = String(data?.message || data?.error || `Brevo SMS Error (HTTP ${response.status})`);
+      console.warn("[Brevo SMS Provider Notice]:", rawMsg);
+
+      const isNoAddon =
+        rawMsg.toLowerCase().includes("no sms related addons") ||
+        rawMsg.toLowerCase().includes("not enough credits") ||
+        data?.code === "not_enough_credits" ||
+        data?.code === "missing_addon";
+
+      const finalError = isNoAddon
+        ? "No SMS credits add-on found in your Brevo organization. Brevo requires purchasing prepaid SMS credits (Brevo dashboard > Add-ons > SMS) before SMS can be dispatched. Email recovery is available free without add-ons."
+        : rawMsg;
+
+      const errorAr = isNoAddon
+        ? "حساب Brevo لا يحتوي على باقة رصيد رسائل SMS نشطة. يلزم تفعيل باقة SMS في Brevo لإرسال الرسائل النصية القصيرة، أو يمكنك استخدام استعادة الحساب بالبريد الإلكتروني مجاناً."
+        : undefined;
+
+      return {
+        success: false,
+        error: finalError,
+        errorAr,
+        rawError: rawMsg,
+        code: isNoAddon ? "NO_SMS_ADDONS" : data?.code || "BREVO_API_ERROR",
+        formattedPhone,
+        isNoAddon,
+      };
+    }
+
+    console.info(`[Brevo SMS Delivered] Recipient: ${formattedPhone}, Reference: ${data?.reference || data?.messageId}, usedCredits: ${data?.usedCredits}`);
+    return {
+      success: true,
+      messageId: data?.reference || data?.messageId,
+      remainingCredits: data?.remainingCredits,
+      formattedPhone,
+      isNoAddon: false,
+    };
+  } catch (err: any) {
+    console.warn("[Brevo SMS Exception Notice]:", err?.message || err);
+    return {
+      success: false,
+      error: err?.message || "Failed to communicate with Brevo SMS API",
+      code: "NETWORK_ERROR",
+      formattedPhone,
+      isNoAddon: false,
+    };
+  }
 }
 
 function maskApiKey(key: string): string {
   if (!key) return "";
   if (key.length <= 10) return "••••••••";
   return key.slice(0, 6) + "••••••••" + key.slice(-4);
+}
+
+function maskEmail(email: string): string {
+  if (!email || !email.includes("@")) return "••••@••••";
+  const [localPart, domainPart] = email.split("@");
+  const maskedLocal = localPart.length > 2 ? `${localPart[0]}••••${localPart.slice(-1)}` : `${localPart[0]}•`;
+  return `${maskedLocal}@${domainPart}`;
 }
 
 // Helper: Resilient Gemini Generation with automatic model fallback for 503 / 404 / high demand spikes
@@ -1506,14 +1768,20 @@ app.post("/api/auth/forgot-password/lookup", async (req, res) => {
       });
     }
 
-    // Check available recovery channels
+    // Load admin password reset methods visibility configuration
+    const methodsConfig = await getPasswordResetMethodsConfig();
+
+    // Check available recovery channels respecting admin settings
     const rawPhone = String(user.phone || "").trim();
     const phoneDigits = rawPhone.replace(/\D/g, "");
-    const hasPhone = phoneDigits.length >= 7;
-    const has2Fa = Boolean(user.twoFactorEnabled);
+    const userHasPhone = phoneDigits.length >= 7;
+    const hasPhone = userHasPhone && Boolean(methodsConfig.phoneResetEnabled);
+
+    const userHas2Fa = Boolean(user.twoFactorEnabled);
+    const has2Fa = userHas2Fa && Boolean(methodsConfig.twoFactorResetEnabled);
 
     let maskedPhone: string | undefined = undefined;
-    if (hasPhone) {
+    if (userHasPhone && methodsConfig.phoneResetEnabled) {
       maskedPhone =
         rawPhone.length > 6
           ? `${rawPhone.slice(0, 3)}•••••${rawPhone.slice(-3)}`
@@ -1521,9 +1789,10 @@ app.post("/api/auth/forgot-password/lookup", async (req, res) => {
     }
 
     const rawEmail = String(user.email || "").trim();
-    const hasEmail = Boolean(rawEmail && rawEmail.includes("@") && rawEmail.includes("."));
+    const userHasEmail = Boolean(rawEmail && rawEmail.includes("@") && rawEmail.includes("."));
+    const hasEmail = userHasEmail && Boolean(methodsConfig.emailResetEnabled);
     let maskedEmail: string | undefined = undefined;
-    if (hasEmail) {
+    if (userHasEmail && methodsConfig.emailResetEnabled) {
       const [localPart, domainPart] = rawEmail.split("@");
       const maskedLocal = localPart.length > 2 ? `${localPart[0]}••••${localPart.slice(-1)}` : `${localPart[0]}•`;
       maskedEmail = `${maskedLocal}@${domainPart}`;
@@ -1538,6 +1807,7 @@ app.post("/api/auth/forgot-password/lookup", async (req, res) => {
       hasEmail,
       email: hasEmail ? rawEmail : undefined,
       maskedEmail,
+      resetMethodsConfig: methodsConfig,
     });
   } catch (err: any) {
     res.status(500).json({
@@ -1570,18 +1840,22 @@ async function sendVerificationEmail(
         },
       });
 
+      const currentAppName = serverBrandingConfig.appName || "Elegant";
+      const currentEmailSender = serverBrandingConfig.emailSenderName || `${currentAppName} Security`;
+      const fromAddress = process.env.SMTP_FROM || `"${currentEmailSender}" <${process.env.SMTP_USER || "security@elegant.com"}>`;
+
       await transporter.sendMail({
-        from: process.env.SMTP_FROM || `"Cargo Profit Security" <${process.env.SMTP_USER}>`,
+        from: fromAddress,
         to: toEmail,
-        subject: `Your Cargo Profit Password Reset Code: ${otp}`,
+        subject: `Your ${currentAppName} Password Reset Code: ${otp}`,
         html: `
           <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; color: #f8fafc; padding: 40px 20px; text-align: center;">
             <div style="max-width: 480px; margin: 0 auto; background-color: #1e293b; border-radius: 16px; padding: 32px 24px; border: 1px solid #334155; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
-              <h1 style="color: #38bdf8; font-size: 22px; font-weight: 700; margin: 0 0 12px 0;">Cargo Profit</h1>
+              <h1 style="color: #38bdf8; font-size: 22px; font-weight: 700; margin: 0 0 12px 0;">${currentAppName}</h1>
               <h2 style="color: #ffffff; font-size: 18px; font-weight: 600; margin: 0 0 16px 0;">Password Reset Code</h2>
               <p style="color: #94a3b8; font-size: 14px; line-height: 1.5; margin: 0 0 24px 0;">
                 Hello <strong>${username}</strong>,<br/>
-                We received a request to reset the password for your Cargo Profit account. Enter the 6-digit code below to set a new password:
+                We received a request to reset the password for your ${currentAppName} account. Enter the 6-digit code below to set a new password:
               </p>
               <div style="background-color: #0f172a; border: 1px solid #38bdf8; border-radius: 12px; padding: 18px 12px; margin: 0 auto 24px auto; max-width: 280px;">
                 <div style="font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #38bdf8; font-family: monospace;">
@@ -1592,7 +1866,7 @@ async function sendVerificationEmail(
                 This code will expire in 10 minutes. If you did not request a password reset, you can safely ignore this message.
               </p>
               <div style="border-top: 1px solid #334155; padding-top: 16px; font-size: 11px; color: #475569;">
-                Cargo Profit Freight & Customs Management System • Automated Security Dispatch
+                ${currentAppName} • Automated Security Dispatch
               </div>
             </div>
           </div>
@@ -1637,6 +1911,16 @@ async function sendVerificationEmail(
 // POST /api/auth/forgot-password/send-phone-otp (Dispatch SMS verification code to user phone)
 app.post("/api/auth/forgot-password/send-phone-otp", async (req, res) => {
   try {
+    const methodsConfig = await getPasswordResetMethodsConfig();
+    if (!methodsConfig.phoneResetEnabled) {
+      return res.status(403).json({
+        success: false,
+        error: "SMS phone verification has been disabled by the system administrator.",
+        errorAr: "تم تعطيل استعادة كلمة المرور عبر الرسائل النصية القصيرة SMS من قِبل إدارة النظام.",
+        code: "PHONE_RESET_DISABLED",
+      });
+    }
+
     const { username, phone } = req.body || {};
     const cleanUsername = String(username || "").trim();
 
@@ -1691,18 +1975,111 @@ app.post("/api/auth/forgot-password/send-phone-otp", async (req, res) => {
       attempts: 0,
     });
 
-    console.info(`[SMS OTP Dispatched] Username: ${userKey}, Phone: ${rawPhone}, OTP: ${otp}`);
+    console.info(`[SMS OTP Generated] Username: ${userKey}, Phone: ${rawPhone}, OTP: ${otp}`);
 
-    const resPayload: Record<string, any> = {
-      success: true,
-      message: "SMS verification code sent successfully!",
-      expiresInSeconds: 60,
-    };
-    if (process.env.NODE_ENV === "test") {
-      resPayload.devOtp = otp;
+    const effectiveKey = getEffectiveBrevoApiKey();
+    const effectiveSender = getEffectiveBrevoSender();
+
+    if (effectiveKey) {
+      const currentAppName = serverBrandingConfig.appName || "Elegant";
+      const smsMessage = `Your ${currentAppName} verification code is: ${otp}. Valid for 10 minutes.`;
+      const brevoResult = await sendBrevoSms(rawPhone, smsMessage, effectiveKey, effectiveSender);
+
+      if (brevoResult.success) {
+        const resPayload: Record<string, any> = {
+          success: true,
+          message: "SMS verification code sent successfully to your phone via Brevo!",
+          expiresInSeconds: 60,
+          provider: "brevo",
+          phone: brevoResult.formattedPhone || rawPhone,
+        };
+        if (process.env.NODE_ENV === "test") {
+          resPayload.devOtp = otp;
+        }
+        return res.json(resPayload);
+      } else {
+        console.info(`[Brevo SMS Dispatch Notice] Recipient: ${rawPhone}, Code: ${brevoResult.code}, Notice: ${brevoResult.error}`);
+
+        // AUTOMATIC EMAIL FALLBACK: If user has a registered email, dispatch OTP to email so password reset is never blocked!
+        const userEmail = String(user.email || (cleanUsername.includes("@") ? cleanUsername : "")).trim();
+        if (userEmail && userEmail.includes("@")) {
+          try {
+            console.info(`[SMS Fallback Triggered] Routing OTP to registered email: ${userEmail}`);
+            await sendVerificationEmail(userEmail, user.username || cleanUsername, otp);
+            const masked = maskEmail(userEmail);
+            return res.json({
+              success: true,
+              smsFailed: true,
+              fallbackUsed: "email",
+              recipientEmail: masked,
+              message: `Notice: Brevo SMS credit add-on is not active. Your 6-digit verification code has been automatically delivered to your registered email (${masked}).`,
+              messageAr: `ملاحظة: باقة رسائل SMS غير مفعلة في حساب Brevo، لذا تم تحويل رمز التحقق تلقائياً إلى بريدك الإلكتروني المسجل (${masked}).`,
+              expiresInSeconds: 60,
+              provider: "email_fallback",
+              code: "SMS_FALLBACK_TO_EMAIL",
+            });
+          } catch (fallbackErr) {
+            console.warn("[Email Fallback Delivery Notice]:", fallbackErr);
+          }
+        }
+
+        // If Brevo failed and no email fallback available
+        if (process.env.NODE_ENV === "test") {
+          return res.json({
+            success: true,
+            message: "SMS simulation in test mode",
+            expiresInSeconds: 60,
+            devOtp: otp,
+          });
+        }
+
+        return res.status(400).json({
+          success: false,
+          error: brevoResult.error || "Brevo SMS dispatch failed. Please use Email recovery to reset your password.",
+          errorAr: brevoResult.errorAr || "فشل إرسال رسالة SMS عبر Brevo. يرجى استخدام استعادة الحساب بالبريد الإلكتروني.",
+          code: brevoResult.code || "BREVO_SMS_FAILED",
+          provider: "brevo",
+          isNoAddon: brevoResult.isNoAddon,
+        });
+      }
     }
 
-    res.json(resPayload);
+    // If Brevo is not configured on server, check if email fallback can be used
+    const userEmail = String(user.email || (cleanUsername.includes("@") ? cleanUsername : "")).trim();
+    if (userEmail && userEmail.includes("@")) {
+      try {
+        console.info(`[No Brevo Gateway] Routing OTP directly to email: ${userEmail}`);
+        await sendVerificationEmail(userEmail, user.username || cleanUsername, otp);
+        const masked = maskEmail(userEmail);
+        return res.json({
+          success: true,
+          smsFailed: true,
+          fallbackUsed: "email",
+          recipientEmail: masked,
+          message: `SMS gateway is not configured. Your 6-digit verification code has been dispatched to your registered email (${masked}).`,
+          messageAr: `بوابة الرسائل SMS غير مهيأة. تم إرسال رمز التحقق إلى بريدك الإلكتروني المسجل (${masked}).`,
+          expiresInSeconds: 60,
+          provider: "email_fallback",
+          code: "SMS_FALLBACK_TO_EMAIL",
+        });
+      } catch {}
+    }
+
+    if (process.env.NODE_ENV === "test") {
+      return res.json({
+        success: true,
+        message: "SMS verification code generated (test mode)",
+        expiresInSeconds: 60,
+        devOtp: otp,
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      error: "Brevo SMS gateway is not configured. Please add your BREVO_API_KEY in server environment variables or Admin Settings to receive SMS verification codes on your phone. You can also use Email verification to reset your password immediately.",
+      errorAr: "بوابة الرسائل SMS غير مهيأة. يرجى تفعيل مفتاح BREVO_API_KEY أو استخدام الاستعادة بالبريد الإلكتروني.",
+      code: "BREVO_NOT_CONFIGURED",
+    });
   } catch (err: any) {
     res.status(500).json({
       success: false,
@@ -1714,6 +2091,16 @@ app.post("/api/auth/forgot-password/send-phone-otp", async (req, res) => {
 // POST /api/auth/forgot-password/send-email-otp (Dispatch Email verification code)
 app.post("/api/auth/forgot-password/send-email-otp", async (req, res) => {
   try {
+    const methodsConfig = await getPasswordResetMethodsConfig();
+    if (!methodsConfig.emailResetEnabled) {
+      return res.status(403).json({
+        success: false,
+        error: "Email verification has been disabled by the system administrator.",
+        errorAr: "تم تعطيل استعادة كلمة المرور عبر البريد الإلكتروني من قِبل إدارة النظام.",
+        code: "EMAIL_RESET_DISABLED",
+      });
+    }
+
     const { username, email } = req.body || {};
     const cleanUsername = String(username || "").trim();
 
@@ -1825,6 +2212,29 @@ app.post("/api/auth/forgot-password/reset", async (req, res) => {
       return res.status(400).json({
         success: false,
         error: "Invalid reset method. Must be 'phone_otp', 'email_otp', or '2fa'.",
+      });
+    }
+
+    const methodsConfig = await getPasswordResetMethodsConfig();
+    if (resetMethod === "phone_otp" && !methodsConfig.phoneResetEnabled) {
+      return res.status(403).json({
+        success: false,
+        error: "SMS phone reset has been disabled by the system administrator.",
+        errorAr: "تم تعطيل استعادة كلمة المرور عبر الرسائل النصية القصيرة من قِبل إدارة النظام.",
+      });
+    }
+    if (resetMethod === "email_otp" && !methodsConfig.emailResetEnabled) {
+      return res.status(403).json({
+        success: false,
+        error: "Email reset has been disabled by the system administrator.",
+        errorAr: "تم تعطيل استعادة كلمة المرور عبر البريد الإلكتروني من قِبل إدارة النظام.",
+      });
+    }
+    if (resetMethod === "2fa" && !methodsConfig.twoFactorResetEnabled) {
+      return res.status(403).json({
+        success: false,
+        error: "2FA authenticator reset has been disabled by the system administrator.",
+        errorAr: "تم تعطيل استعادة كلمة المرور عبر تطبيق المصادقة الثنائية من قِبل إدارة النظام.",
       });
     }
 
@@ -2451,6 +2861,10 @@ app.get("/api/calculations", requireAuth, async (req, res) => {
       .filter(Boolean)
       .map((t) => String(t).trim());
 
+    if (authUser.role !== "admin" && candidateTokens.length === 0) {
+      return res.json({ calculations: [] });
+    }
+
     try {
       let query = supabase.from("calculations").select("*");
       if (candidateTokens.length > 0 && authUser.role !== "admin") {
@@ -2485,6 +2899,9 @@ app.get("/api/calculations", requireAuth, async (req, res) => {
     }
 
     if (calcs.length === 0) {
+      if (authUser.role !== "admin" && candidateTokens.length === 0) {
+        return res.json({ calculations: [] });
+      }
       const lowerTokens = candidateTokens.map((t) => t.toLowerCase());
       calcs = Object.values(serverCalculationsStore).filter((item: any) => {
         if (authUser.role === "admin") return true;
@@ -2643,6 +3060,10 @@ app.get("/api/flights", requireAuth, async (req, res) => {
       .filter(Boolean)
       .map((t) => String(t).trim());
 
+    if (authUser.role !== "admin" && candidateFlightTokens.length === 0) {
+      return res.json({ flights: [] });
+    }
+
     try {
       let query = supabase.from("flight_consignments").select("*");
       if (candidateFlightTokens.length > 0 && authUser.role !== "admin") {
@@ -2678,6 +3099,9 @@ app.get("/api/flights", requireAuth, async (req, res) => {
     } catch {}
 
     if (flights.length === 0) {
+      if (authUser.role !== "admin" && candidateFlightTokens.length === 0) {
+        return res.json({ flights: [] });
+      }
       const lowerFlightTokens = candidateFlightTokens.map((t) => t.toLowerCase());
       flights = Object.values(serverFlightsStore).filter((item: any) => {
         if (authUser.role === "admin") return true;
@@ -2775,6 +3199,10 @@ app.get("/api/gallery", requireAuth, async (req, res) => {
       .filter(Boolean)
       .map((t) => String(t).trim());
 
+    if (authUser.role !== "admin" && candidateGalleryTokens.length === 0) {
+      return res.json({ gallery: [] });
+    }
+
     try {
       let query = supabase.from("gallery_images").select("*");
       if (candidateGalleryTokens.length > 0 && authUser.role !== "admin") {
@@ -2787,6 +3215,9 @@ app.get("/api/gallery", requireAuth, async (req, res) => {
     } catch {}
 
     if (galleryList.length === 0) {
+      if (authUser.role !== "admin" && candidateGalleryTokens.length === 0) {
+        return res.json({ gallery: [] });
+      }
       const lowerGalleryTokens = candidateGalleryTokens.map((t) => t.toLowerCase());
       galleryList = Object.values(serverGalleryStore).filter((item) => {
         if (authUser.role === "admin") return true;
@@ -2841,6 +3272,89 @@ app.delete("/api/gallery/:id", requireAuth, async (req, res) => {
 });
 
 // --- API ROUTES: SITE SETTINGS & FAVICON ---
+
+// GET /api/settings/branding
+app.get("/api/settings/branding", async (_req, res) => {
+  try {
+    const branding = await getEffectiveBrandingConfig();
+    res.json({ success: true, branding });
+  } catch (err: any) {
+    res.json({ success: true, branding: serverBrandingConfig });
+  }
+});
+
+// POST /api/settings/branding (Admin Only: Save app name, email & SMS sender identities, favicon)
+app.post("/api/settings/branding", requireAdmin, async (req, res) => {
+  try {
+    const { appName, appNameAr, emailSenderName, smsSenderName, faviconUrl } = req.body || {};
+
+    const cleanAppName = String(appName || serverBrandingConfig.appName || "Elegant").trim();
+    const cleanAppNameAr = String(appNameAr || serverBrandingConfig.appNameAr || "أليجانت").trim();
+    const cleanEmailSender = String(emailSenderName || serverBrandingConfig.emailSenderName || "Elegant Security").trim();
+    const rawSmsSender = String(smsSenderName || serverBrandingConfig.smsSenderName || "Elegant").trim();
+    const cleanSmsSender = rawSmsSender.replace(/[^a-zA-Z0-9]/g, "").slice(0, 11) || "Elegant";
+    const cleanFavicon = faviconUrl !== undefined ? faviconUrl : serverBrandingConfig.faviconUrl;
+
+    serverBrandingConfig = {
+      appName: cleanAppName,
+      appNameAr: cleanAppNameAr,
+      emailSenderName: cleanEmailSender,
+      smsSenderName: cleanSmsSender,
+      faviconUrl: cleanFavicon,
+      updatedAt: new Date().toISOString(),
+      updatedBy: (req as any).user?.username || "admin",
+    };
+
+    serverBrevoSmsSender = cleanSmsSender;
+    if (cleanFavicon) {
+      serverSiteFavicon = cleanFavicon;
+    }
+
+    // Dual-write to Supabase site_settings
+    try {
+      await supabase.from("site_settings").upsert({
+        id: "branding",
+        app_name: cleanAppName,
+        app_name_ar: cleanAppNameAr,
+        email_sender_name: cleanEmailSender,
+        sms_sender_name: cleanSmsSender,
+        favicon_url: cleanFavicon,
+        settings_data: {
+          appName: cleanAppName,
+          appNameAr: cleanAppNameAr,
+          emailSenderName: cleanEmailSender,
+          smsSenderName: cleanSmsSender,
+          faviconUrl: cleanFavicon,
+          updatedAt: new Date().toISOString(),
+          updatedBy: (req as any).user?.username || "admin",
+        },
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "id" });
+    } catch (dbErr) {
+      console.info("[DB Notice] site_settings upsert error for branding:", dbErr);
+    }
+
+    // Also sync SMS sender in sms_config if exists
+    try {
+      const { data: smsRow } = await supabase.from("site_settings").select("*").eq("id", "sms_config").maybeSingle();
+      if (smsRow && smsRow.settings_data) {
+        await supabase.from("site_settings").upsert({
+          id: "sms_config",
+          settings_data: {
+            ...smsRow.settings_data,
+            sender: cleanSmsSender,
+            updatedAt: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "id" });
+      }
+    } catch {}
+
+    res.json({ success: true, branding: serverBrandingConfig });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to save branding settings" });
+  }
+});
 
 // GET /api/settings/favicon
 app.get("/api/settings/favicon", async (_req, res) => {
@@ -2931,6 +3445,80 @@ app.post("/api/settings/session-timeout", requireAdmin, async (req, res) => {
     res.json({ success: true, timeoutMinutes: cleanMinutes });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to save session timeout setting" });
+  }
+});
+
+// GET /api/settings/password-reset-methods (Get current password reset channels visibility configuration)
+app.get("/api/settings/password-reset-methods", async (_req, res) => {
+  try {
+    const config = await getPasswordResetMethodsConfig();
+    res.json({ success: true, config });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: err?.message || "Failed to load password reset methods configuration",
+    });
+  }
+});
+
+// POST /api/settings/password-reset-methods (Admin Only: Save password reset methods visibility)
+app.post("/api/settings/password-reset-methods", requireAdmin, async (req, res) => {
+  try {
+    const { emailResetEnabled, phoneResetEnabled, twoFactorResetEnabled } = req.body || {};
+
+    const newConfig: PasswordResetMethodsConfig = {
+      emailResetEnabled:
+        emailResetEnabled !== undefined
+          ? Boolean(emailResetEnabled)
+          : serverPasswordResetMethodsConfig.emailResetEnabled,
+      phoneResetEnabled:
+        phoneResetEnabled !== undefined
+          ? Boolean(phoneResetEnabled)
+          : serverPasswordResetMethodsConfig.phoneResetEnabled,
+      twoFactorResetEnabled:
+        twoFactorResetEnabled !== undefined
+          ? Boolean(twoFactorResetEnabled)
+          : serverPasswordResetMethodsConfig.twoFactorResetEnabled,
+      updatedAt: new Date().toISOString(),
+      updatedBy: (req as any).user?.username || "admin",
+    };
+
+    // Validation: At least one recovery method must remain active to prevent permanently locking out users
+    if (!newConfig.emailResetEnabled && !newConfig.phoneResetEnabled && !newConfig.twoFactorResetEnabled) {
+      return res.status(400).json({
+        success: false,
+        error: "At least one password reset method must remain enabled (Email, Phone SMS, or 2FA).",
+        errorAr: "يجب إبقاء وسيلة واحدة على الأقل مفعلة لاستعادة كلمة المرور (البريد الإلكتروني، رسائل SMS، أو المصادقة الثنائية).",
+      });
+    }
+
+    serverPasswordResetMethodsConfig = newConfig;
+
+    // Dual-write to Supabase site_settings
+    try {
+      await supabase.from("site_settings").upsert(
+        {
+          id: "password_reset",
+          settings_data: newConfig,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "id" }
+      );
+    } catch (dbErr) {
+      console.info("[DB Notice] site_settings upsert error for password_reset:", dbErr);
+    }
+
+    res.json({
+      success: true,
+      message: "Password reset methods configuration updated successfully.",
+      messageAr: "تم تحديث إعدادات وسائل استعادة كلمة المرور بنجاح.",
+      config: newConfig,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: err?.message || "Failed to save password reset methods configuration",
+    });
   }
 });
 
@@ -3250,6 +3838,230 @@ app.delete("/api/admin/ai-key", async (_req, res) => {
     maskedKey: maskApiKey(effective),
     source: effective ? "env" : "none"
   });
+});
+
+// ==========================================
+// BREVO TRANSACTIONAL SMS CONFIGURATION API
+// ==========================================
+
+// GET /api/admin/brevo-sms (Admin Only: Retrieve Brevo SMS gateway configuration status)
+app.get("/api/admin/brevo-sms", requireAdmin, async (_req, res) => {
+  try {
+    // If not loaded in memory, try loading from Supabase site_settings
+    if (!serverBrevoApiKey) {
+      try {
+        const { data } = await supabase.from("site_settings").select("*").eq("id", "sms_config").maybeSingle();
+        if (data && data.settings_data && data.settings_data.apiKey) {
+          serverBrevoApiKey = data.settings_data.apiKey;
+          if (data.settings_data.sender) {
+            serverBrevoSmsSender = data.settings_data.sender;
+          }
+        }
+      } catch {}
+    }
+
+    const effectiveKey = getEffectiveBrevoApiKey();
+    const effectiveSender = getEffectiveBrevoSender();
+    const source = serverBrevoApiKey
+      ? "admin_configured"
+      : process.env.BREVO_API_KEY || process.env.BREVO_SMS_KEY || process.env.SENDINBLUE_API_KEY
+      ? "env"
+      : "none";
+
+    let accountEmail = "";
+    let smsCredits: any = null;
+    let verified = false;
+    let verifyError = "";
+
+    if (effectiveKey) {
+      try {
+        const accRes = await fetch("https://api.brevo.com/v3/account", {
+          headers: { "api-key": effectiveKey, "accept": "application/json" },
+        });
+        if (accRes.ok) {
+          const accData: any = await accRes.json();
+          accountEmail = accData?.email || "";
+          verified = true;
+          const smsPlan = accData?.plan?.find((p: any) => p.type === "sms" || p.creditsType === "sms");
+          smsCredits = smsPlan ? smsPlan.credits : 0;
+          const hasSmsAddon = Boolean(smsPlan && smsPlan.credits > 0);
+
+          res.json({
+            configured: Boolean(effectiveKey),
+            maskedKey: maskApiKey(effectiveKey),
+            sender: effectiveSender,
+            source,
+            verified: true,
+            accountEmail: accountEmail || undefined,
+            smsCredits: smsCredits ?? 0,
+            hasSmsAddon,
+          });
+          return;
+        } else {
+          const errData: any = await accRes.json().catch(() => ({}));
+          verifyError = errData?.message || `Brevo HTTP ${accRes.status}`;
+        }
+      } catch (connErr: any) {
+        verifyError = connErr?.message || "Could not reach Brevo API";
+      }
+    }
+
+    res.json({
+      configured: Boolean(effectiveKey),
+      maskedKey: maskApiKey(effectiveKey),
+      sender: effectiveSender,
+      source,
+      verified,
+      verifyError: verifyError || undefined,
+      accountEmail: accountEmail || undefined,
+      smsCredits: smsCredits ?? 0,
+      hasSmsAddon: Boolean(smsCredits && smsCredits > 0),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || "Failed to fetch Brevo SMS status." });
+  }
+});
+
+// POST /api/admin/brevo-sms (Admin Only: Save & verify Brevo SMS API key and sender name)
+app.post("/api/admin/brevo-sms", requireAdmin, async (req, res) => {
+  try {
+    const { apiKey, sender } = req.body || {};
+    const cleanKey = String(apiKey || "").trim();
+    const cleanSender = String(sender || serverBrandingConfig.smsSenderName || "Elegant").replace(/[^a-zA-Z0-9]/g, "").slice(0, 11) || "Elegant";
+
+    if (!cleanKey) {
+      return res.status(400).json({ error: "Brevo API Key cannot be empty." });
+    }
+
+    // Verify key directly against Brevo v3 account endpoint
+    let accountEmail = "";
+    let smsCredits: any = null;
+    try {
+      const accRes = await fetch("https://api.brevo.com/v3/account", {
+        headers: { "api-key": cleanKey, "accept": "application/json" },
+      });
+      if (!accRes.ok) {
+        const errData: any = await accRes.json().catch(() => ({}));
+        return res.status(400).json({
+          success: false,
+          error: `Brevo API rejected this key: ${errData?.message || `HTTP ${accRes.status}`}. Please check that you copied a valid v3 API Key (starts with xkeysib-) from Brevo > SMTP & API > API Keys.`,
+        });
+      }
+      const accData: any = await accRes.json();
+      accountEmail = accData?.email || "";
+      const smsPlan = accData?.plan?.find((p: any) => p.type === "sms" || p.creditsType === "sms");
+      smsCredits = smsPlan ? smsPlan.credits : 0;
+    } catch (connErr: any) {
+      return res.status(400).json({
+        success: false,
+        error: `Could not reach Brevo API: ${connErr?.message || "Network error"}. Please check network connectivity.`,
+      });
+    }
+
+    serverBrevoApiKey = cleanKey;
+    serverBrevoSmsSender = cleanSender;
+
+    // Dual-write to Supabase site_settings
+    try {
+      await supabase.from("site_settings").upsert({
+        id: "sms_config",
+        settings_data: {
+          apiKey: cleanKey,
+          sender: cleanSender,
+          provider: "brevo",
+          updatedAt: new Date().toISOString(),
+        },
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "id" });
+    } catch {}
+
+    const hasSmsAddon = Boolean(smsCredits && smsCredits > 0);
+
+    res.json({
+      success: true,
+      message: hasSmsAddon
+        ? "Brevo SMS configuration saved and verified with active SMS credits!"
+        : "Brevo API key verified successfully. Note: No active SMS credits addon detected in your Brevo organization. Transactional SMS requires purchasing prepaid credits in Brevo (Add-ons > SMS).",
+      configured: true,
+      maskedKey: maskApiKey(cleanKey),
+      sender: cleanSender,
+      accountEmail,
+      smsCredits: smsCredits ?? 0,
+      hasSmsAddon,
+      source: "admin_configured",
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || "Failed to save Brevo SMS configuration." });
+  }
+});
+
+// POST /api/admin/test-brevo-sms (Admin Only: Send a test SMS to a mobile number)
+app.post("/api/admin/test-brevo-sms", requireAdmin, async (req, res) => {
+  try {
+    const { testPhone, apiKey, sender } = req.body || {};
+    const keyToUse = String(apiKey || "").trim() || getEffectiveBrevoApiKey();
+    const senderToUse = String(sender || "").trim() || getEffectiveBrevoSender();
+
+    if (!keyToUse) {
+      return res.status(400).json({
+        success: false,
+        error: "No Brevo API key provided or configured on the server.",
+      });
+    }
+
+    if (!testPhone || String(testPhone).trim().length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: "Please enter a valid mobile number (e.g., +201012345678) to send test SMS.",
+      });
+    }
+
+    const appTitle = serverBrandingConfig.appName || "Elegant";
+    const testMsg = `${appTitle}: Brevo SMS integration test successful! Sender: ${senderToUse}. Time: ${new Date().toLocaleTimeString()}`;
+    const result = await sendBrevoSms(String(testPhone).trim(), testMsg, keyToUse, senderToUse);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: `Test SMS dispatched successfully to ${result.formattedPhone || testPhone}!`,
+        messageId: result.messageId,
+        remainingCredits: result.remainingCredits,
+        formattedPhone: result.formattedPhone,
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: result.error || "Failed to deliver test SMS via Brevo.",
+        errorAr: result.errorAr,
+        code: result.code,
+        isNoAddon: result.isNoAddon,
+      });
+    }
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Test SMS exception." });
+  }
+});
+
+// DELETE /api/admin/brevo-sms (Admin Only: Remove custom Brevo SMS API configuration)
+app.delete("/api/admin/brevo-sms", requireAdmin, async (_req, res) => {
+  try {
+    serverBrevoApiKey = "";
+    try {
+      await supabase.from("site_settings").delete().eq("id", "sms_config");
+    } catch {}
+
+    const effective = getEffectiveBrevoApiKey();
+    res.json({
+      success: true,
+      message: "Admin Brevo SMS key removed.",
+      configured: Boolean(effective),
+      maskedKey: maskApiKey(effective),
+      sender: getEffectiveBrevoSender(),
+      source: effective ? "env" : "none",
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || "Failed to remove Brevo SMS configuration." });
+  }
 });
 
 // API Route: AI Invoice OCR Parsing

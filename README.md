@@ -119,6 +119,13 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 ---
 
 ### 5. Session Security & Real-Time Credential Synchronization
+- **Strict Multi-Tenant Data Isolation**:
+  - Non-admin users are strictly restricted to their own data across all calculation queries, air cargo flight manifests, and gallery media items.
+  - Queries and listeners automatically enforce identity token verification (`userId`, `user_id`, `username`, `email`) and reject any attempt to query all users' records without administrative role privileges.
+  - If a user token is invalid or missing, non-admin queries immediately return empty results rather than returning unfiltered global records.
+- **Defensive Session Subscription & Null-Safety**:
+  - `subscribeToUserSessionStatus` handles optional or null usernames safely without raising `TypeError` or interrupting user workflows.
+  - User profiles in storage are strictly validated to prevent state pollution after password resets or account updates.
 - **Session Inactivity Timeout in Firestore `site_settings`**: Inactivity timeout settings (5m, 15m, 30m, 60m, 120m) are centralized and persisted directly in Firestore (`site_settings/security` & `site_settings/session_timeout`), ensuring unified timeout security across devices. Changes propagate to all active client sessions in real time via Firestore snapshot listeners without requiring page reloads.
 - **Real-Time Active Session Credential Auto-Refresh**: User sessions continuously synchronize with the database. If an administrator edits a user's status (`active` vs `suspended`) or updates their password, the user's active session is invalidated immediately in real-time, prompting them to re-authenticate with their new credentials.
 - **Cryptographic Password Signatures (`pv`) in JWT**: Every JWT token embeds a SHA-256 password signature. Password changes instantly cause the signature to mismatch on the backend gatekeeper (`requireAuth`), rejecting previous tokens with `CREDENTIALS_CHANGED`.
@@ -148,10 +155,18 @@ Elegant FX is a full-stack, enterprise-grade Freight Landed Cost & Profit Margin
 - **Self-Service Multi-Channel Password Reset & Account Recovery Engine**:
   - **Real Production Email Delivery Engine**: Verifiable 6-digit reset codes are dispatched directly to the recipient's email inbox using either SMTP transport (`nodemailer`) or cloud mailer integration (`supabase.auth.signInWithOtp`), completely eliminating on-screen dev mode test code banners.
   - **Firebase Authentication Native Email Reset Link**: Supports sending direct password reset links via Google Cloud Firebase Auth (`sendPasswordResetEmailViaFirebase`) to the user's verified registered email address with automatic identity pre-provisioning, masked recipient previews (`e••••n@domain.com`), and an active 60-second cooldown timer.
+  - **Firebase Email/Password Provider Resilience**: Handled `auth/operation-not-allowed` when Email/Password is not yet toggled on in the Firebase Console by providing clean guidance and automatic routing to internal 6-digit Email OTP verification, accompanied by a direct Firebase Console configuration link in the Admin Panel.
   - **Dual-Path Email Recovery (Link or 6-Digit Code)**: In addition to the Firebase email link, users can select "Enter 6-digit reset code instead" to verify an email OTP directly on-screen and set a new password without leaving the application.
   - **Real-Time Resend Email Engine**: Dedicated Resend Email button with a live 1-second countdown timer, animated dispatch feedback, and toast confirmations.
-  - **SMS One-Time Passcode (OTP)**: Direct 6-digit phone SMS verification code dispatch with automated countdown timers and rapid segment inputs.
+  - **Brevo Transactional SMS One-Time Passcode (OTP)**: Direct 6-digit phone SMS verification code dispatch via Brevo's transactional SMS API (`https://api.brevo.com/v3/transactionalSMS/sms`), with automatic international number formatting (+20 for Egypt, +966 for Saudi Arabia, +971 for UAE), 10-minute code validity, custom SMS Sender ID, and automated 60-second countdown timers.
+  - **Brevo SMS Gateway Management in Admin Panel**: Configure and verify Brevo v3 API keys, customize alphanumeric SMS sender names (e.g. `CargoProfit`), monitor account email and SMS credit balances in real time, and dispatch live test SMS messages.
   - **TOTP Two-Factor Authenticator Code**: Emergency recovery via time-based authenticator apps (Google Authenticator, Authy) or pre-generated single-use emergency backup codes.
+  - **Admin Control for Password Reset Channels & Visibility (Email, Phone SMS, 2FA)**:
+    - **Granular Channel Toggles**: System administrators can toggle the visibility of each recovery method (Email, Phone SMS, 2FA) from the Admin Panel, instantly showing or hiding the options on the user-facing "Forgot Password" screen.
+    - **Brevo NO_SMS_ADDONS Mitigation**: Disabling the Phone SMS method completely hides SMS from the recovery flow, preventing user errors when the organization does not have an active prepaid Brevo SMS add-on plan.
+    - **Quick SMS Toggle in Brevo Gateway**: Direct toggle switch placed right inside the Brevo SMS configuration section for instant access.
+    - **Anti-Lockout Protection**: Backend and frontend rules prevent disabling all three recovery methods simultaneously.
+    - **Dual Database Persistence & Real-Time Sync**: Changes write to Supabase `site_settings` and Firestore `site_settings/password_reset` with instantaneous push updates across all user sessions without page reload.
   - **Intelligent Method Discovery**: `/api/auth/forgot-password/lookup` evaluates which recovery channels are configured for the account (Email, SMS Phone, 2FA) and dynamically guides the user through automatic routing or interactive multi-channel selection.
 - **Dual Identifier Authentication (`Username OR Email + Password`)**:
   - Seamless login using either username or email address across Supabase and Firestore repositories.
@@ -284,6 +299,7 @@ npm start
 | **User Deletion: Soft Delete (Suspend) vs. Hard Delete (Purge)** | Admin selects deletion mode in modal | Synced across Express, Firestore, and Supabase | **Soft Delete**: suspends account, invalidates sessions, and preserves 100% of calculations. **Hard Delete**: requires checkbox confirmation and purges account + all linked calculations, media, and consignments |
 | **Interactive Contact Info Links** | Native `mailto:` and `tel:` action links in Admin Panel | Auto-sanitized dial strings & LTR numbers | Direct 1-click email client dispatch and phone dialer activation |
 | **Self-Service Password Reset & Find Account** | Multi-field lookup (`username`, `email`, `phone`, `userId`) | `/api/auth/forgot-password/*` with in-memory & Supabase lookup | Recovers account via SMS Phone OTP or 2FA security codes; handles formatted phone numbers and invalidates old sessions on reset |
+| **Brevo Transactional SMS & Email Fallback** | Automated failover from SMS to registered email | Real-time provider error detection (`NO_SMS_ADDONS`, zero credits) | If Brevo SMS addon is inactive, system automatically delivers 6-digit OTP to user's registered email address with masked UI notice |
 | **Optional Properties & Case Invariance (`toLowerCase()`)** | Defensive nullish coalescing (`String(val \|\| '').toLowerCase()`) | Applied across App.tsx, DashboardView, GalleryView, FlightConsignmentModal, HsCodeLibraryModal, and backend | Eliminates all runtime `TypeError: Cannot read properties of undefined (reading 'toLowerCase')` crashes on missing user IDs, flight fields, or optional profile properties |
 
 ---

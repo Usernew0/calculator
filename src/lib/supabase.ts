@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { CalculationResult, UserProfile, FlightConsignment } from '../types';
+import { CalculationResult, UserProfile, FlightConsignment, BrandingConfig, DEFAULT_BRANDING } from '../types';
 
 const env = (import.meta as unknown as { env?: Record<string, string> }).env || {};
 
@@ -370,14 +370,14 @@ export async function saveCalculationToSupabase(calc: CalculationResult): Promis
 /**
  * Get calculations from Supabase for a specific user or all
  * Supports multi-token and case-insensitive matching for user IDs and aliases
+ * STRICT DATA PRIVACY: Non-admin callers require valid user identity tokens.
  */
 export async function getCalculationsFromSupabase(
   filterUserId?: string | null,
-  userAliases?: string[]
+  userAliases?: string[],
+  isAdmin: boolean = false
 ): Promise<CalculationResult[]> {
   try {
-    let query = supabase.from(CALCULATIONS_TABLE).select('*');
-
     const targetTokens = [
       filterUserId,
       ...(userAliases || []),
@@ -385,7 +385,14 @@ export async function getCalculationsFromSupabase(
       .filter(Boolean)
       .map((t) => String(t).trim());
 
-    if (targetTokens.length > 0) {
+    // STRICT DATA ISOLATION: If not an admin and no user identity tokens provided, return empty list immediately
+    if (!isAdmin && targetTokens.length === 0) {
+      return [];
+    }
+
+    let query = supabase.from(CALCULATIONS_TABLE).select('*');
+
+    if (!isAdmin && targetTokens.length > 0) {
       // Build PostgreSQL OR clause matching user_id column case-insensitively
       const orClauses = targetTokens
         .flatMap((token) => [
@@ -483,10 +490,11 @@ export async function clearAllCalculationsFromSupabase(filterUserId?: string | n
 export function subscribeToCalculationsSupabase(
   onUpdate: (data: CalculationResult[]) => void,
   filterUserId?: string | null,
-  userAliases?: string[]
+  userAliases?: string[],
+  isAdmin: boolean = false
 ) {
   // Fetch initial data
-  getCalculationsFromSupabase(filterUserId, userAliases).then((initialData) => {
+  getCalculationsFromSupabase(filterUserId, userAliases, isAdmin).then((initialData) => {
     onUpdate(initialData);
   });
 
@@ -498,7 +506,7 @@ export function subscribeToCalculationsSupabase(
       'postgres_changes',
       { event: '*', schema: 'public', table: CALCULATIONS_TABLE },
       () => {
-        getCalculationsFromSupabase(filterUserId, userAliases).then((freshData) => {
+        getCalculationsFromSupabase(filterUserId, userAliases, isAdmin).then((freshData) => {
           onUpdate(freshData);
         });
       }
@@ -592,12 +600,21 @@ export async function saveGalleryImageToSupabase(record: GalleryImageRecord): Pr
 
 /**
  * Get gallery images from Supabase
+ * STRICT DATA PRIVACY: Non-admin users only fetch their own gallery images.
  */
-export async function getGalleryImagesFromSupabase(filterUserId?: string | null): Promise<GalleryImageRecord[]> {
+export async function getGalleryImagesFromSupabase(
+  filterUserId?: string | null,
+  isAdmin: boolean = false
+): Promise<GalleryImageRecord[]> {
   try {
+    const cleanFilter = String(filterUserId || '').trim();
+    if (!isAdmin && !cleanFilter) {
+      return [];
+    }
+
     let query = supabase.from(GALLERY_TABLE).select('*');
-    if (filterUserId) {
-      query = query.eq('user_id', filterUserId);
+    if (!isAdmin && cleanFilter) {
+      query = query.eq('user_id', cleanFilter);
     }
     const { data, error } = await query.order('created_at', { ascending: false });
     if (error) {
@@ -666,12 +683,21 @@ export async function saveFlightConsignmentToSupabase(flight: FlightConsignment)
 
 /**
  * Fetch flight consignments from Supabase
+ * STRICT DATA PRIVACY: Non-admin users only fetch their own flight records.
  */
-export async function getFlightConsignmentsFromSupabase(userId?: string): Promise<FlightConsignment[]> {
+export async function getFlightConsignmentsFromSupabase(
+  userId?: string,
+  isAdmin: boolean = false
+): Promise<FlightConsignment[]> {
   try {
+    const cleanUserId = String(userId || '').trim();
+    if (!isAdmin && !cleanUserId) {
+      return [];
+    }
+
     let query = supabase.from(FLIGHTS_TABLE).select('*');
-    if (userId && userId !== 'admin') {
-      query = query.eq('user_id', userId);
+    if (!isAdmin && cleanUserId) {
+      query = query.eq('user_id', cleanUserId);
     }
 
     const { data, error } = await query.order('created_at', { ascending: false });
@@ -734,11 +760,14 @@ export async function deleteFlightConsignmentFromSupabase(id: string): Promise<b
  */
 export function subscribeToFlightConsignmentsSupabase(
   onUpdate: (data: FlightConsignment[]) => void,
-  userId?: string | null
+  userId?: string | null,
+  isAdmin: boolean = false
 ) {
+  const cleanUserId = String(userId || '').trim();
+
   // Fetch initial data
-  getFlightConsignmentsFromSupabase(userId || undefined).then((initialData) => {
-    if (initialData && initialData.length > 0) {
+  getFlightConsignmentsFromSupabase(cleanUserId || undefined, isAdmin).then((initialData) => {
+    if (Array.isArray(initialData)) {
       onUpdate(initialData);
     }
   });
@@ -750,8 +779,10 @@ export function subscribeToFlightConsignmentsSupabase(
       'postgres_changes',
       { event: '*', schema: 'public', table: FLIGHTS_TABLE },
       () => {
-        getFlightConsignmentsFromSupabase(userId || undefined).then((freshData) => {
-          onUpdate(freshData);
+        getFlightConsignmentsFromSupabase(cleanUserId || undefined, isAdmin).then((freshData) => {
+          if (Array.isArray(freshData)) {
+            onUpdate(freshData);
+          }
         });
       }
     )
@@ -760,6 +791,78 @@ export function subscribeToFlightConsignmentsSupabase(
   return () => {
     supabase.removeChannel(channel);
   };
+}
+
+/**
+ * Save Branding & Sender settings to Supabase site_settings
+ */
+export async function saveBrandingToSupabase(branding: BrandingConfig): Promise<boolean> {
+  try {
+    const { error } = await supabase.from(SETTINGS_TABLE).upsert(
+      {
+        id: 'branding',
+        app_name: branding.appName || 'Elegant',
+        app_name_ar: branding.appNameAr || 'أليجانت',
+        email_sender_name: branding.emailSenderName || 'Elegant Security',
+        sms_sender_name: branding.smsSenderName || 'Elegant',
+        favicon_url: branding.faviconUrl || null,
+        settings_data: {
+          appName: branding.appName || 'Elegant',
+          appNameAr: branding.appNameAr || 'أليجانت',
+          emailSenderName: branding.emailSenderName || 'Elegant Security',
+          smsSenderName: branding.smsSenderName || 'Elegant',
+          faviconUrl: branding.faviconUrl || null,
+          updatedAt: new Date().toISOString(),
+          updatedBy: branding.updatedBy || 'admin',
+        },
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'id' }
+    );
+    if (error) {
+      handleSupabaseError('save branding', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    handleSupabaseError('save branding exception', err);
+    return false;
+  }
+}
+
+/**
+ * Fetch Branding & Sender settings from Supabase site_settings
+ */
+export async function getBrandingFromSupabase(): Promise<BrandingConfig | null> {
+  try {
+    const { data, error } = await supabase
+      .from(SETTINGS_TABLE)
+      .select('*')
+      .eq('id', 'branding')
+      .maybeSingle();
+
+    if (error) {
+      handleSupabaseError('fetch branding', error);
+      return null;
+    }
+
+    if (data) {
+      const sd = (data.settings_data as Partial<BrandingConfig>) || {};
+      return {
+        appName: data.app_name || sd.appName || DEFAULT_BRANDING.appName,
+        appNameAr: data.app_name_ar || sd.appNameAr || DEFAULT_BRANDING.appNameAr,
+        emailSenderName: data.email_sender_name || sd.emailSenderName || DEFAULT_BRANDING.emailSenderName,
+        smsSenderName: data.sms_sender_name || sd.smsSenderName || DEFAULT_BRANDING.smsSenderName,
+        faviconUrl: data.favicon_url || sd.faviconUrl || null,
+        updatedAt: data.updated_at || sd.updatedAt,
+        updatedBy: sd.updatedBy,
+      };
+    }
+    return null;
+  } catch (err) {
+    handleSupabaseError('fetch branding exception', err);
+    return null;
+  }
 }
 
 export interface SupabaseHealthReport {
@@ -843,13 +946,23 @@ CREATE TABLE IF NOT EXISTS public.gallery_images (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 4. Create site_settings table (Stores global branding, favicon, and site config)
+-- 4. Create site_settings table (Stores global branding, app name, email & SMS sender identities, favicon, and site config)
 CREATE TABLE IF NOT EXISTS public.site_settings (
   id TEXT PRIMARY KEY,
+  app_name TEXT DEFAULT 'Elegant',
+  app_name_ar TEXT DEFAULT 'أليجانت',
+  email_sender_name TEXT DEFAULT 'Elegant Security',
+  sms_sender_name TEXT DEFAULT 'Elegant',
   favicon_url TEXT,
   settings_data JSONB,
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Backwards-compatible migrations for existing databases
+ALTER TABLE public.site_settings ADD COLUMN IF NOT EXISTS app_name TEXT DEFAULT 'Elegant';
+ALTER TABLE public.site_settings ADD COLUMN IF NOT EXISTS app_name_ar TEXT DEFAULT 'أليجانت';
+ALTER TABLE public.site_settings ADD COLUMN IF NOT EXISTS email_sender_name TEXT DEFAULT 'Elegant Security';
+ALTER TABLE public.site_settings ADD COLUMN IF NOT EXISTS sms_sender_name TEXT DEFAULT 'Elegant';
 
 -- 5. Create flight_consignments table (Stores grouped flight batches, air waybills, routes, and cargo manifests)
 CREATE TABLE IF NOT EXISTS public.flight_consignments (

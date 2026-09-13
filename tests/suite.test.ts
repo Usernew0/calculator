@@ -641,6 +641,34 @@ describe("Cargo Profit Automated System & Logic Test Suite", () => {
       assert.ok(Array.isArray(res.body.calculations));
     });
 
+    test("STRICT DATA PRIVACY: Non-admin trader user cannot see calculations belonging to other users", async () => {
+      // Create a calculation for admin
+      const adminCalc = {
+        id: "CALC-ADMIN-PRIVACY-999",
+        userId: "USR-ADMIN-001",
+        username: "admin",
+        totalLandedCostTarget: 9999,
+        totalRevenueTarget: 12000,
+        totalProfitTarget: 2001,
+        createdAt: new Date().toISOString(),
+        input: { title: "Confidential Admin Shipment" },
+      };
+
+      await apiRequest("/api/calculations", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify(adminCalc),
+      });
+
+      // Trader requests calculations
+      const traderCalcsRes = await apiRequest("/api/calculations", {
+        headers: { Authorization: `Bearer ${traderToken}` },
+      });
+      assert.equal(traderCalcsRes.status, 200);
+      const containsAdminCalc = traderCalcsRes.body.calculations?.some((c: any) => c.id === "CALC-ADMIN-PRIVACY-999");
+      assert.equal(containsAdminCalc, false, "Trader must NEVER receive calculations belonging to admin or other users");
+    });
+
     test("DELETE /api/calculations/:id removes calculation record", async () => {
       const res = await apiRequest(`/api/calculations/${testCalc.id}`, {
         method: "DELETE",

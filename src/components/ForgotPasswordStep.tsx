@@ -31,7 +31,7 @@ import {
 interface ForgotPasswordStepProps {
   lang: Language;
   initialIdentifier?: string;
-  onSuccess: (newPassword?: string) => void;
+  onSuccess: (newPassword?: string, targetUsername?: string) => void;
   onBackToLogin: () => void;
 }
 
@@ -84,6 +84,11 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
+  const [otpDeliveryInfo, setOtpDeliveryInfo] = useState<{
+    fallbackUsed?: 'email';
+    recipientEmail?: string;
+    isNoAddon?: boolean;
+  } | null>(null);
 
   // Segmented input refs
   const emailOtpRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -227,8 +232,20 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
       }
 
       setResendCooldown(60);
-      setCurrentStep('email_sent');
-      setInfoMsg(t.forgotPasswordEmailSent);
+      if (!firebaseRes.success && otpRes.success) {
+        // Firebase link disabled or failed, transition directly to 6-digit Email OTP entry
+        setEmailOtpDigits(['', '', '', '', '', '']);
+        setCurrentStep('verify_email_otp');
+        setInfoMsg(
+          lang === 'ar'
+            ? 'تم إرسال رمز التحقق (OTP) المكون من 6 أرقام إلى بريدك الإلكتروني بنجاح. يرجى إدخال الرمز أدناه.'
+            : 'A 6-digit verification code (OTP) was sent to your email. Please enter the code below.'
+        );
+        setTimeout(() => emailOtpRefs.current[0]?.focus(), 150);
+      } else {
+        setCurrentStep('email_sent');
+        setInfoMsg(t.forgotPasswordEmailSent);
+      }
     } catch (err: any) {
       setErrorMsg(err?.message || (lang === 'ar' ? 'فشل إرسال بريد الاستعادة' : 'Failed to send password reset email'));
     } finally {
@@ -252,14 +269,28 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
     try {
       const res = await sendForgotPasswordPhoneOtpApi(targetUsername);
       if (!res.success) {
-        setErrorMsg(res.error || t.forgotPasswordOtpFailed);
+        setErrorMsg(
+          lang === 'ar'
+            ? (res.errorAr || res.error || t.forgotPasswordOtpFailed)
+            : (res.error || t.forgotPasswordOtpFailed)
+        );
         return;
       }
+
+      setOtpDeliveryInfo({
+        fallbackUsed: res.fallbackUsed,
+        recipientEmail: res.recipientEmail,
+        isNoAddon: res.isNoAddon,
+      });
 
       setResendCooldown(res.expiresInSeconds ? Math.min(res.expiresInSeconds, 60) : 60);
       setPhoneOtpDigits(['', '', '', '', '', '']);
       setCurrentStep('verify_phone_otp');
-      setInfoMsg(t.forgotPasswordOtpSent);
+      setInfoMsg(
+        lang === 'ar'
+          ? (res.messageAr || res.message || t.forgotPasswordOtpSent)
+          : (res.message || t.forgotPasswordOtpSent)
+      );
 
       // Focus first OTP field
       setTimeout(() => {
@@ -388,9 +419,10 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
         return;
       }
 
+      const targetUser = lookupData?.username || identifier.trim();
       setCurrentStep('success');
       setTimeout(() => {
-        onSuccess(trimmedNew);
+        onSuccess(trimmedNew, targetUser);
       }, 2000);
     } catch (err: any) {
       setErrorMsg(err?.message || t.forgotPasswordResetFailed);
@@ -761,17 +793,36 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
       {/* STEP 3B: VERIFY PHONE SMS OTP */}
       {currentStep === 'verify_phone_otp' && (
         <form onSubmit={handleVerifyPhoneOtp} className="space-y-4">
-          <div className="text-xs text-slate-300 leading-relaxed bg-slate-900/60 p-3.5 rounded-xl border border-slate-800 flex items-center justify-between">
-            <div>
-              <span className="font-bold text-white block mb-0.5">{t.forgotPasswordOtpSent}</span>
-              <span className="text-slate-400 font-mono">
-                {lookupData?.maskedPhone || identifier}
-              </span>
+          {otpDeliveryInfo?.fallbackUsed === 'email' ? (
+            <div className="text-xs text-slate-300 leading-relaxed bg-amber-500/10 p-3.5 rounded-xl border border-amber-500/30 flex items-start gap-2.5">
+              <Mail className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <span className="font-bold text-amber-300 block">
+                  {lang === 'ar'
+                    ? 'تم إرسال رمز التحقق إلى بريدك الإلكتروني كبديل'
+                    : 'Verification code dispatched to your registered email'}
+                </span>
+                <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                  {lang === 'ar'
+                    ? 'نظراً لعدم توفر رصيد رسائل SMS في بوابة Brevo، تم إرسال رمز التحقق فوراً إلى بريدك المسجل: '
+                    : 'Due to Brevo SMS credits unavailability, your 6-digit verification code was sent to: '}
+                  <strong className="text-white font-mono">{otpDeliveryInfo.recipientEmail || lookupData?.maskedEmail || lookupData?.email}</strong>
+                </p>
+              </div>
             </div>
-            <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400">
-              <Smartphone className="w-5 h-5" />
+          ) : (
+            <div className="text-xs text-slate-300 leading-relaxed bg-slate-900/60 p-3.5 rounded-xl border border-slate-800 flex items-center justify-between">
+              <div>
+                <span className="font-bold text-white block mb-0.5">{t.forgotPasswordOtpSent}</span>
+                <span className="text-slate-400 font-mono">
+                  {lookupData?.maskedPhone || identifier}
+                </span>
+              </div>
+              <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400">
+                <Smartphone className="w-5 h-5" />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* 6-Digit Segmented OTP Input */}
           <div className="space-y-2">
@@ -1059,7 +1110,7 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
 
           <button
             type="button"
-            onClick={() => onSuccess(newPassword)}
+            onClick={() => onSuccess(newPassword, lookupData?.username || identifier.trim())}
             className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md"
           >
             <KeyRound className="w-4 h-4" />
