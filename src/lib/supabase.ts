@@ -4,9 +4,10 @@ import { CalculationResult, UserProfile, FlightConsignment, BrandingConfig, DEFA
 const env = (import.meta as unknown as { env?: Record<string, string> }).env || {};
 
 const SUPABASE_URL =
-  env.VITE_SUPABASE_URL || 'https://vpopmufbiennknognoth.supabase.co';
+  env.VITE_SUPABASE_URL || env.SUPABASE_URL || 'https://vpopmufbiennknognoth.supabase.co';
 const SUPABASE_ANON_KEY =
   env.VITE_SUPABASE_ANON_KEY ||
+  env.SUPABASE_ANON_KEY ||
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZwb3BtdWZiaWVubmtub2dub3RoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU5MzI1OTQsImV4cCI6MjEwMTUwODU5NH0.7suCLGIj75KRqDyVm7PCPFMS5GFvVeWBcUoDh6ofZns';
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
