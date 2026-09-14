@@ -1,4 +1,4 @@
-import { UserProfile, CalculationResult, FlightConsignment, FlightManifestParsedData, TwoFactorChallengeData } from '../types';
+import { UserProfile, CalculationResult, FlightConsignment, FlightManifestParsedData, TwoFactorChallengeData, BrandingConfig, DEFAULT_BRANDING } from '../types';
 import { getSessionToken, setSessionToken, getStoredUserProfile, triggerSessionInvalidation } from './session';
 import { generateTotpSecret, generateTotpUri, generateBackupCodes, verifyTotpCode, matchBackupCodeIndex } from './totp';
 import {
@@ -20,9 +20,14 @@ import {
   getSessionTimeoutFromFirestore,
   saveSiteFaviconToFirestore,
   getSiteFaviconFromFirestore,
-  sendPasswordResetEmailViaFirebase,
+  saveBrandingToFirestore,
+  getBrandingFromFirestore,
+  DEFAULT_PASSWORD_RESET_METHODS,
+  PasswordResetMethodsConfig,
+  getPasswordResetMethodsFromFirestore,
+  savePasswordResetMethodsToFirestore,
 } from './firebase';
-import { saveUserProfileToSupabase, getUserProfileFromSupabase } from './supabase';
+import { saveUserProfileToSupabase, getUserProfileFromSupabase, saveBrandingToSupabase, getBrandingFromSupabase } from './supabase';
 
 /**
  * Client-Side API Helper for Secure Backend Operations with resilient Firestore and local fallback
@@ -306,9 +311,13 @@ export async function enable2FaApi(params: {
     lastLoginAt: new Date().toISOString(),
   };
 
-  const backupCodes = params.backupCodes && params.backupCodes.length > 0
+  const backupCodes = (params.backupCodes && params.backupCodes.length > 0)
     ? params.backupCodes
-    : (backendResult?.backupCodes || generateBackupCodes(8));
+    : (backendResult?.backupCodes && backendResult.backendCodes.length > 0
+       ? backendResult.backupCodes
+       : (existing.twoFactorBackupCodes && existing.twoFactorBackupCodes.length > 0
+          ? existing.twoFactorBackupCodes
+          : generateBackupCodes(8)));
 
   const updatedUser: UserProfile = {
     ...existing,
@@ -808,6 +817,75 @@ export async function saveSiteFaviconApi(faviconUrl: string): Promise<boolean> {
   }
 }
 
+/**
+ * Fetch global branding and sender configuration (Backend -> Firestore -> Supabase -> Local Fallback)
+ */
+export async function getBrandingApi(): Promise<BrandingConfig> {
+  // 1. Try Backend API
+  try {
+    const res = await apiFetch('/api/settings/branding');
+    if (res && res.branding) {
+      return {
+        appName: res.branding.appName || DEFAULT_BRANDING.appName,
+        appNameAr: res.branding.appNameAr || DEFAULT_BRANDING.appNameAr,
+        emailSenderName: res.branding.emailSenderName || DEFAULT_BRANDING.emailSenderName,
+        smsSenderName: res.branding.smsSenderName || DEFAULT_BRANDING.smsSenderName,
+        faviconUrl: res.branding.faviconUrl || null,
+        updatedAt: res.branding.updatedAt,
+        updatedBy: res.branding.updatedBy,
+      };
+    }
+  } catch {}
+
+  // 2. Try Firestore site_settings/branding
+  try {
+    const firestoreBranding = await getBrandingFromFirestore();
+    if (firestoreBranding) return firestoreBranding;
+  } catch {}
+
+  // 3. Try Supabase site_settings
+  try {
+    const supabaseBranding = await getBrandingFromSupabase();
+    if (supabaseBranding) return supabaseBranding;
+  } catch {}
+
+  return DEFAULT_BRANDING;
+}
+
+/**
+ * Save Branding & Sender configuration (Backend + Firestore + Supabase triple-write)
+ */
+export async function saveBrandingApi(config: Partial<BrandingConfig>): Promise<{ success: boolean; branding: BrandingConfig }> {
+  const finalConfig: BrandingConfig = {
+    appName: (config.appName || DEFAULT_BRANDING.appName).trim(),
+    appNameAr: (config.appNameAr || DEFAULT_BRANDING.appNameAr).trim(),
+    emailSenderName: (config.emailSenderName || DEFAULT_BRANDING.emailSenderName).trim(),
+    smsSenderName: (config.smsSenderName || DEFAULT_BRANDING.smsSenderName).replace(/[^a-zA-Z0-9]/g, '').slice(0, 11) || DEFAULT_BRANDING.smsSenderName,
+    faviconUrl: config.faviconUrl !== undefined ? config.faviconUrl : null,
+    updatedAt: new Date().toISOString(),
+    updatedBy: config.updatedBy || 'admin',
+  };
+
+  // 1. Dual-write to Firestore & Supabase immediately
+  saveBrandingToFirestore(finalConfig).catch((err) => console.info('Firestore save branding background notice:', err));
+  saveBrandingToSupabase(finalConfig).catch((err) => console.info('Supabase save branding background notice:', err));
+
+  // 2. Call Backend API
+  try {
+    const res = await apiFetch('/api/settings/branding', {
+      method: 'POST',
+      body: JSON.stringify(finalConfig),
+    });
+    if (res && res.branding) {
+      return { success: true, branding: res.branding };
+    }
+  } catch (backendErr) {
+    console.info('Backend save branding notice, relying on direct database persistence:', backendErr);
+  }
+
+  return { success: true, branding: finalConfig };
+}
+
 // Air Cargo Flight Consignments API
 export async function getFlightsApi(filterUserId?: string, isAdmin: boolean = false): Promise<FlightConsignment[]> {
   try {
@@ -931,7 +1009,67 @@ export interface ForgotPasswordLookupResponse {
   maskedPhone?: string;
   hasPhone: boolean;
   has2Fa: boolean;
+  resetMethodsConfig?: PasswordResetMethodsConfig;
   error?: string;
+}
+
+export async function getPasswordResetMethodsApi(): Promise<PasswordResetMethodsConfig> {
+  try {
+    const res: any = await apiFetch('/api/settings/password-reset-methods');
+    if (res?.success && res.config) {
+      return res.config;
+    }
+  } catch (err) {
+    console.info('Backend password reset methods fetch notice:', err);
+  }
+
+  // Fallback to Firestore
+  try {
+    const fsConfig = await getPasswordResetMethodsFromFirestore();
+    if (fsConfig) return fsConfig;
+  } catch (fsErr) {
+    console.info('Firestore password reset methods fetch notice:', fsErr);
+  }
+
+  return DEFAULT_PASSWORD_RESET_METHODS;
+}
+
+export async function savePasswordResetMethodsApi(
+  config: Partial<PasswordResetMethodsConfig>
+): Promise<{ success: boolean; config?: PasswordResetMethodsConfig; error?: string; errorAr?: string }> {
+  // 1. Save to Backend
+  let backendResult: any = null;
+  try {
+    backendResult = await apiFetch('/api/settings/password-reset-methods', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  } catch (err: any) {
+    console.info('Backend password reset methods save notice:', err);
+  }
+
+  // 2. Dual-save to Firestore
+  const fullConfig: PasswordResetMethodsConfig = {
+    emailResetEnabled: config.emailResetEnabled !== undefined ? Boolean(config.emailResetEnabled) : true,
+    phoneResetEnabled: config.phoneResetEnabled !== undefined ? Boolean(config.phoneResetEnabled) : true,
+    twoFactorResetEnabled: config.twoFactorResetEnabled !== undefined ? Boolean(config.twoFactorResetEnabled) : true,
+    updatedAt: new Date().toISOString(),
+  };
+
+  try {
+    await savePasswordResetMethodsToFirestore(fullConfig);
+  } catch (fsErr) {
+    console.info('Firestore password reset methods save notice:', fsErr);
+  }
+
+  if (backendResult && backendResult.success) {
+    return backendResult;
+  }
+
+  return {
+    success: true,
+    config: fullConfig,
+  };
 }
 
 export async function forgotPasswordLookupApi(
@@ -994,20 +1132,21 @@ export async function forgotPasswordLookupApi(
     console.info('Backend lookup notice:', err?.message || err);
   }
 
-  // 3. If backend returned successfully, merge with firestoreUser to ensure hasPhone, hasEmail & has2Fa are accurate
+  // 3. If backend returned successfully, merge with firestoreUser and ensure admin method filters are applied
   if (backendData && backendData.success) {
-    let finalHasPhone = backendData.hasPhone;
-    let finalHas2Fa = backendData.has2Fa;
+    const methodsConfig = backendData.resetMethodsConfig || DEFAULT_PASSWORD_RESET_METHODS;
+    let finalHasPhone = backendData.hasPhone && Boolean(methodsConfig.phoneResetEnabled);
+    let finalHas2Fa = backendData.has2Fa && Boolean(methodsConfig.twoFactorResetEnabled);
     let finalMaskedPhone = backendData.maskedPhone;
     let finalUsername = backendData.username;
     let finalEmail = backendData.email;
     let finalMaskedEmail = backendData.maskedEmail;
-    let finalHasEmail = Boolean(backendData.hasEmail);
+    let finalHasEmail = Boolean(backendData.hasEmail) && Boolean(methodsConfig.emailResetEnabled);
 
     if (firestoreUser) {
       const fsPhone = String(firestoreUser.phone || '').trim();
       const fsPhoneDigits = fsPhone.replace(/\D/g, '');
-      if (fsPhoneDigits.length >= 7) {
+      if (fsPhoneDigits.length >= 7 && methodsConfig.phoneResetEnabled) {
         finalHasPhone = true;
         if (!finalMaskedPhone) {
           finalMaskedPhone =
@@ -1016,13 +1155,13 @@ export async function forgotPasswordLookupApi(
               : '•••-•••-••••';
         }
       }
-      if (firestoreUser.twoFactorEnabled || (firestoreUser as any).two_factor_enabled) {
+      if ((firestoreUser.twoFactorEnabled || (firestoreUser as any).two_factor_enabled) && methodsConfig.twoFactorResetEnabled) {
         finalHas2Fa = true;
       }
       if (!finalUsername) {
         finalUsername = firestoreUser.username || firestoreUser.userId;
       }
-      if (firestoreUser.email && firestoreUser.email.includes('@')) {
+      if (firestoreUser.email && firestoreUser.email.includes('@') && methodsConfig.emailResetEnabled) {
         finalEmail = firestoreUser.email;
         finalHasEmail = true;
       }
@@ -1043,18 +1182,28 @@ export async function forgotPasswordLookupApi(
       maskedPhone: finalMaskedPhone,
       hasPhone: finalHasPhone,
       has2Fa: finalHas2Fa,
+      resetMethodsConfig: methodsConfig,
     };
   }
 
-  // 4. If backend call failed or was 404, but user exists in Firestore, return Firestore user info
+  // 4. If backend call failed or was 404, but user exists in Firestore, return Firestore user info respecting methods config
   if (firestoreUser) {
+    let fsMethods: PasswordResetMethodsConfig | null = null;
+    try {
+      fsMethods = await getPasswordResetMethodsFromFirestore();
+    } catch {}
+    const effectiveMethods = fsMethods || DEFAULT_PASSWORD_RESET_METHODS;
+
     const fsPhone = String(firestoreUser.phone || '').trim();
     const fsPhoneDigits = fsPhone.replace(/\D/g, '');
-    const hasPhone = fsPhoneDigits.length >= 7;
-    const has2Fa = Boolean(firestoreUser.twoFactorEnabled || (firestoreUser as any).two_factor_enabled);
-    let maskedPhone: string | undefined = undefined;
+    const userHasPhone = fsPhoneDigits.length >= 7;
+    const hasPhone = userHasPhone && Boolean(effectiveMethods.phoneResetEnabled);
 
-    if (hasPhone) {
+    const userHas2Fa = Boolean(firestoreUser.twoFactorEnabled || (firestoreUser as any).two_factor_enabled);
+    const has2Fa = userHas2Fa && Boolean(effectiveMethods.twoFactorResetEnabled);
+
+    let maskedPhone: string | undefined = undefined;
+    if (userHasPhone && effectiveMethods.phoneResetEnabled) {
       maskedPhone =
         fsPhone.length > 6
           ? `${fsPhone.slice(0, 3)}•••••${fsPhone.slice(-3)}`
@@ -1062,9 +1211,11 @@ export async function forgotPasswordLookupApi(
     }
 
     const fsEmail = String(firestoreUser.email || '').trim();
-    const hasEmail = Boolean(fsEmail && fsEmail.includes('@') && fsEmail.includes('.'));
+    const userHasEmail = Boolean(fsEmail && fsEmail.includes('@') && fsEmail.includes('.'));
+    const hasEmail = userHasEmail && Boolean(effectiveMethods.emailResetEnabled);
+
     let maskedEmail: string | undefined = undefined;
-    if (hasEmail) {
+    if (userHasEmail && effectiveMethods.emailResetEnabled) {
       const [localPart, domainPart] = fsEmail.split('@');
       const maskedLocal = localPart.length > 2 ? `${localPart[0]}••••${localPart.slice(-1)}` : `${localPart[0]}•`;
       maskedEmail = `${maskedLocal}@${domainPart}`;
@@ -1079,6 +1230,7 @@ export async function forgotPasswordLookupApi(
       maskedPhone,
       hasPhone,
       has2Fa,
+      resetMethodsConfig: effectiveMethods,
     };
   }
 
@@ -1099,7 +1251,11 @@ export async function forgotPasswordLookupApi(
 export async function sendFirebasePasswordResetApi(
   email: string
 ): Promise<{ success: boolean; message: string; error?: string }> {
-  return await sendPasswordResetEmailViaFirebase(email);
+  return {
+    success: false,
+    message: 'Firebase Auth password reset email is disabled. Using Brevo Email OTP verification.',
+    error: 'FIREBASE_RESET_DISABLED'
+  };
 }
 
 export async function sendForgotPasswordEmailOtpApi(

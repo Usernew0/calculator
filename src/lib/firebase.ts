@@ -14,8 +14,8 @@ import {
   writeBatch,
   setLogLevel
 } from "firebase/firestore";
-import { getAuth, signInAnonymously, sendPasswordResetEmail, createUserWithEmailAndPassword } from "firebase/auth";
-import { CalculationResult, UserProfile, FlightConsignment } from "../types";
+import { getAuth, signInAnonymously } from "firebase/auth";
+import { CalculationResult, UserProfile, FlightConsignment, BrandingConfig, DEFAULT_BRANDING } from "../types";
 import firebaseConfig from "../../firebase-applet-config.json";
 import {
   saveUserProfileToSupabase,
@@ -71,65 +71,6 @@ export async function ensureAuth(): Promise<void> {
     }
   } finally {
     isAuthAttemptInProgress = false;
-  }
-}
-
-/**
- * Send password reset email directly via Firebase Authentication
- */
-export async function sendPasswordResetEmailViaFirebase(email: string): Promise<{ success: boolean; message: string; error?: string }> {
-  const cleanEmail = String(email || '').trim();
-  if (!cleanEmail || !cleanEmail.includes('@') || !cleanEmail.includes('.')) {
-    return {
-      success: false,
-      message: 'A valid email address is required to reset password via Firebase Auth.',
-      error: 'INVALID_EMAIL',
-    };
-  }
-
-  // Pre-provision user in Firebase Auth if not already existing
-  // In Firebase Auth with enumeration protection, sendPasswordResetEmail silently succeeds without sending an email if the account does not exist in Auth.
-  try {
-    const tempPassword = `Tr@de_${Math.random().toString(36).slice(2, 10)}!${Date.now()}`;
-    await createUserWithEmailAndPassword(auth, cleanEmail, tempPassword);
-    console.info(`[Firebase Auth] Automatically provisioned identity record for: ${cleanEmail}`);
-  } catch (createErr: any) {
-    if (createErr?.code === 'auth/email-already-in-use') {
-      console.info(`[Firebase Auth] Identity record exists for: ${cleanEmail}`);
-    } else if (createErr?.code === 'auth/operation-not-allowed') {
-      console.warn('[Firebase Auth] Email/Password provider not enabled in Firebase Console.');
-    } else {
-      console.info('[Firebase Auth] Identity pre-check note:', createErr?.code);
-    }
-  }
-
-  try {
-    await sendPasswordResetEmail(auth, cleanEmail);
-    console.info(`[Firebase Auth] Password reset email dispatched to ${cleanEmail}`);
-    return {
-      success: true,
-      message: `Password reset instructions have been sent to ${cleanEmail} via Firebase Authentication.`,
-    };
-  } catch (err: any) {
-    console.error('[Firebase Auth sendPasswordResetEmail error]:', err);
-    const code = err?.code || '';
-    let userFriendlyMsg = err?.message || 'Failed to send password reset email via Firebase Auth.';
-
-    if (code === 'auth/user-not-found') {
-      userFriendlyMsg = 'No account found matching this email in Firebase Authentication. Please check the email or contact your administrator.';
-    } else if (code === 'auth/invalid-email') {
-      userFriendlyMsg = 'The email address is invalid.';
-    } else if (code === 'auth/too-many-requests') {
-      userFriendlyMsg = 'Too many password reset requests sent to this email. Please wait a few minutes before trying again.';
-    } else if (code === 'auth/operation-not-allowed') {
-      userFriendlyMsg = 'Email/Password sign-in is not enabled in Firebase Console. Please enable Email/Password under Firebase Authentication > Sign-in method.';
-    }
-
-    return {
-      success: false,
-      message: userFriendlyMsg,
-      error: code || 'FIREBASE_AUTH_ERROR',
-    };
   }
 }
 
@@ -1076,6 +1017,90 @@ export async function saveSiteFaviconToFirestore(faviconUrl: string): Promise<vo
 }
 
 /**
+ * Save complete Branding & Sender settings to Firestore site_settings/branding
+ */
+export async function saveBrandingToFirestore(branding: Partial<BrandingConfig>): Promise<void> {
+  try {
+    await ensureAuth();
+    const docRef = doc(db, SETTINGS_COLLECTION, "branding");
+    await setDoc(
+      docRef,
+      {
+        appName: branding.appName || "Elegant",
+        appNameAr: branding.appNameAr || "أليجانت",
+        emailSenderName: branding.emailSenderName || "Elegant Security",
+        smsSenderName: branding.smsSenderName || "Elegant",
+        ...(branding.faviconUrl !== undefined ? { faviconUrl: branding.faviconUrl } : {}),
+        updatedAt: new Date().toISOString(),
+        updatedBy: branding.updatedBy || "admin",
+      },
+      { merge: true }
+    );
+    console.info("Branding & Sender configuration saved to Firestore site_settings/branding.");
+  } catch (error: any) {
+    handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/branding`);
+  }
+}
+
+/**
+ * Fetch saved Branding & Sender settings from Firestore site_settings/branding
+ */
+export async function getBrandingFromFirestore(): Promise<BrandingConfig | null> {
+  try {
+    await ensureAuth();
+    const docRef = doc(db, SETTINGS_COLLECTION, "branding");
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const data = snap.data();
+      return {
+        appName: data?.appName || DEFAULT_BRANDING.appName,
+        appNameAr: data?.appNameAr || DEFAULT_BRANDING.appNameAr,
+        emailSenderName: data?.emailSenderName || DEFAULT_BRANDING.emailSenderName,
+        smsSenderName: data?.smsSenderName || DEFAULT_BRANDING.smsSenderName,
+        faviconUrl: data?.faviconUrl || null,
+        updatedAt: data?.updatedAt,
+        updatedBy: data?.updatedBy,
+      };
+    }
+  } catch (error: any) {
+    console.info("Firestore site branding fetch notice:", error?.message || error);
+  }
+  return null;
+}
+
+/**
+ * Real-time subscription to Branding & Sender changes in Firestore
+ */
+export function subscribeToBranding(callback: (branding: BrandingConfig) => void): () => void {
+  try {
+    const docRef = doc(db, SETTINGS_COLLECTION, "branding");
+    return onSnapshot(
+      docRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data();
+          callback({
+            appName: data?.appName || DEFAULT_BRANDING.appName,
+            appNameAr: data?.appNameAr || DEFAULT_BRANDING.appNameAr,
+            emailSenderName: data?.emailSenderName || DEFAULT_BRANDING.emailSenderName,
+            smsSenderName: data?.smsSenderName || DEFAULT_BRANDING.smsSenderName,
+            faviconUrl: data?.faviconUrl || null,
+            updatedAt: data?.updatedAt,
+            updatedBy: data?.updatedBy,
+          });
+        }
+      },
+      (error) => {
+        console.info("Notice: Site branding subscription status:", error?.message || error);
+      }
+    );
+  } catch (err) {
+    console.info("Realtime site branding setup notice:", err);
+    return () => {};
+  }
+}
+
+/**
  * Fetch saved site favicon from Firestore
  */
 export async function getSiteFaviconFromFirestore(): Promise<string | null> {
@@ -1188,7 +1213,7 @@ export async function saveBrevoSmsConfigToFirestore(apiKey: string, sender?: str
       docRef,
       {
         apiKey: apiKey.trim(),
-        sender: (sender || "CargoProfit").trim(),
+        sender: (sender || "Elegant").trim(),
         provider: "brevo",
         configured: Boolean(apiKey.trim()),
         updatedAt: new Date().toISOString(),
@@ -1239,6 +1264,99 @@ export function subscribeToBrevoSmsConfig(
     );
   } catch (err) {
     console.info("Realtime Brevo SMS config setup notice:", err);
+    return () => {};
+  }
+}
+
+export interface PasswordResetMethodsConfig {
+  emailResetEnabled: boolean;
+  phoneResetEnabled: boolean;
+  twoFactorResetEnabled: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export const DEFAULT_PASSWORD_RESET_METHODS: PasswordResetMethodsConfig = {
+  emailResetEnabled: true,
+  phoneResetEnabled: true,
+  twoFactorResetEnabled: true,
+};
+
+/**
+ * Save password reset methods visibility configuration to Firestore
+ */
+export async function savePasswordResetMethodsToFirestore(
+  config: PasswordResetMethodsConfig
+): Promise<void> {
+  try {
+    await ensureAuth();
+    const docRef = doc(db, SETTINGS_COLLECTION, "password_reset");
+    await setDoc(
+      docRef,
+      {
+        ...config,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.info("Firestore save password reset methods notice:", err);
+  }
+}
+
+/**
+ * Get password reset methods visibility configuration from Firestore
+ */
+export async function getPasswordResetMethodsFromFirestore(): Promise<PasswordResetMethodsConfig | null> {
+  try {
+    await ensureAuth();
+    const docRef = doc(db, SETTINGS_COLLECTION, "password_reset");
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const d = snap.data();
+      return {
+        emailResetEnabled: d.emailResetEnabled !== undefined ? Boolean(d.emailResetEnabled) : true,
+        phoneResetEnabled: d.phoneResetEnabled !== undefined ? Boolean(d.phoneResetEnabled) : true,
+        twoFactorResetEnabled: d.twoFactorResetEnabled !== undefined ? Boolean(d.twoFactorResetEnabled) : true,
+        updatedAt: d.updatedAt,
+        updatedBy: d.updatedBy,
+      };
+    }
+    return null;
+  } catch (err) {
+    console.info("Firestore get password reset methods notice:", err);
+    return null;
+  }
+}
+
+/**
+ * Real-time subscription to password reset methods visibility changes
+ */
+export function subscribeToPasswordResetMethods(
+  callback: (config: PasswordResetMethodsConfig) => void
+): () => void {
+  try {
+    const docRef = doc(db, SETTINGS_COLLECTION, "password_reset");
+    return onSnapshot(
+      docRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const d = snapshot.data();
+          callback({
+            emailResetEnabled: d.emailResetEnabled !== undefined ? Boolean(d.emailResetEnabled) : true,
+            phoneResetEnabled: d.phoneResetEnabled !== undefined ? Boolean(d.phoneResetEnabled) : true,
+            twoFactorResetEnabled: d.twoFactorResetEnabled !== undefined ? Boolean(d.twoFactorResetEnabled) : true,
+            updatedAt: d.updatedAt,
+            updatedBy: d.updatedBy,
+          });
+        }
+      },
+      (error) => {
+        console.info("Notice: Password reset methods subscription status:", error?.message || error);
+      }
+    );
+  } catch (err) {
+    console.info("Realtime password reset methods setup notice:", err);
     return () => {};
   }
 }

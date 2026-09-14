@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { UserProfile } from '../types';
+import { UserProfile, BrandingConfig, DEFAULT_BRANDING } from '../types';
 import {
   getAllUsersFromFirestore,
   saveUserProfileToFirestore,
@@ -10,6 +10,9 @@ import {
   deduplicateUsers,
   saveSiteFaviconToFirestore,
   getSiteFaviconFromFirestore,
+  saveBrandingToFirestore,
+  getBrandingFromFirestore,
+  subscribeToBranding,
   saveSessionTimeoutToFirestore,
   getSessionTimeoutFromFirestore,
   subscribeToSessionTimeout,
@@ -19,6 +22,10 @@ import {
   saveBrevoSmsConfigToFirestore,
   getBrevoSmsConfigFromFirestore,
   subscribeToBrevoSmsConfig,
+  PasswordResetMethodsConfig,
+  DEFAULT_PASSWORD_RESET_METHODS,
+  getPasswordResetMethodsFromFirestore,
+  subscribeToPasswordResetMethods,
 } from '../lib/firebase';
 import {
   getAllUsersApi,
@@ -27,6 +34,8 @@ import {
   restoreUserApi,
   saveSiteFaviconApi,
   getSiteFaviconApi,
+  getBrandingApi,
+  saveBrandingApi,
   saveSessionTimeoutApi,
   getSessionTimeoutApi,
   checkSupabaseHealthApi,
@@ -38,6 +47,8 @@ import {
   saveBrevoSmsConfigApi,
   testBrevoSmsApi,
   deleteBrevoSmsConfigApi,
+  getPasswordResetMethodsApi,
+  savePasswordResetMethodsApi,
   setup2FaApi,
   enable2FaApi,
   disable2FaApi,
@@ -58,6 +69,8 @@ import {
   checkSupabaseHealth,
   SupabaseHealthReport,
   SUPABASE_REQUIRED_DDL_SQL,
+  saveBrandingToSupabase,
+  getBrandingFromSupabase,
 } from '../lib/supabase';
 import { calculateTradeAndFreight } from '../utils/calculator';
 import { convertCurrency } from '../data/currencies';
@@ -89,6 +102,8 @@ import {
   CheckCircle2,
   AlertCircle,
   KeyRound,
+  ToggleLeft,
+  ToggleRight,
   Eye,
   EyeOff,
   ShieldAlert,
@@ -685,6 +700,87 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       showNotification('error', err?.message || 'Failed to remove Brevo key');
     } finally {
       setIsSavingBrevo(false);
+    }
+  };
+
+  // Password Reset Methods & Channels Configuration (Email, Phone SMS, 2FA)
+  const [resetMethodsConfig, setResetMethodsConfig] = useState<PasswordResetMethodsConfig>(DEFAULT_PASSWORD_RESET_METHODS);
+  const [isSavingResetMethods, setIsSavingResetMethods] = useState<boolean>(false);
+  const [resetMethodsSaveSuccess, setResetMethodsSaveSuccess] = useState<boolean>(false);
+
+  const refreshResetMethods = async () => {
+    try {
+      const cfg = await getPasswordResetMethodsApi();
+      if (cfg) {
+        setResetMethodsConfig(cfg);
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    refreshResetMethods();
+
+    getPasswordResetMethodsFromFirestore().then((cfg) => {
+      if (cfg) {
+        setResetMethodsConfig(cfg);
+      }
+    });
+
+    const unsubReset = subscribeToPasswordResetMethods((cfg) => {
+      if (cfg) {
+        setResetMethodsConfig(cfg);
+      }
+    });
+
+    return () => {
+      unsubReset();
+    };
+  }, []);
+
+  const handleToggleResetMethod = async (key: 'emailResetEnabled' | 'phoneResetEnabled' | 'twoFactorResetEnabled') => {
+    const updated: PasswordResetMethodsConfig = {
+      ...resetMethodsConfig,
+      [key]: !resetMethodsConfig[key],
+    };
+
+    // Prevent disabling all 3 methods
+    if (!updated.emailResetEnabled && !updated.phoneResetEnabled && !updated.twoFactorResetEnabled) {
+      showNotification(
+        'error',
+        lang === 'ar'
+          ? 'يجب إبقاء وسيلة واحدة على الأقل مفعلة لاستعادة كلمة المرور لضمان عدم إغلاق حسابات المستخدمين.'
+          : 'At least one password recovery channel must remain active to prevent locking out accounts.'
+      );
+      return;
+    }
+
+    setResetMethodsConfig(updated);
+    setIsSavingResetMethods(true);
+    setResetMethodsSaveSuccess(false);
+
+    try {
+      const res = await savePasswordResetMethodsApi(updated);
+      if (!res.success) {
+        throw new Error(res.error || 'Failed to update password reset methods');
+      }
+
+      setResetMethodsSaveSuccess(true);
+      setTimeout(() => setResetMethodsSaveSuccess(false), 3000);
+
+      showNotification(
+        'success',
+        lang === 'ar'
+          ? `تم تحديث قنوات استعادة كلمة المرور بنجاح! (${key === 'phoneResetEnabled' ? 'رسائل SMS' : key === 'emailResetEnabled' ? 'البريد الإلكتروني' : 'المصادقة الثنائية 2FA'}: ${updated[key] ? 'مفعل' : 'معطل'})`
+          : `Password reset channel updated successfully! (${key === 'phoneResetEnabled' ? 'Phone SMS' : key === 'emailResetEnabled' ? 'Email' : '2FA'}: ${updated[key] ? 'Enabled' : 'Disabled'})`
+      );
+    } catch (err: any) {
+      setResetMethodsConfig(resetMethodsConfig);
+      showNotification(
+        'error',
+        err?.message || (lang === 'ar' ? 'تعذر حفظ إعدادات استعادة كلمة المرور' : 'Failed to save password reset methods')
+      );
+    } finally {
+      setIsSavingResetMethods(false);
     }
   };
 
@@ -3019,6 +3115,59 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
             </div>
 
+            {/* Quick Phone SMS Reset Channel Visibility Toggle */}
+            <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-700/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-inner">
+              <div className="flex items-start sm:items-center gap-3">
+                <div className={`p-2 rounded-xl shrink-0 ${resetMethodsConfig.phoneResetEnabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'}`}>
+                  <Smartphone className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-bold text-white">
+                      {lang === 'ar' ? 'حالة ظهور وسيلة SMS في شاشة استعادة كلمة المرور:' : 'SMS Channel in Forgot Password Screen:'}
+                    </span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      resetMethodsConfig.phoneResetEnabled
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                    }`}>
+                      {resetMethodsConfig.phoneResetEnabled
+                        ? (lang === 'ar' ? 'ظاهر ونشط للمستخدمين' : 'Active & Visible')
+                        : (lang === 'ar' ? 'مخفي ومعطل (يمنع أخطاء الرصيد)' : 'Hidden & Disabled')}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                    {lang === 'ar'
+                      ? 'يمكنك إخفاء خيار رسائل SMS فوراً لتجنب ظهور أي أخطاء للمستخدمين عند عدم توفر رصيد SMS في Brevo (NO_SMS_ADDONS).'
+                      : 'You can hide the SMS recovery option to avoid errors when Brevo lacks SMS credits (NO_SMS_ADDONS).'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                id="btn-quick-toggle-sms-reset"
+                disabled={isSavingResetMethods}
+                onClick={() => handleToggleResetMethod('phoneResetEnabled')}
+                className={`w-full sm:w-auto shrink-0 py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm ${
+                  resetMethodsConfig.phoneResetEnabled
+                    ? 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40'
+                    : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40'
+                }`}
+              >
+                {resetMethodsConfig.phoneResetEnabled ? (
+                  <>
+                    <ToggleRight className="w-4 h-4 text-rose-400" />
+                    <span>{lang === 'ar' ? 'تعطيل وإخفاء خيار SMS' : 'Disable & Hide SMS'}</span>
+                  </>
+                ) : (
+                  <>
+                    <ToggleLeft className="w-4 h-4 text-emerald-400" />
+                    <span>{lang === 'ar' ? 'تفعيل وإظهار خيار SMS' : 'Enable & Show SMS'}</span>
+                  </>
+                )}
+              </button>
+            </div>
+
             {/* Feature Chips */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
               <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-700/60 space-y-1">
@@ -3056,6 +3205,405 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     : 'Real-time sync of remaining Brevo SMS credits and message delivery reference IDs.'}
                 </p>
               </div>
+            </div>
+          </div>
+        </div>
+
+        {/* PASSWORD RESET METHODS & CHANNELS VISIBILITY MANAGEMENT CARD (EMAIL, PHONE SMS, 2FA) */}
+        <div id="password-reset-methods-card" className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-5 shadow-xl space-y-5">
+          {/* Header */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-700/80">
+            <div className="flex items-center gap-3.5">
+              <div className="p-3 bg-gradient-to-tr from-teal-500/20 to-emerald-500/20 text-emerald-400 rounded-xl border border-emerald-500/30 shadow-md">
+                <KeyRound className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="font-black text-base text-white tracking-tight">
+                    {lang === 'ar'
+                      ? 'إدارة وسائل وقنوات استعادة كلمة المرور'
+                      : 'Password Reset Methods & Visibility Controls'}
+                  </h3>
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    {lang === 'ar'
+                      ? `${(resetMethodsConfig.emailResetEnabled ? 1 : 0) + (resetMethodsConfig.phoneResetEnabled ? 1 : 0) + (resetMethodsConfig.twoFactorResetEnabled ? 1 : 0)} من 3 قنوات نشطة`
+                      : `${(resetMethodsConfig.emailResetEnabled ? 1 : 0) + (resetMethodsConfig.phoneResetEnabled ? 1 : 0) + (resetMethodsConfig.twoFactorResetEnabled ? 1 : 0)} / 3 Active Channels`}
+                  </span>
+                  {resetMethodsSaveSuccess && (
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-teal-500/20 text-teal-300 border border-teal-500/30 animate-pulse flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>{lang === 'ar' ? 'تم الحفظ والمزامنة!' : 'Saved & Synced!'}</span>
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                  {lang === 'ar'
+                    ? 'التحكم المباشر من لوحة الإدارة في إظهار أو إخفاء وسائل استعادة وتعيين كلمة المرور للمستخدمين (البريد، الهاتف SMS، المصادقة الثنائية 2FA). يتم تطبيق التغييرات فوراً في شاشة نسيت كلمة المرور.'
+                    : 'Admin control to show or hide available password recovery channels (Email, Phone SMS, 2FA). Changes apply in real-time on the Forgot Password screen.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-end md:self-auto">
+              <button
+                type="button"
+                id="btn-refresh-reset-methods"
+                onClick={refreshResetMethods}
+                className="p-2 rounded-xl bg-slate-900/80 border border-slate-700/80 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                title={lang === 'ar' ? 'تحديث الإعدادات' : 'Refresh configuration'}
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span className="hidden sm:inline">{lang === 'ar' ? 'تحديث' : 'Refresh'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* 3 Main Recovery Channel Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* 1. EMAIL RESET CHANNEL */}
+            <div
+              id="card-reset-method-email"
+              className={`p-4 rounded-xl border transition-all space-y-3.5 flex flex-col justify-between ${
+                resetMethodsConfig.emailResetEnabled
+                  ? 'bg-slate-900/80 border-sky-500/40 ring-1 ring-sky-500/20'
+                  : 'bg-slate-900/40 border-slate-800 opacity-75'
+              }`}
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`p-2.5 rounded-xl border ${
+                      resetMethodsConfig.emailResetEnabled
+                        ? 'bg-sky-500/20 text-sky-400 border-sky-500/30'
+                        : 'bg-slate-800 text-slate-500 border-slate-700'
+                    }`}>
+                      <Mail className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-white">
+                        {lang === 'ar' ? 'البريد الإلكتروني' : 'Email Recovery'}
+                      </h4>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        Firebase Auth + OTP
+                      </span>
+                    </div>
+                  </div>
+
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    resetMethodsConfig.emailResetEnabled
+                      ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                      : 'bg-slate-800 text-slate-400 border border-slate-700'
+                  }`}>
+                    {resetMethodsConfig.emailResetEnabled
+                      ? (lang === 'ar' ? 'ظاهر ونشط' : 'Active')
+                      : (lang === 'ar' ? 'مخفي ومعطل' : 'Hidden')}
+                  </span>
+                </div>
+
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {lang === 'ar'
+                    ? 'إرسال رابط آمن لإعادة تعيين كلمة المرور مباشرة إلى البريد الإلكتروني المسجل للحساب، مع دعم إدخال رمز التحقق المكون من 6 أرقام.'
+                    : 'Sends a secure password reset link via Firebase Auth or a 6-digit email verification code.'}
+                </p>
+
+                <div className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px] text-slate-400 space-y-1">
+                  <div className="flex items-center justify-between text-slate-300">
+                    <span>{lang === 'ar' ? 'تكلفة الخدمة:' : 'Channel Cost:'}</span>
+                    <span className="text-emerald-400 font-semibold">{lang === 'ar' ? 'مجاني بالكامل (0 رسوم)' : 'Free (Firebase Auth)'}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-300">
+                    <span>{lang === 'ar' ? 'التوافق:' : 'Compatibility:'}</span>
+                    <span>{lang === 'ar' ? 'كافة المستخدمين ذوي البريد المسجل' : 'All accounts with email'}</span>
+                  </div>
+                </div>
+
+                {/* Firebase Auth Console Provider Guidance Notice */}
+                <div className="p-2.5 rounded-lg bg-sky-950/30 border border-sky-500/20 text-[11px] space-y-1.5">
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="font-bold text-sky-300 flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                      {lang === 'ar' ? 'تهيئة مزود البريد في Firebase Console:' : 'Firebase Console Email Provider:'}
+                    </span>
+                    <a
+                      href="https://console.firebase.google.com/project/ai-studio-applet-webapp-cc0f1/authentication/providers"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sky-400 hover:text-sky-300 font-bold inline-flex items-center gap-1 text-[10px] bg-sky-900/40 hover:bg-sky-900/70 px-2 py-0.5 rounded border border-sky-500/30 transition-colors"
+                      title={lang === 'ar' ? 'فتح لوحة تحكم Firebase' : 'Open Firebase Console'}
+                    >
+                      <span>{lang === 'ar' ? 'فتح الكونسول' : 'Open Console'}</span>
+                      <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-relaxed">
+                    {lang === 'ar'
+                      ? 'افتراضياً لا يكون مزود Email/Password مفعلاً في كونسول Firebase الجديد. قم بتفعيله من (Authentication > Sign-in method > Email/Password) لإرسال الروابط المباشرة، أو اترك النظام يستخدم رمز التحقق 6-digit OTP تلقائياً.'
+                      : 'By default, Email/Password is disabled in new Firebase projects. Enable it under (Authentication > Sign-in method > Email/Password) for direct reset links, or let the app fallback to 6-digit OTP codes.'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Toggle Button */}
+              <button
+                type="button"
+                id="btn-toggle-email-reset"
+                disabled={isSavingResetMethods}
+                onClick={() => handleToggleResetMethod('emailResetEnabled')}
+                className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm ${
+                  resetMethodsConfig.emailResetEnabled
+                    ? 'bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 border border-sky-500/40'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                }`}
+              >
+                {resetMethodsConfig.emailResetEnabled ? (
+                  <>
+                    <ToggleRight className="w-4 h-4 text-sky-400" />
+                    <span>{lang === 'ar' ? 'إخفاء وتعطيل وسيلة البريد' : 'Disable & Hide Email'}</span>
+                  </>
+                ) : (
+                  <>
+                    <ToggleLeft className="w-4 h-4 text-slate-400" />
+                    <span>{lang === 'ar' ? 'إظهار وتفعيل وسيلة البريد' : 'Enable & Show Email'}</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* 2. PHONE SMS RESET CHANNEL */}
+            <div
+              id="card-reset-method-phone"
+              className={`p-4 rounded-xl border transition-all space-y-3.5 flex flex-col justify-between ${
+                resetMethodsConfig.phoneResetEnabled
+                  ? 'bg-slate-900/80 border-emerald-500/40 ring-1 ring-emerald-500/20'
+                  : 'bg-slate-900/40 border-slate-800 opacity-75'
+              }`}
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`p-2.5 rounded-xl border ${
+                      resetMethodsConfig.phoneResetEnabled
+                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                        : 'bg-slate-800 text-slate-500 border border-slate-700'
+                    }`}>
+                      <Smartphone className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-white">
+                        {lang === 'ar' ? 'رسائل SMS للهاتف' : 'Phone SMS OTP'}
+                      </h4>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        Brevo SMS Gateway
+                      </span>
+                    </div>
+                  </div>
+
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    resetMethodsConfig.phoneResetEnabled
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                  }`}>
+                    {resetMethodsConfig.phoneResetEnabled
+                      ? (lang === 'ar' ? 'ظاهر ونشط' : 'Active')
+                      : (lang === 'ar' ? 'مخفي ومعطل' : 'Hidden')}
+                  </span>
+                </div>
+
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {lang === 'ar'
+                    ? 'إرسال رمز تحقق OTP مكون من 6 أرقام عبر رسالة قصيرة SMS إلى رقم الهاتف المحمول المسجل للحساب.'
+                    : 'Dispatches a 6-digit SMS OTP verification code directly to the registered phone number.'}
+                </p>
+
+                {/* Brevo Notice Box */}
+                <div className={`p-2.5 rounded-lg border text-[11px] leading-relaxed space-y-1.5 ${
+                  brevoStatus?.isConfigured && !resetMethodsConfig.phoneResetEnabled
+                    ? 'bg-slate-950/60 border-slate-800 text-slate-400'
+                    : !resetMethodsConfig.phoneResetEnabled
+                    ? 'bg-amber-950/40 border-amber-500/30 text-amber-300'
+                    : 'bg-slate-950/60 border-slate-800 text-slate-300'
+                }`}>
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>{lang === 'ar' ? 'ملاحظة باقة ورصيد الرسائل:' : 'Brevo SMS Credits Notice:'}</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400">
+                    {lang === 'ar'
+                      ? 'إذا لم تكن باقة SMS مدفوعة مسبقاً في Brevo، احتفظ بهذا الخيار معطلاً لتوجيه المستخدمين للبريد و 2FA بدون إظهار أخطاء NO_SMS_ADDONS.'
+                      : 'Keep disabled if your Brevo account lacks prepaid SMS add-on credits to avoid NO_SMS_ADDONS notices.'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Toggle Button */}
+              <button
+                type="button"
+                id="btn-toggle-phone-reset"
+                disabled={isSavingResetMethods}
+                onClick={() => handleToggleResetMethod('phoneResetEnabled')}
+                className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm ${
+                  resetMethodsConfig.phoneResetEnabled
+                    ? 'bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                }`}
+              >
+                {resetMethodsConfig.phoneResetEnabled ? (
+                  <>
+                    <ToggleRight className="w-4 h-4 text-emerald-400" />
+                    <span>{lang === 'ar' ? 'إخفاء وتعطيل وسيلة SMS' : 'Disable & Hide SMS'}</span>
+                  </>
+                ) : (
+                  <>
+                    <ToggleLeft className="w-4 h-4 text-slate-400" />
+                    <span>{lang === 'ar' ? 'إظهار وتفعيل وسيلة SMS' : 'Enable & Show SMS'}</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* 3. 2FA AUTHENTICATOR RESET CHANNEL */}
+            <div
+              id="card-reset-method-2fa"
+              className={`p-4 rounded-xl border transition-all space-y-3.5 flex flex-col justify-between ${
+                resetMethodsConfig.twoFactorResetEnabled
+                  ? 'bg-slate-900/80 border-indigo-500/40 ring-1 ring-indigo-500/20'
+                  : 'bg-slate-900/40 border-slate-800 opacity-75'
+              }`}
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`p-2.5 rounded-xl border ${
+                      resetMethodsConfig.twoFactorResetEnabled
+                        ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
+                        : 'bg-slate-800 text-slate-500 border border-slate-700'
+                    }`}>
+                      <ShieldCheck className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-white">
+                        {lang === 'ar' ? 'المصادقة الثنائية 2FA' : '2FA Authenticator'}
+                      </h4>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        Google / Authy / Backup
+                      </span>
+                    </div>
+                  </div>
+
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    resetMethodsConfig.twoFactorResetEnabled
+                      ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                      : 'bg-slate-800 text-slate-400 border border-slate-700'
+                  }`}>
+                    {resetMethodsConfig.twoFactorResetEnabled
+                      ? (lang === 'ar' ? 'ظاهر ونشط' : 'Active')
+                      : (lang === 'ar' ? 'مخفي ومعطل' : 'Hidden')}
+                  </span>
+                </div>
+
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {lang === 'ar'
+                    ? 'التحقق عبر الرمز المباشر المكون من 6 أرقام من تطبيقات المصادقة (Google Authenticator أو Authy) أو رموز الاسترداد الاحتياطية للطوارئ.'
+                    : 'Validates real-time 6-digit TOTP codes or emergency single-use backup recovery codes.'}
+                </p>
+
+                <div className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px] text-slate-400 space-y-1">
+                  <div className="flex items-center justify-between text-slate-300">
+                    <span>{lang === 'ar' ? 'مستوى الأمان:' : 'Security Level:'}</span>
+                    <span className="text-indigo-400 font-semibold">{lang === 'ar' ? 'عالي جداً (تشفير TOTP)' : 'Highest (TOTP)'}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-300">
+                    <span>{lang === 'ar' ? 'التوافق:' : 'Compatibility:'}</span>
+                    <span>{lang === 'ar' ? 'الحسابات المفعل لها 2FA' : 'Accounts with 2FA setup'}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Toggle Button */}
+              <button
+                type="button"
+                id="btn-toggle-2fa-reset"
+                disabled={isSavingResetMethods}
+                onClick={() => handleToggleResetMethod('twoFactorResetEnabled')}
+                className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm ${
+                  resetMethodsConfig.twoFactorResetEnabled
+                    ? 'bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                }`}
+              >
+                {resetMethodsConfig.twoFactorResetEnabled ? (
+                  <>
+                    <ToggleRight className="w-4 h-4 text-indigo-400" />
+                    <span>{lang === 'ar' ? 'إخفاء وتعطيل وسيلة 2FA' : 'Disable & Hide 2FA'}</span>
+                  </>
+                ) : (
+                  <>
+                    <ToggleLeft className="w-4 h-4 text-slate-400" />
+                    <span>{lang === 'ar' ? 'إظهار وتفعيل وسيلة 2FA' : 'Enable & Show 2FA'}</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Live Preview & User Impact Banner */}
+          <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-700/80 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-bold text-white">
+                <Eye className="w-4 h-4 text-teal-400" />
+                <span>{lang === 'ar' ? 'معاينة تجربة المستخدم في شاشة "نسيت كلمة المرور" الآن:' : 'Live Preview: What users will see on "Forgot Password" screen now:'}</span>
+              </div>
+              <span className="text-[10px] text-slate-400 font-mono">
+                {lang === 'ar' ? 'تحديث حي' : 'Live Sync'}
+              </span>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 flex flex-wrap gap-2.5 items-center">
+              {resetMethodsConfig.emailResetEnabled && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-sky-500/10 border border-sky-500/30 text-sky-300 text-xs font-bold">
+                  <Mail className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? '1. رابط الاستعادة عبر البريد الإلكتروني (مفعل)' : '1. Email Reset Link (Visible)'}</span>
+                </div>
+              )}
+
+              {resetMethodsConfig.phoneResetEnabled && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-bold">
+                  <Smartphone className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? '2. رمز تحقق SMS عبر الهاتف (مفعل)' : '2. Phone SMS OTP (Visible)'}</span>
+                </div>
+              )}
+
+              {resetMethodsConfig.twoFactorResetEnabled && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 text-xs font-bold">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? '3. رمز المصادقة الثنائية 2FA (مفعل)' : '3. 2FA Authenticator (Visible)'}</span>
+                </div>
+              )}
+
+              {!resetMethodsConfig.phoneResetEnabled && (
+                <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs">
+                  <ShieldAlert className="w-3.5 h-3.5" />
+                  <span>
+                    {lang === 'ar'
+                      ? 'رسائل SMS مخفية تماماً ولن يتم استدعاء بوابة Brevo أو إظهار أخطاء NO_SMS_ADDONS'
+                      : 'SMS is fully hidden; Brevo will not be called, preventing NO_SMS_ADDONS errors'}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
+              <span>
+                {lang === 'ar'
+                  ? '🔒 حماية النظام: يتم منع إيقاف جميع الوسائل الثلاث معاً لضمان عدم قفل حسابات المستخدمين.'
+                  : '🔒 Safety Guard: The system prevents disabling all three methods simultaneously to ensure users can always recover access.'}
+              </span>
+              {resetMethodsConfig.updatedAt && (
+                <span className="text-[10px] text-slate-500 font-mono">
+                  {lang === 'ar' ? 'آخر تحديث: ' : 'Updated: '}
+                  {new Date(resetMethodsConfig.updatedAt).toLocaleTimeString()}
+                </span>
+              )}
             </div>
           </div>
         </div>

@@ -4,7 +4,6 @@ import {
   forgotPasswordLookupApi,
   sendForgotPasswordPhoneOtpApi,
   sendForgotPasswordEmailOtpApi,
-  sendFirebasePasswordResetApi,
   resetPasswordApi,
   ForgotPasswordLookupResponse,
 } from '../lib/api';
@@ -206,7 +205,7 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
     }
   };
 
-  // Send Firebase Auth Password Reset Email & Dispatch Email OTP
+  // Dispatch Email OTP via Brevo for password reset
   const triggerSendEmailReset = async (emailAddr?: string) => {
     const targetEmail = emailAddr || lookupData?.email || (identifier.includes('@') ? identifier : undefined);
     if (!targetEmail || !targetEmail.includes('@')) {
@@ -219,21 +218,23 @@ export const ForgotPasswordStep: React.FC<ForgotPasswordStepProps> = ({
     setInfoMsg(null);
 
     try {
-      // 1. Dispatch Firebase Auth email
-      const firebaseRes = await sendFirebasePasswordResetApi(targetEmail);
-
-      // 2. Dispatch Email OTP fallback via backend to allow instant verification code reset
       const targetUser = lookupData?.username || identifier;
       const otpRes = await sendForgotPasswordEmailOtpApi(targetUser, targetEmail);
 
-      if (!firebaseRes.success && !otpRes.success) {
-        setErrorMsg(firebaseRes.message || firebaseRes.error || (lang === 'ar' ? 'فشل إرسال بريد الاستعادة' : 'Failed to send password reset email'));
+      if (!otpRes.success) {
+        setErrorMsg(otpRes.message || (lang === 'ar' ? 'فشل إرسال رمز التحقق عبر البريد الإلكتروني' : 'Failed to send Email OTP verification code'));
         return;
       }
 
       setResendCooldown(60);
-      setCurrentStep('email_sent');
-      setInfoMsg(t.forgotPasswordEmailSent);
+      setEmailOtpDigits(['', '', '', '', '', '']);
+      setCurrentStep('verify_email_otp');
+      setInfoMsg(
+        lang === 'ar'
+          ? 'تم إرسال رمز التحقق (OTP) المكون من 6 أرقام إلى بريدك الإلكتروني عبر Brevo بنجاح. يرجى إدخال الرمز أدناه.'
+          : 'A 6-digit verification code (OTP) has been sent to your email via Brevo. Please enter the code below.'
+      );
+      setTimeout(() => emailOtpRefs.current[0]?.focus(), 150);
     } catch (err: any) {
       setErrorMsg(err?.message || (lang === 'ar' ? 'فشل إرسال بريد الاستعادة' : 'Failed to send password reset email'));
     } finally {

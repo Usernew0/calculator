@@ -3,7 +3,7 @@ export type Language = 'en' | 'ar';
 export const translations = {
   en: {
     // Header
-    appName: 'Elegant FX',
+    appName: 'Elegant',
     appSubtitle: 'Global Landed Cost & Profit Calculator',
     calculatorTab: 'Calculator',
     ratesTab: 'Live FX Rates',
@@ -76,7 +76,7 @@ export const translations = {
     forgotPasswordLink: 'Forgot Password?',
     forgotPasswordIdentifierRequired: 'Please enter your username, email, or registered phone number',
     forgotPasswordUserNotFound: 'No account found matching this identifier. Please verify your input.',
-    forgotPasswordNoMethods: 'This account does not have a registered phone number or 2FA configured for self-service reset. Please contact system administrator.',
+    forgotPasswordNoMethods: 'No password recovery methods are available for this account (channels may be disabled by the administrator or unconfigured). Please contact your system administrator.',
     forgotPasswordOtpFailed: 'Failed to send SMS verification code. Please try again.',
     forgotPasswordOtpSent: 'SMS verification code sent successfully!',
     forgotPasswordLookupHint: 'Enter your Username, Email, or Phone Number to verify your identity and reset your password.',
@@ -487,7 +487,7 @@ export const translations = {
     forgotPasswordLink: 'هل نسيت كلمة المرور؟',
     forgotPasswordIdentifierRequired: 'يرجى إدخال اسم المستخدم أو البريد الإلكتروني أو رقم الهاتف المسجل',
     forgotPasswordUserNotFound: 'لم يتم العثور على حساب مطابق. يرجى التأكد من البيانات المدخلة.',
-    forgotPasswordNoMethods: 'هذا الحساب لا يمتلك رقم هاتف مسجل أو مصادقة ثنائية للاستعادة الذاتية. يرجى التواصل مع مسؤول النظام.',
+    forgotPasswordNoMethods: 'لا تتوفر قنوات نشطة لاستعادة كلمة المرور لهذا الحساب (قد تكون القنوات معطلة من قِبل إدارة النظام أو غير مهيأة). يرجى التواصل مع مسؤول النظام.',
     forgotPasswordOtpFailed: 'فشل إرسال رمز التحقق عبر الرسائل القصيرة SMS. يرجى المحاولة لاحقاً.',
     forgotPasswordOtpSent: 'تم إرسال رمز التحقق عبر SMS بنجاح!',
     forgotPasswordLookupHint: 'أدخل اسم المستخدم أو البريد الإلكتروني أو رقم الهاتف المسجل لاستعادة كلمة المرور.',

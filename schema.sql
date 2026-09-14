@@ -60,13 +60,24 @@ CREATE TABLE IF NOT EXISTS public.gallery_images (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 4. Create site_settings table (Stores global branding, favicon, and site config)
+-- 4. Create site_settings table (Stores global branding, app name, email & SMS sender identities, favicon, and site config)
 CREATE TABLE IF NOT EXISTS public.site_settings (
   id TEXT PRIMARY KEY,
+  app_name TEXT DEFAULT 'Elegant',
+  app_name_ar TEXT DEFAULT 'أليجانت',
+  email_sender_name TEXT DEFAULT 'Elegant Security',
+  sms_sender_name TEXT DEFAULT 'Elegant',
   favicon_url TEXT,
   settings_data JSONB,
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Backwards-compatible migrations for existing databases
+ALTER TABLE public.site_settings ADD COLUMN IF NOT EXISTS app_name TEXT DEFAULT 'Elegant';
+ALTER TABLE public.site_settings ADD COLUMN IF NOT EXISTS app_name_ar TEXT DEFAULT 'أليجانت';
+ALTER TABLE public.site_settings ADD COLUMN IF NOT EXISTS email_sender_name TEXT DEFAULT 'Elegant Security';
+ALTER TABLE public.site_settings ADD COLUMN IF NOT EXISTS sms_sender_name TEXT DEFAULT 'Elegant';
+
 
 -- 5. Create flight_consignments table (Stores grouped flight batches, air waybills, routes, and cargo manifests)
 CREATE TABLE IF NOT EXISTS public.flight_consignments (

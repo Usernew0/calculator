@@ -230,6 +230,30 @@ Before building or deploying to production, verify the following steps:
 
 ## 📝 Modification & Update Log (Auto-Updated)
 
+- **2026-09-13**:
+  - **Firebase Auth Email/Password Provider Handling & Console Integration**:
+    - **Resolution for `[Firebase Auth] Email/Password provider not enabled in Firebase Console`**:
+      - Detected and handled the Firebase Authentication default configuration where `Email/Password` provider is initially inactive in new Firebase projects.
+      - **Clean Diagnostics in `src/lib/firebase.ts`**: Intercepts `auth/operation-not-allowed` immediately without throwing secondary unhandled errors, outputting clear guidance with direct project URL (`https://console.firebase.google.com/project/ai-studio-applet-webapp-cc0f1/authentication/providers`).
+      - **Seamless Automatic Fallback in `ForgotPasswordStep.tsx`**: When Firebase direct email link is unavailable due to disabled provider, the application automatically transitions the user directly to the 6-digit Email OTP verification step without showing broken link instructions, ensuring zero user lockout.
+      - **Admin Panel Configuration Guide**: Added an informative guidance card and a 1-click external link button in the Email Recovery card (`AdminPanel.tsx`) detailing how to enable the provider in Firebase Console under Authentication > Sign-in method.
+  - **Admin Panel Control for Password Reset Methods & Visibility (Email, Phone SMS, 2FA)**:
+    - **Granular Channel Toggles**: Implemented interactive switches in the Admin Panel (`AdminPanel.tsx`) allowing system administrators to show or hide individual password recovery channels:
+      - **Email Recovery**: Firebase Auth password reset links & 6-digit email OTP.
+      - **Phone SMS Verification**: Brevo SMS gateway 6-digit mobile OTP.
+      - **Two-Factor Authenticator (2FA)**: Authenticator TOTP & emergency single-use backup recovery codes.
+    - **Brevo NO_SMS_ADDONS Error Mitigation**: Provided instant control to disable and hide SMS recovery if the Brevo organization has no prepaid SMS credits add-on (`NO_SMS_ADDONS`), preventing dispatch errors and directing users seamlessly to Email or 2FA.
+    - **Quick SMS Toggle in Brevo Settings**: Added a direct toggle switch inside the Brevo SMS Gateway panel for rapid activation/deactivation of SMS recovery.
+    - **Anti-Lockout Safety Enforcement**: Backend (`server.ts`) and Admin UI strictly prevent disabling all three methods simultaneously, guaranteeing accounts can always recover access.
+    - **Dual Persistence & Real-Time Sync**:
+      - Server backend stores configuration in `site_settings` table (Supabase PostgreSQL) via `GET/POST /api/settings/password-reset-methods`.
+      - Realtime listener & dual-write to Firestore `site_settings/password_reset`.
+      - Instant live synchronization across clients without page reload.
+    - **Dynamic Forgot Password Flow Adaptation**:
+      - `forgotPasswordLookupApi` queries active method configurations and merges them with user account profiles.
+      - `ForgotPasswordStep.tsx` dynamically hides disabled channels from the method selection screen.
+      - If only one method is active, automatically initiates that method without prompting unnecessary selection steps.
+
 - **2026-09-05**:
   - **Production API Authentication, CORS Preflight & Multi-Field Identity Resolution Engine**:
     - **Vercel & Production CORS & OPTIONS Handling**: Added dedicated Express CORS middleware that guarantees `Access-Control-Allow-Origin: *`, `Access-Control-Allow-Headers` (`Authorization`, `Content-Type`, `X-Username`, `X-User-Id`, `Accept`, `Origin`, etc.), and immediately resolves `OPTIONS` preflight requests with `204 No Content` before reaching route handlers or rate limiters.
