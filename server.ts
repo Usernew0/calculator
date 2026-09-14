@@ -3670,9 +3670,10 @@ app.get("/api/exchange-rates", async (req, res) => {
   try {
     const now = new Date();
     const force = req.query.force === "true";
-    if (force || (now.getTime() - new Date(cachedRates.lastUpdated).getTime() > 15000)) {
+    const lastUpdatedTime = cachedRates?.lastUpdated ? new Date(cachedRates.lastUpdated).getTime() : 0;
+    if (force || (now.getTime() - (isNaN(lastUpdatedTime) ? 0 : lastUpdatedTime) > 15000)) {
       const liveData = await fetchLiveExchangeRates();
-      if (liveData && liveData.rates) {
+      if (liveData && liveData.rates && Object.keys(liveData.rates).length > 0) {
         cachedRates = {
           rates: { ...FALLBACK_RATES, ...liveData.rates },
           lastUpdated: now.toISOString(),
@@ -3680,13 +3681,15 @@ app.get("/api/exchange-rates", async (req, res) => {
         };
       }
     }
-  } catch {}
+  } catch (err) {
+    console.warn("[Exchange Rates notice]:", err);
+  }
 
   res.json({
     base: "USD",
-    rates: cachedRates.rates,
-    lastUpdated: cachedRates.lastUpdated,
-    source: cachedRates.source,
+    rates: cachedRates?.rates || FALLBACK_RATES,
+    lastUpdated: cachedRates?.lastUpdated || new Date().toISOString(),
+    source: cachedRates?.source || "XE Currency Converter (Live Mid-Market)",
   });
 });
 
