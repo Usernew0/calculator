@@ -102,13 +102,11 @@ async function fetchUserFromStoreOrDb(...rawCandidates: (string | undefined | nu
 
   if (candidates.length === 0) return null;
 
-  // 1. Check in-memory store
-  let inMemoryUser: any = null;
+  // Check in-memory store (synced from Firestore/client requests)
   for (const cand of candidates) {
     const key = cand.toLowerCase();
     if (serverUsersStore[key]) {
-      inMemoryUser = serverUsersStore[key];
-      break;
+      return serverUsersStore[key];
     }
     const candDigits = cand.replace(/\D/g, "");
     const match = Object.values(serverUsersStore).find((u: any) => {
@@ -120,130 +118,21 @@ async function fetchUserFromStoreOrDb(...rawCandidates: (string | undefined | nu
       ) return true;
       if (u.phone && candDigits.length >= 7) {
         const uDigits = String(u.phone).replace(/\D/g, "");
-        if (uDigits === candDigits || uDigits.endsWith(candDigits) || candDigits.endsWith(uDigits)) {
+        if (uDigits === candDigits || uDigits.endsWith(candDigits) || cleanDigitsMatch(candDigits, uDigits)) {
           return true;
         }
       }
       return false;
     });
     if (match) {
-      inMemoryUser = match;
-      break;
+      return match;
     }
   }
 
-  // Return in-memory user immediately if it's the admin, or if it already has both active 2FA and phone.
-  // Otherwise, query Supabase to check for any fresh 2FA credentials or phone updates.
-  if (inMemoryUser) {
-    if (
-      inMemoryUser.username === "admin" ||
-      inMemoryUser.userId === "admin" ||
-      (inMemoryUser.phone && inMemoryUser.twoFactorEnabled)
-    ) {
-      return inMemoryUser;
-    }
+  function cleanDigitsMatch(d1: string, d2: string) {
+    return d1 === d2 || d1.endsWith(d2) || d2.endsWith(d1);
   }
 
-  // 2. Query Supabase
-  try {
-    const orClauses = candidates
-      .flatMap((raw) => {
-        const safeRaw = String(raw || "").replace(/[,()]/g, "").trim();
-        const key = safeRaw.toLowerCase();
-        const candDigits = safeRaw.replace(/\D/g, "");
-        const clauses = [
-          `id.ilike.${key}`,
-          `username.ilike.${key}`,
-          `user_id.ilike.${key}`,
-          `email.ilike.${key}`,
-          `id.eq.${safeRaw}`,
-          `username.eq.${safeRaw}`,
-          `user_id.eq.${safeRaw}`,
-          `email.eq.${safeRaw}`,
-        ];
-        if (candDigits.length >= 7) {
-          clauses.push(`phone.ilike.%${candDigits}%`);
-          clauses.push(`phone.eq.${safeRaw}`);
-        }
-        return clauses;
-      })
-      .filter(Boolean)
-      .join(",");
-
-    const { data, error } = await supabase
-      .from("users")
-      .select("*")
-      .or(orClauses)
-      .limit(1)
-      .maybeSingle();
-
-    if (!error && data) {
-      let resolvedUser: any = null;
-      if (data.profile_data && typeof data.profile_data === "object") {
-        resolvedUser = {
-          ...data.profile_data,
-          userId: data.user_id || data.profile_data.userId || data.id,
-          username: data.username || data.profile_data.username || data.id,
-          name: data.full_name || data.name || data.profile_data.name || data.username || "",
-          email: data.email || data.profile_data.email || "",
-          phone: data.phone || data.profile_data.phone || "",
-          company: data.company_name || data.company || data.profile_data.company || "",
-          role: (data.username === "admin" || data.profile_data.role === "admin" || data.role === "admin") ? "admin" : (data.profile_data.role || "user"),
-          status: data.status || data.profile_data.status || "active",
-          password: data.password || data.password_hash || data.profile_data.password || "",
-          twoFactorEnabled: Boolean(data.two_factor_enabled ?? data.profile_data.twoFactorEnabled ?? false),
-          twoFactorSecret: data.two_factor_secret || data.profile_data.twoFactorSecret || "",
-          twoFactorBackupCodes: Array.isArray(data.two_factor_backup_codes)
-            ? data.two_factor_backup_codes
-            : (Array.isArray(data.profile_data?.twoFactorBackupCodes) ? data.profile_data.twoFactorBackupCodes : []),
-          twoFactorConfirmedAt: data.two_factor_confirmed_at || data.profile_data?.twoFactorConfirmedAt || null,
-        };
-      } else {
-        resolvedUser = {
-          userId: data.user_id || data.id || `USR-${(data.username || candidates[0]).toUpperCase()}`,
-          username: data.username || candidates[0],
-          name: data.full_name || data.name || data.username || candidates[0],
-          email: data.email || "",
-          phone: data.phone || "",
-          company: data.company_name || data.company || "",
-          role: (data.username === "admin" || data.role === "admin") ? "admin" : "user",
-          status: data.status === "suspended" ? "suspended" : "active",
-          password: data.password || data.password_hash || "",
-          createdAt: data.created_at || new Date().toISOString(),
-          twoFactorEnabled: Boolean(data.two_factor_enabled ?? false),
-          twoFactorSecret: data.two_factor_secret || "",
-          twoFactorBackupCodes: Array.isArray(data.two_factor_backup_codes) ? data.two_factor_backup_codes : [],
-          twoFactorConfirmedAt: data.two_factor_confirmed_at || null,
-        };
-      }
-
-      if (resolvedUser) {
-        const merged = {
-          ...(inMemoryUser || {}),
-          ...resolvedUser,
-          password: inMemoryUser?.password || resolvedUser.password || "",
-          phone: inMemoryUser?.phone || resolvedUser.phone || "",
-          twoFactorEnabled: Boolean(inMemoryUser?.twoFactorEnabled || resolvedUser.twoFactorEnabled),
-          twoFactorSecret: inMemoryUser?.twoFactorSecret || resolvedUser.twoFactorSecret || "",
-          twoFactorBackupCodes: (Array.isArray(inMemoryUser?.twoFactorBackupCodes) && inMemoryUser.twoFactorBackupCodes.length > 0)
-            ? inMemoryUser.twoFactorBackupCodes
-            : (Array.isArray(resolvedUser.twoFactorBackupCodes) ? resolvedUser.twoFactorBackupCodes : []),
-        };
-        if (merged.username) serverUsersStore[merged.username.toLowerCase()] = merged;
-        if (merged.userId) serverUsersStore[merged.userId.toLowerCase()] = merged;
-        return merged;
-      }
-    }
-  } catch (dbErr) {
-    console.warn("[Supabase fetchUserFromStoreOrDb notice]:", dbErr);
-  }
-
-  // 3. If in-memory user existed, return it now
-  if (inMemoryUser) {
-    return inMemoryUser;
-  }
-
-  // 4. Fallback for admin
   if (candidates.some((c) => c.toLowerCase() === "admin")) {
     return {
       userId: "admin",
@@ -1706,12 +1595,12 @@ app.post("/api/auth/forgot-password/lookup", async (req, res) => {
           try {
             const safeDigits = cleanDigits.replace(/[,()]/g, "");
             const safeId = cleanId.replace(/[,()]/g, "");
-            const { data } = await supabase
+            const { data: dPhone } = await supabase
               .from("users")
               .select("*")
-              .or(`phone.ilike.%${safeDigits}%,phone.eq.${safeId}`)
-              .limit(1)
+              .eq("phone", safeId)
               .maybeSingle();
+            const data = dPhone;
             if (data) {
               user = data.profile_data || {
                 userId: data.user_id || data.id,
@@ -1736,12 +1625,17 @@ app.post("/api/auth/forgot-password/lookup", async (req, res) => {
     if (user && (!user.twoFactorEnabled || !user.phone || String(user.phone).replace(/\D/g, "").length < 7)) {
       try {
         const uKey = (user.username || cleanId).toLowerCase().replace(/[,()]/g, "").trim();
-        const { data: suData } = await supabase
-          .from("users")
-          .select("*")
-          .or(`id.ilike.${uKey},username.ilike.${uKey},email.ilike.${uKey}`)
-          .limit(1)
-          .maybeSingle();
+        let suData: any = null;
+        const { data: su1 } = await supabase.from("users").select("*").eq("id", uKey).maybeSingle();
+        if (su1) suData = su1;
+        if (!suData) {
+          const { data: su2 } = await supabase.from("users").select("*").eq("username", uKey).maybeSingle();
+          if (su2) suData = su2;
+        }
+        if (!suData) {
+          const { data: su3 } = await supabase.from("users").select("*").eq("email", uKey).maybeSingle();
+          if (su3) suData = su3;
+        }
 
         if (suData) {
           const is2Fa = Boolean(suData.two_factor_enabled ?? suData.profile_data?.twoFactorEnabled ?? false);
