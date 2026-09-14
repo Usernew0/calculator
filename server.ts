@@ -148,23 +148,26 @@ async function fetchUserFromStoreOrDb(...rawCandidates: (string | undefined | nu
   try {
     const orClauses = candidates
       .flatMap((raw) => {
-        const key = raw.toLowerCase();
-        const candDigits = raw.replace(/\D/g, "");
+        const safeRaw = String(raw || "").replace(/[,()]/g, "").trim();
+        const key = safeRaw.toLowerCase();
+        const candDigits = safeRaw.replace(/\D/g, "");
         const clauses = [
           `id.ilike.${key}`,
           `username.ilike.${key}`,
           `user_id.ilike.${key}`,
           `email.ilike.${key}`,
-          `id.eq.${raw}`,
-          `username.eq.${raw}`,
-          `user_id.eq.${raw}`,
+          `id.eq.${safeRaw}`,
+          `username.eq.${safeRaw}`,
+          `user_id.eq.${safeRaw}`,
+          `email.eq.${safeRaw}`,
         ];
         if (candDigits.length >= 7) {
           clauses.push(`phone.ilike.%${candDigits}%`);
-          clauses.push(`phone.eq.${raw}`);
+          clauses.push(`phone.eq.${safeRaw}`);
         }
         return clauses;
       })
+      .filter(Boolean)
       .join(",");
 
     const { data, error } = await supabase
@@ -1701,10 +1704,12 @@ app.post("/api/auth/forgot-password/lookup", async (req, res) => {
 
         if (!user) {
           try {
+            const safeDigits = cleanDigits.replace(/[,()]/g, "");
+            const safeId = cleanId.replace(/[,()]/g, "");
             const { data } = await supabase
               .from("users")
               .select("*")
-              .or(`phone.ilike.%${cleanDigits}%,phone.eq.${cleanId}`)
+              .or(`phone.ilike.%${safeDigits}%,phone.eq.${safeId}`)
               .limit(1)
               .maybeSingle();
             if (data) {
@@ -1730,7 +1735,7 @@ app.post("/api/auth/forgot-password/lookup", async (req, res) => {
     // 4. Double check Supabase if user exists but 2FA or phone is not set in memory
     if (user && (!user.twoFactorEnabled || !user.phone || String(user.phone).replace(/\D/g, "").length < 7)) {
       try {
-        const uKey = (user.username || cleanId).toLowerCase().trim();
+        const uKey = (user.username || cleanId).toLowerCase().replace(/[,()]/g, "").trim();
         const { data: suData } = await supabase
           .from("users")
           .select("*")
